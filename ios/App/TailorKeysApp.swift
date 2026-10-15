@@ -1,95 +1,171 @@
 import SwiftUI
 
+// MARK: - All text in the app lives here
+
+/// Edit every word the container app shows in this one place. Slide wording is placeholder text.
+enum AppText {
+    struct Slide {
+        let title: String
+        /// One paragraph per entry.
+        let lines: [String]
+        /// An SF Symbol shown in the illustration area.
+        let symbol: String
+    }
+
+    static let slides: [Slide] = [
+        Slide(title: "Slide 1 title", lines: ["Slide 1 text. Write this."], symbol: "keyboard"),
+        Slide(title: "Slide 2 title", lines: ["Slide 2 text. Write this."], symbol: "gearshape"),
+        Slide(title: "Slide 3 title", lines: ["Slide 3 text. Write this."], symbol: "globe"),
+        Slide(title: "Slide 4 title", lines: ["Slide 4 text. Write this."], symbol: "square.grid.3x3"),
+        Slide(title: "Slide 5 title", lines: ["Slide 5 text. Write this."], symbol: "hand.point.up.left"),
+        Slide(title: "Slide 6 title", lines: ["Slide 6 text. Write this."], symbol: "pencil.line"),
+    ]
+
+    /// Index of the slide that shows the "open Settings" button.
+    static let settingsButtonSlide = 1
+
+    static let guideTab = "Guide"
+    static let tryTab = "Try it"
+    static let openSettingsButton = "Open Settings"
+    static let backButton = "Back"
+    static let nextButton = "Next"
+    static let finishButton = "Finish"
+    static let tryField = "Type here"
+}
+
+// MARK: - App
+
 @main
 struct TailorKeysApp: App {
     var body: some Scene {
-        WindowGroup { OnboardingView() }
+        WindowGroup { RootView() }
     }
 }
 
-/// The container app is the setup guide, one idea per page. All settings live inside the keyboard
-/// (the gear between the suggestions). After the first visit it opens on the last page, "Try it".
-struct OnboardingView: View {
+/// Two bottom tabs: the guide, and a text field to try the keyboard. All keyboard settings live inside
+/// the keyboard itself. After the guide has been seen once, the app opens on "Try it".
+struct RootView: View {
     @AppStorage("onboarded") private var onboarded = false
+    @State private var tab = UserDefaults.standard.bool(forKey: "onboarded") ? 1 : 0
+
+    var body: some View {
+        TabView(selection: $tab) {
+            GuideView(onSeenLast: { onboarded = true }, onFinish: { tab = 1 })
+                .tabItem { Label(AppText.guideTab, systemImage: "book") }
+                .tag(0)
+            TryView()
+                .tabItem { Label(AppText.tryTab, systemImage: "keyboard") }
+                .tag(1)
+        }
+    }
+}
+
+// MARK: - Guide
+
+struct GuideView: View {
+    let onSeenLast: () -> Void
+    let onFinish: () -> Void
     @State private var page = 0
-    @State private var text = ""
 
-    private struct Page { let title: String; let lines: [String] }
-
-    private let pages = [
-        Page(title: "TailorKeys", lines: [
-            "A keyboard you arrange yourself. Size it, split it, tilt it, and put every key where your thumbs want it.",
-            "Suggestions never change what you type. They wait in two wheels above the keys until you pick one.",
-        ]),
-        Page(title: "Turn it on", lines: [
-            "Open Settings, tap Keyboards, and turn on TailorKeys.",
-            "TailorKeys doesn't ask for Full Access, so nothing you type can leave your device.",
-        ]),
-        Page(title: "Switch to it", lines: [
-            "In any text field, hold the globe key and pick TailorKeys.",
-            "Hold the spacebar to switch to your next keyboard.",
-        ]),
-        Page(title: "Put keys anywhere", lines: [
-            "Tap the gear between the suggestions, then drag keys around.",
-            "Drop a key on an empty cell to move it there.",
-            "Drop it on another key's edge to insert it. The keys beside it shift over.",
-            "Drop it on a key's middle to combine them into one swipe key.",
-            "Tap undo if you didn't mean it. The gear in that toolbar opens size, split, templates and sharing.",
-        ]),
-        Page(title: "Swipe keys and wheels", lines: [
-            "A swipe key holds several keys. Swipe up or down once to change it.",
-            "abc: tap for one capital letter, double-tap for caps lock.",
-            "Spin a wheel sideways to look through suggestions and tap to use one. The left wheel explores, the right stays close to what you typed.",
-            "Hold a letter to type the number in its corner.",
-        ]),
-        Page(title: "Try it", lines: ["Size, split, tilt and themes are behind the gear in the keyboard's rearranging toolbar."]),
-    ]
+    private var slides: [AppText.Slide] { AppText.slides }
+    private var isLast: Bool { page >= slides.count - 1 }
 
     var body: some View {
         VStack(spacing: 0) {
             TabView(selection: $page) {
-                ForEach(pages.indices, id: \.self) { i in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 14) {
-                            Text(pages[i].title).font(.largeTitle.bold()).padding(.bottom, 6)
-                            ForEach(pages[i].lines, id: \.self) { Text($0).font(.body) }
-                            extra(for: i).padding(.top, 10)
-                        }
-                        .padding(28)
-                        .frame(maxWidth: 560, alignment: .leading)
-                    }
-                    .tag(i)
+                ForEach(slides.indices, id: \.self) { i in
+                    SlideView(slide: slides[i], showsSettingsButton: i == AppText.settingsButtonSlide)
+                        .tag(i)
                 }
             }
-            .tabViewStyle(.page(indexDisplayMode: .always))
-            .indexViewStyle(.page(backgroundDisplayMode: .always))
+            .tabViewStyle(.page(indexDisplayMode: .never))
 
-            HStack {
-                Button("Back") { withAnimation { page -= 1 } }.opacity(page == 0 ? 0 : 1).disabled(page == 0)
-                Spacer()
-                if page < pages.count - 1 {
-                    Button { withAnimation { page += 1 } } label: { Text("Next").fontWeight(.semibold) }
+            HStack(spacing: 8) {
+                ForEach(slides.indices, id: \.self) { i in
+                    Capsule()
+                        .fill(i == page ? Color.accentColor : Color(.tertiaryLabel))
+                        .frame(width: i == page ? 22 : 8, height: 8)
                 }
             }
-            .padding(.horizontal, 28)
             .padding(.vertical, 14)
-        }
-        .onAppear { if onboarded { page = pages.count - 1 } }
-        .onChange(of: page) { if $0 == pages.count - 1 { onboarded = true } }
-    }
+            .animation(.easeInOut(duration: 0.2), value: page)
 
-    @ViewBuilder private func extra(for i: Int) -> some View {
-        switch i {
-        case 1:
-            Button("Open Settings") {
-                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+            HStack(spacing: 12) {
+                Button { withAnimation { page -= 1 } } label: {
+                    Text(AppText.backButton)
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                        .background(RoundedRectangle(cornerRadius: 14).fill(Color(.secondarySystemFill)))
+                }
+                .opacity(page == 0 ? 0 : 1)
+                .disabled(page == 0)
+
+                Button {
+                    if isLast { onFinish() } else { withAnimation { page += 1 } }
+                } label: {
+                    Text(isLast ? AppText.finishButton : AppText.nextButton)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity, minHeight: 50)
+                        .background(RoundedRectangle(cornerRadius: 14).fill(Color.accentColor))
+                }
             }
-            .buttonStyle(.borderedProminent)
-        case pages.count - 1:
-            TextField("Type here", text: $text)
-                .textFieldStyle(.roundedBorder)
-        default:
-            EmptyView()
+            .padding(.horizontal, 24)
+            .padding(.bottom, 16)
         }
+        .onChange(of: page) { if $0 >= slides.count - 1 { onSeenLast() } }
+    }
+}
+
+struct SlideView: View {
+    let slide: AppText.Slide
+    let showsSettingsButton: Bool
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 24).fill(Color(.secondarySystemBackground))
+                    Image(systemName: slide.symbol)
+                        .font(.system(size: 72, weight: .regular))
+                        .foregroundColor(.accentColor)
+                }
+                .frame(height: 220)
+                .padding(.bottom, 14)
+
+                Text(slide.title).font(.largeTitle).fontWeight(.bold)
+                ForEach(slide.lines, id: \.self) { line in
+                    Text(line).font(.body).foregroundColor(.secondary)
+                }
+                if showsSettingsButton {
+                    Button(AppText.openSettingsButton) {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top, 6)
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: 560, alignment: .leading)
+            .frame(maxWidth: .infinity)
+        }
+    }
+}
+
+// MARK: - Try it
+
+struct TryView: View {
+    @State private var text = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(AppText.tryTab).font(.largeTitle).fontWeight(.bold)
+            TextField(AppText.tryField, text: $text)
+                .textFieldStyle(.roundedBorder)
+            Spacer()
+        }
+        .padding(24)
+        .frame(maxWidth: 560)
+        .frame(maxWidth: .infinity)
     }
 }
