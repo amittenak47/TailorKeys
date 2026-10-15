@@ -44,6 +44,8 @@ object Prefs {
     val DOUBLE_SPACE_PERIOD = BoolPref("double_space_period", true)
     val HAPTICS = BoolPref("haptics", true)
     val LOCK_SIZE = BoolPref("lock_size", false)
+    /** Portrait and landscape share one set of size and split settings. */
+    val SAME_ORIENTATIONS = BoolPref("same_orientations", false)
 
     const val THEME = "theme"
     const val LAYOUT = "layout"
@@ -89,6 +91,39 @@ class KeyboardSettings(context: Context) {
         gap = int(Prefs.splitGap(landscape)),
         tilt = int(Prefs.tilt(landscape)),
     )
+
+    // Setters for per-orientation settings: they write both orientations while SAME_ORIENTATIONS is on.
+
+    private fun orientations(landscape: Boolean) = if (bool(Prefs.SAME_ORIENTATIONS)) listOf(false, true) else listOf(landscape)
+
+    fun setFor(landscape: Boolean, pref: (Boolean) -> IntPref, value: Int) {
+        val e = prefs.edit()
+        orientations(landscape).forEach { val p = pref(it); e.putInt(p.key, value.coerceIn(p.min, p.max)) }
+        e.apply()
+    }
+
+    fun setAlignFor(landscape: Boolean, align: Align) {
+        val e = prefs.edit()
+        orientations(landscape).forEach { e.putString(Prefs.alignKey(it), align.name) }
+        e.apply()
+    }
+
+    fun setSplitFor(landscape: Boolean, on: Boolean) {
+        val e = prefs.edit()
+        orientations(landscape).forEach { e.putBoolean(Prefs.splitKey(it), on) }
+        e.apply()
+    }
+
+    /** Turns on shared orientations, copying one orientation's size and split settings to the other. */
+    fun linkOrientations(from: Boolean) {
+        val to = !from
+        val e = prefs.edit()
+        for (pref in listOf(Prefs::height, Prefs::width, Prefs::bottomPadding, Prefs::splitGap, Prefs::tilt)) e.putInt(pref(to).key, int(pref(from)))
+        e.putString(Prefs.alignKey(to), align(from).name)
+        e.putBoolean(Prefs.splitKey(to), split(from))
+        e.putBoolean(Prefs.SAME_ORIENTATIONS.key, true)
+        e.apply()
+    }
 
     fun theme(): ThemeName {
         val name = prefs.getString(Prefs.THEME, null)
