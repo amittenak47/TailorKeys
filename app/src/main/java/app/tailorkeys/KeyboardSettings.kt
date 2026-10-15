@@ -46,6 +46,8 @@ object Prefs {
     val LOCK_SIZE = BoolPref("lock_size", false)
     /** Portrait and landscape share one set of size and split settings. */
     val SAME_ORIENTATIONS = BoolPref("same_orientations", false)
+    /** The first-run guide has been finished or skipped. */
+    val ONBOARDED = BoolPref("onboarded", false)
 
     const val THEME = "theme"
     const val LAYOUT = "layout"
@@ -135,7 +137,10 @@ class KeyboardSettings(context: Context) {
     fun loadGrid(): KeyGrid = KeyGrid.fromJson(prefs.getString(Prefs.LAYOUT, null))
         ?: KeyGrid.default().also { if (bool(Prefs.NUMBER_ROW)) it.setNumberRow(true) }
 
-    fun saveGrid(grid: KeyGrid) = prefs.edit().putString(Prefs.LAYOUT, grid.toJson()).apply()
+    /** Saves the layout. The number-row switch follows whether the layout has a number row. */
+    fun saveGrid(grid: KeyGrid) =
+        prefs.edit().putString(Prefs.LAYOUT, grid.toJson()).putBoolean(Prefs.NUMBER_ROW.key, grid.rows == 5).apply()
 
-    fun resetAll() = prefs.edit().clear().apply()
+    /** Back to defaults, without showing the first-run guide again. */
+    fun resetAll() = prefs.edit().clear().putBoolean(Prefs.ONBOARDED.key, true).apply()
 }

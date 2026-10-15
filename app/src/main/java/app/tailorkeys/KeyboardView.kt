@@ -33,9 +33,10 @@ import kotlin.math.sin
 /**
  * Draws the suggestion wheels and the key grid, and turns touches into key presses.
  *
- * In [editMode] (used by the settings screen) the keys lay flat and wiggle, and dragging a key moves it:
- * onto an empty cell, onto another key's edge (insert and shift), onto its middle (combine into a swipe
- * key), or onto a spacebar (sit on its inner side while it shrinks).
+ * In [editMode] (the gear in the suggestion bar, or the settings screen) the keys lay flat and wiggle, and
+ * dragging a key moves it: onto an empty cell, onto another key's edge (insert and shift), onto its middle
+ * (combine into a swipe key), or onto a spacebar (sit on its inner side while it shrinks). The suggestion bar
+ * turns into a toolbar with undo, a hint for the current drag and, inside the keyboard, settings and Done.
  */
 @SuppressLint("ViewConstructor")
 class KeyboardView(context: Context, private val settings: KeyboardSettings) : View(context) {
@@ -47,17 +48,25 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         fun onSuggestion(text: String)
         fun onPickIme()
         fun onEdited() {}
-        fun onEditHint(text: String?) {}
+        fun onOpenSettings() {}
     }
 
     var listener: Listener? = null
     var state = InputState()
+    /** Setting a new grid from outside clears the undo history; [undo] and [replaceGrid] keep it. */
     var grid: KeyGrid = KeyGrid.default()
-        set(value) { field = value; cancelTouches(); relayout() }
+        set(value) { field = value; if (!keepHistory) history.clear(); cancelTouches(); relayout() }
     var enterLabel: String? = null
         set(value) { field = value; invalidate() }
     var editMode = false
-        set(value) { if (field != value) { field = value; cancelTouches(); relayout() } }
+        set(value) { if (field != value) { field = value; editHint = null; cancelTouches(); relayout() } }
+    /** True inside the keyboard itself: shows the gear, and settings and Done while rearranging. */
+    var inKeyboard = false
+        set(value) { field = value; relayout() }
+
+    private val history = ArrayList<String>()
+    private var keepHistory = false
+    private var editHint: String? = null
 
     private var sugLeft = emptyList<String>()
     private var sugRight = emptyList<String>()
@@ -77,6 +86,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val cells = ArrayList<Cell>()
     private val wheels = listOf(Wheel(0), Wheel(1))
     private val handleRect = RectF()
+    private val gearRect = RectF()
+    private val undoRect = RectF()
+    private val hintRect = RectF()
+    private val moreRect = RectF()
+    private val doneRect = RectF()
     private var leftSpace: RectF? = null
     private var rightSpace: RectF? = null
     private var stripH = 0f
@@ -229,12 +243,30 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             cells += Cell(r, ct.c0 + c, rect, ct.base, Matrix().also { inv -> ct.base.invert(inv) })
         }
 
+        // The gear sits between the wheels: in the split gap, or in a small gap of its own.
         if (split) {
             wheels[0].rect.set(innerLeft, 0f, innerLeft + half, stripH)
             wheels[1].rect.set(innerLeft + half + gapPx, 0f, innerLeft + innerW, stripH)
+            gearRect.set(innerLeft + half, 0f, innerLeft + half + gapPx, stripH)
         } else {
-            wheels[0].rect.set(innerLeft, 0f, innerLeft + innerW / 2, stripH)
-            wheels[1].rect.set(innerLeft + innerW / 2, 0f, innerLeft + innerW, stripH)
+            val mid = innerLeft + innerW / 2
+            val g = if (inKeyboard) 18 * d else 0f
+            wheels[0].rect.set(innerLeft, 0f, mid - g, stripH)
+            wheels[1].rect.set(mid + g, 0f, innerLeft + innerW, stripH)
+            gearRect.set(mid - g, 0f, mid + g, stripH)
+        }
+        if (!inKeyboard) gearRect.setEmpty()
+        // Toolbar while rearranging: undo, hint, then settings and Done when inside the keyboard.
+        val right = innerLeft + innerW
+        undoRect.set(innerLeft, 0f, innerLeft + 48 * d, stripH)
+        if (inKeyboard) {
+            doneRect.set(right - 64 * d, 0f, right, stripH)
+            moreRect.set(doneRect.left - 44 * d, 0f, doneRect.left, stripH)
+            hintRect.set(undoRect.right, 0f, moreRect.left, stripH)
+        } else {
+            doneRect.setEmpty()
+            moreRect.setEmpty()
+            hintRect.set(undoRect.right, 0f, right - undoRect.width(), stripH)
         }
         handleRect.set(areaLeft, y0 + hc, areaLeft + areaW, y0 + hc + handleH)
         val minSpace = 40 * d
@@ -261,8 +293,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     override fun onDraw(canvas: Canvas) {
         ensureLayout()
         canvas.drawColor(palette.background)
-        drawWheels(canvas)
-        if (editMode) drawCells(canvas)
+        if (editMode) {
+            drawToolbar(canvas)
+            drawCells(canvas)
+        } else {
+            drawWheels(canvas)
+            if (gearRect.width() >= 20 * density) drawGear(canvas, gearRect.centerX(), gearRect.centerY(), 20 * density, palette.hint)
+        }
         val radius = settings.int(Prefs.CORNER_RADIUS) * density
         val pressed = trackers.values.mapNotNull { it.pk?.item }.toSet()
         val now = SystemClock.uptimeMillis()
@@ -390,6 +427,39 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val p = strokeIn(color, s, alpha)
         canvas.drawPath(shape(r.centerX(), r.centerY(), s, false, 0.45f, -0.4f, 0.45f, 0.1f, -0.45f, 0.1f), p)
         canvas.drawPath(shape(r.centerX(), r.centerY(), s, false, -0.2f, -0.15f, -0.45f, 0.1f, -0.2f, 0.35f), p)
+    }
+
+    private fun drawGear(canvas: Canvas, cx: Float, cy: Float, s: Float, color: Int) {
+        val p = strokeIn(color, s, 255)
+        canvas.drawCircle(cx, cy, s * 0.2f, p)
+        p.strokeWidth = s * 0.13f
+        for (i in 0 until 8) {
+            val a = i * PI / 4
+            canvas.drawLine(cx + s * 0.3f * cos(a).toFloat(), cy + s * 0.3f * sin(a).toFloat(), cx + s * 0.42f * cos(a).toFloat(), cy + s * 0.42f * sin(a).toFloat(), p)
+        }
+    }
+
+    /** An arrow curling back to the left. */
+    private fun drawUndo(canvas: Canvas, cx: Float, cy: Float, s: Float, color: Int, alpha: Int) {
+        val p = strokeIn(color, s, alpha)
+        val r = s * 0.3f
+        path.reset()
+        path.addArc(cx - r, cy - r, cx + r, cy + r, 180f, 225f)
+        canvas.drawPath(path, p)
+        canvas.drawPath(shape(cx - r, cy + s * 0.06f, s, false, -0.17f, -0.17f, 0f, 0f, 0.17f, -0.17f), p)
+    }
+
+    private fun drawToolbar(canvas: Canvas) {
+        val s = 20 * density
+        drawUndo(canvas, undoRect.centerX(), undoRect.centerY(), s, palette.text, if (history.isEmpty()) 70 else 255)
+        val sp = resources.displayMetrics.scaledDensity
+        drawLabel(canvas, hintRect, editHint ?: "Drag keys to rearrange", 13 * sp, if (editHint != null) palette.accent else palette.hint, 255)
+        if (!doneRect.isEmpty) {
+            drawGear(canvas, moreRect.centerX(), moreRect.centerY(), s, palette.hint)
+            text.isFakeBoldText = true
+            drawLabel(canvas, doneRect, "Done", 15 * sp, palette.accent, 255)
+            text.isFakeBoldText = false
+        }
     }
 
     private fun drawMoveArrow(canvas: Canvas, area: RectF, pointsLeft: Boolean) {
@@ -531,6 +601,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             if (t.kind != K_KEY || t.consumed) continue
             stopTimers(t); t.consumed = true; commit(t)
         }
+        if (gearRect.contains(x, y)) {
+            haptic(HapticFeedbackConstants.KEYBOARD_TAP)
+            trackers[id] = Tracker(K_GEAR, null)
+            return
+        }
         wheels.firstOrNull { it.rect.contains(x, y) && words(it).isNotEmpty() }?.let {
             trackers[id] = Tracker(K_WHEEL, null).also { t -> t.wheel = it; t.x0 = x }
             return
@@ -633,6 +708,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 if (!t.moved) listener?.onKey(t.pk!!.item.keys[shownIdx(t.pk!!.item)])
             }
             K_KEY -> if (!t.consumed) commit(t)
+            K_GEAR -> editMode = true
         }
         invalidate()
     }
@@ -735,12 +811,21 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val y = e.y
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                if (y < stripH) {
+                    when {
+                        undoRect.contains(x, y) -> undo()
+                        moreRect.contains(x, y) -> listener?.onOpenSettings()
+                        doneRect.contains(x, y) -> editMode = false
+                    }
+                    return true
+                }
                 val pk = findKey(x, y, strict = true) ?: return true
                 val pt = floatArrayOf(x, y)
                 pk.inverse.mapPoints(pt)
                 if (pk.item.isStack && hypot(pt[0] - (pk.rect.right - 8 * density), pt[1] - (pk.rect.top + 8 * density)) < 12 * density) {
+                    val before = grid.toJson()
                     grid.separate(pk.item)
-                    edited()
+                    edited(before)
                     return true
                 }
                 drag = Drag(pk.item, pk.rect.width(), pk.rect.height(), x, y, pt[0] - pk.rect.centerX(), pt[1] - pk.rect.centerY())
@@ -750,25 +835,52 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 val dg = drag ?: return true
                 dg.x = x; dg.y = y
                 dg.target = editTarget(x, y, dg)
-                listener?.onEditHint(hintFor(dg.target))
+                editHint = hintFor(dg.target)
                 invalidate()
             }
             MotionEvent.ACTION_UP -> {
                 val dg = drag ?: return true
                 drag = null
-                listener?.onEditHint(null)
+                editHint = null
+                val before = grid.toJson()
                 applyDrop(dg)
-                edited()
+                edited(before)
             }
-            MotionEvent.ACTION_CANCEL -> { drag = null; listener?.onEditHint(null); invalidate() }
+            MotionEvent.ACTION_CANCEL -> { drag = null; editHint = null; invalidate() }
         }
         return true
     }
 
-    private fun edited() {
+    /** Saves the layout as it was [before] an edit, so undo can return to it. Edits that changed nothing are skipped. */
+    private fun edited(before: String) {
         grid.normalize()
-        listener?.onEdited()
+        if (grid.toJson() != before) {
+            history += before
+            if (history.size > MAX_UNDO) history.removeAt(0)
+            listener?.onEdited()
+        }
         relayout()
+    }
+
+    /** Steps back one edit. */
+    fun undo() {
+        val prev = history.removeLastOrNull()?.let { KeyGrid.fromJson(it) } ?: return
+        keepHistory = true
+        grid = prev
+        keepHistory = false
+        listener?.onEdited()
+    }
+
+    /** Swaps in a whole new layout, such as a template or an imported code, as one step undo can reverse. */
+    fun replaceGrid(g: KeyGrid) {
+        val before = grid.toJson()
+        keepHistory = true
+        grid = g
+        keepHistory = false
+        if (g.toJson() != before) {
+            history += before
+            listener?.onEdited()
+        }
     }
 
     private fun editTarget(x: Float, y: Float, dg: Drag): Target? {
@@ -790,10 +902,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun hintFor(t: Target?) = when (t?.type) {
-        T_COMBINE -> "Drop to combine into one swipe key"
-        T_INSERT -> "Drop to insert here, the keys beside it shift over"
-        T_SPACE -> "Drop on the inner side of the spacebar, which shrinks"
-        T_MOVE -> "Drop to move here"
+        T_COMBINE -> "Combine into a swipe key"
+        T_INSERT -> "Insert, neighbours shift over"
+        T_SPACE -> "Sit beside the spacebar"
+        T_MOVE -> "Move here"
         else -> null
     }
 
@@ -843,6 +955,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         const val K_STACK = 1
         const val K_WHEEL = 2
         const val K_HANDLE = 3
+        const val K_GEAR = 4
+        const val MAX_UNDO = 50
         const val T_MOVE = 0
         const val T_SPACE = 1
         const val T_COMBINE = 2

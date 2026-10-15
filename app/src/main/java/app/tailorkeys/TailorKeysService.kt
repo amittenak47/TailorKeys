@@ -1,5 +1,6 @@
 package app.tailorkeys
 
+import android.content.Intent
 import android.content.SharedPreferences
 import android.inputmethodservice.InputMethodService
 import android.os.SystemClock
@@ -27,10 +28,14 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private var learn = true
 
     // Any settings change, including from the settings screen while the keyboard is open, applies at once.
+    // A layout the keyboard saved itself is already showing; reloading it would wipe the undo history.
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == null || key == Prefs.LAYOUT) {
-            grid = settings.loadGrid()
-            keyboardView?.grid = grid
+            val g = settings.loadGrid()
+            if (g.toJson() != grid.toJson()) {
+                grid = g
+                keyboardView?.grid = g
+            }
         }
         keyboardView?.reloadSettings()
     }
@@ -53,6 +58,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         it.listener = this
         it.state = state
         it.grid = grid
+        it.inKeyboard = true
         keyboardView = it
     }
 
@@ -81,7 +87,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
-        keyboardView?.cancelTouches()
+        keyboardView?.let { it.cancelTouches(); it.editMode = false }
         predictor.save()
         super.onFinishInputView(finishingInput)
     }
@@ -134,6 +140,17 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     override fun onPickIme() {
         getSystemService(InputMethodManager::class.java).showInputMethodPicker()
+    }
+
+    /** A drag in the keyboard's own editor (the gear) changed the layout. */
+    override fun onEdited() {
+        grid = keyboardView?.grid ?: return
+        settings.saveGrid(grid)
+    }
+
+    override fun onOpenSettings() {
+        requestHideSelf(0)
+        startActivity(Intent(this, SettingsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
     // ---- Typing ----

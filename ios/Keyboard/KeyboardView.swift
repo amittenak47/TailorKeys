@@ -8,18 +8,24 @@ protocol KeyboardViewDelegate: AnyObject {
     func spaceLongPressed()
     func openSettings()
     func gridEdited()
-    func editHint(_ text: String?)
 }
 
 /// Draws the suggestion wheels and the key grid, and turns touches into key presses.
 /// A port of the Android `KeyboardView`: same layout math, same swipe keys, same drag-and-drop editor.
+/// While rearranging, the suggestion bar becomes a toolbar: undo, a hint for the current drag, settings and Done.
 final class KeyboardView: UIView {
 
     weak var delegate: KeyboardViewDelegate?
     var state = InputState()
-    var grid: KeyGrid { didSet { cancelTouches(); relayout() } }
+    /// Setting a new grid from outside clears the undo history; `undo()` and `replaceGrid(_:)` keep it.
+    var grid: KeyGrid { didSet { if !keepHistory { history.removeAll() }; cancelTouches(); relayout() } }
     var enterLabel: String? { didSet { setNeedsDisplay() } }
-    var editMode = false { didSet { if editMode != oldValue { cancelTouches(); updateWiggle(); relayout() } } }
+    var editMode = false { didSet { if editMode != oldValue { editHint = nil; cancelTouches(); updateWiggle(); relayout() } } }
+
+    private var history: [String] = []
+    private var keepHistory = false
+    private var editHint: String?
+    private static let maxUndo = 50
     /// Called with the keyboard's height whenever the layout changes.
     var onHeightChange: ((CGFloat) -> Void)?
 
@@ -46,6 +52,10 @@ final class KeyboardView: UIView {
     private let wheels = [Wheel(side: 0), Wheel(side: 1)]
     private var handleRect = CGRect.zero
     private var gearRect = CGRect.zero
+    private var undoRect = CGRect.zero
+    private var hintRect = CGRect.zero
+    private var moreRect = CGRect.zero
+    private var doneRect = CGRect.zero
     private var leftSpace: CGRect?
     private var rightSpace: CGRect?
     private var stripH: CGFloat = 0
@@ -234,6 +244,12 @@ final class KeyboardView: UIView {
             wheels[1].rect = CGRect(x: innerLeft + innerW / 2 + 18, y: 0, width: innerW / 2 - 18, height: strip)
             gearRect = CGRect(x: innerLeft + innerW / 2 - 18, y: 0, width: 36, height: strip)
         }
+        // Toolbar while rearranging: undo, hint, settings, Done.
+        let right = innerLeft + innerW
+        undoRect = CGRect(x: innerLeft, y: 0, width: 48, height: strip)
+        doneRect = CGRect(x: right - 64, y: 0, width: 64, height: strip)
+        moreRect = CGRect(x: doneRect.minX - 44, y: 0, width: 44, height: strip)
+        hintRect = CGRect(x: undoRect.maxX, y: 0, width: Swift.max(0, moreRect.minX - undoRect.maxX), height: strip)
         handleRect = CGRect(x: areaLeft, y: y0 + hc, width: areaW, height: handleH)
         leftSpace = areaLeft >= 40 ? CGRect(x: 0, y: strip, width: areaLeft, height: y0 + hc - strip) : nil
         rightSpace = width - (areaLeft + areaW) >= 40 ? CGRect(x: areaLeft + areaW, y: strip, width: width - areaLeft - areaW, height: y0 + hc - strip) : nil
@@ -260,9 +276,13 @@ final class KeyboardView: UIView {
         if builtWidth != bounds.width { layoutFor(bounds.width) }
         palette.background.setFill()
         ctx.fill(bounds)
-        drawWheels(ctx)
-        drawGear()
-        if editMode { drawCells(ctx) }
+        if editMode {
+            drawToolbar()
+            drawCells(ctx)
+        } else {
+            drawWheels(ctx)
+            drawGear()
+        }
         let radius = CGFloat(settings.int(Prefs.cornerRadius))
         let pressed = Set(trackers.values.compactMap { $0.pk?.item.id })
         let now = CACurrentMediaTime()
@@ -409,11 +429,23 @@ final class KeyboardView: UIView {
         UIBezierPath(roundedRect: CGRect(x: handleRect.midX - 22, y: handleRect.midY - 2, width: 44, height: 4), cornerRadius: 2).fill()
     }
 
-    private func drawGear() {
+    private func drawSymbol(_ name: String, in rect: CGRect, color: UIColor) {
         let config = UIImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-        guard gearRect.width >= 20, let img = UIImage(systemName: editMode ? "checkmark.circle" : "gearshape", withConfiguration: config)?
-            .withTintColor(palette.hint, renderingMode: .alwaysOriginal) else { return }
-        img.draw(at: CGPoint(x: gearRect.midX - img.size.width / 2, y: gearRect.midY - img.size.height / 2))
+        guard rect.width >= 20, let img = UIImage(systemName: name, withConfiguration: config)?
+            .withTintColor(color, renderingMode: .alwaysOriginal) else { return }
+        img.draw(at: CGPoint(x: rect.midX - img.size.width / 2, y: rect.midY - img.size.height / 2))
+    }
+
+    private func drawGear() { drawSymbol("gearshape", in: gearRect, color: palette.hint) }
+
+    private func drawToolbar() {
+        drawSymbol("arrow.uturn.backward", in: undoRect, color: palette.text.withAlphaComponent(history.isEmpty ? 0.3 : 1))
+        drawText(editHint ?? "Drag keys to rearrange", center: CGPoint(x: hintRect.midX, y: hintRect.midY), size: 13,
+                 color: editHint != nil ? palette.accent : palette.hint, maxWidth: hintRect.width * 0.95)
+        drawSymbol("gearshape", in: moreRect, color: palette.hint)
+        let attrs: [NSAttributedString.Key: Any] = [.font: UIFont.boldSystemFont(ofSize: 15), .foregroundColor: palette.accent]
+        let size = ("Done" as NSString).size(withAttributes: attrs)
+        ("Done" as NSString).draw(at: CGPoint(x: doneRect.midX - size.width / 2, y: doneRect.midY - size.height / 2), withAttributes: attrs)
     }
 
     private func drawCells(_ ctx: CGContext) {
@@ -651,7 +683,7 @@ final class KeyboardView: UIView {
         case .key:
             if !t.consumed { commit(t) }
         case .gear:
-            delegate?.openSettings()
+            editMode = true
         }
         setNeedsDisplay()
     }
@@ -764,12 +796,18 @@ final class KeyboardView: UIView {
 
     private func editBegan(_ t: UITouch, _ p: CGPoint) {
         guard editTouch == nil else { return }
-        if gearRect.contains(p) { delegate?.openSettings(); return }
+        if p.y < stripH {
+            if undoRect.contains(p) { undo() }
+            else if moreRect.contains(p) { delegate?.openSettings() }
+            else if doneRect.contains(p) { editMode = false }
+            return
+        }
         guard let pk = findKey(p, strict: true) else { return }
         let q = p.applying(pk.inv)
         if pk.item.isStack && hypot(q.x - (pk.rect.maxX - 8), q.y - (pk.rect.minY + 8)) < 12 {
+            let before = grid.toJSON()
             grid.separate(pk.item)
-            edited()
+            edited(before)
             return
         }
         editTouch = t
@@ -781,7 +819,7 @@ final class KeyboardView: UIView {
         guard t === editTouch, let d = drag else { return }
         d.p = p
         d.target = target(p, d)
-        delegate?.editHint(hint(d.target))
+        editHint = hint(d.target)
         setNeedsDisplay()
     }
 
@@ -790,15 +828,42 @@ final class KeyboardView: UIView {
         editTouch = nil
         guard let d = drag else { return }
         drag = nil
-        delegate?.editHint(nil)
+        editHint = nil
+        let before = grid.toJSON()
         apply(d)
-        edited()
+        edited(before)
     }
 
-    private func edited() {
+    /// Saves the layout as it was `before` an edit, so undo can return to it. Edits that changed nothing are skipped.
+    private func edited(_ before: String) {
         grid.normalize()
-        delegate?.gridEdited()
+        if grid.toJSON() != before {
+            history.append(before)
+            if history.count > KeyboardView.maxUndo { history.removeFirst() }
+            delegate?.gridEdited()
+        }
         relayout()
+    }
+
+    /// Steps back one edit.
+    func undo() {
+        guard let last = history.popLast(), let prev = KeyGrid.fromJSON(last) else { return }
+        keepHistory = true
+        grid = prev
+        keepHistory = false
+        delegate?.gridEdited()
+    }
+
+    /// Swaps in a whole new layout, such as a template or an imported code, as one step undo can reverse.
+    func replaceGrid(_ g: KeyGrid) {
+        let before = grid.toJSON()
+        keepHistory = true
+        grid = g
+        keepHistory = false
+        if g.toJSON() != before {
+            history.append(before)
+            delegate?.gridEdited()
+        }
     }
 
     private func target(_ p: CGPoint, _ d: Drag) -> Target? {
@@ -818,10 +883,10 @@ final class KeyboardView: UIView {
     private func hint(_ t: Target?) -> String? {
         guard let t = t else { return nil }
         switch t.type {
-        case .combine: return "Drop to combine into one swipe key"
-        case .insert: return "Drop to insert here, the keys beside it shift over"
-        case .space: return "Drop on the inner side of the spacebar, which shrinks"
-        case .move: return "Drop to move here"
+        case .combine: return "Combine into a swipe key"
+        case .insert: return "Insert, neighbours shift over"
+        case .space: return "Sit beside the spacebar"
+        case .move: return "Move here"
         }
     }
 

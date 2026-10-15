@@ -9,6 +9,11 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
     var onRearrange: (() -> Void)?
     var onResetLayout: (() -> Void)?
     var onNumberRow: ((Bool) -> Bool)?
+    var onTemplate: ((Template) -> Void)?
+    /// Types the layout's share code into the text field.
+    var onTypeCode: (() -> Void)?
+    /// Reads a share code from the text field; false if there wasn't one.
+    var onImportCode: (() -> Bool)?
 
     private let settings: KeyboardSettings
     private let scroll = UIScrollView()
@@ -96,6 +101,23 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let l = page
 
+        // Layout: templates and sharing. Codes go through the text field because the keyboard has no clipboard access.
+        stack.addArrangedSubview(menuRow("Start from", current: "Choose", options: Template.allCases.map { $0.title }) { [weak self] title in
+            guard let t = Template.allCases.first(where: { $0.title == title }) else { return }
+            self?.onTemplate?(t)
+        })
+        stack.addArrangedSubview(linkButton("Share: type my layout code here") { [weak self] in self?.onTypeCode?() })
+        let importButton = UIButton(type: .system)
+        importButton.setTitle("Import: read a layout code from the text field", for: .normal)
+        importButton.contentHorizontalAlignment = .leading
+        importButton.titleLabel?.numberOfLines = 0
+        importButton.addAction(UIAction { [weak self, weak importButton] _ in
+            if self?.onImportCode?() == false {
+                importButton?.setTitle("No layout code found. Paste one into the text field first.", for: .normal)
+            }
+        }, for: .touchUpInside)
+        stack.addArrangedSubview(importButton)
+
         stack.addArrangedSubview(switchRow("Same for portrait and landscape", settings.sameOrientations) { [weak self] on in
             guard let self = self else { return }
             if on { self.settings.linkOrientations(from: self.page) } else { self.settings.set(Prefs.sameOrientations, false) }
@@ -179,7 +201,6 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
         stack.addArrangedSubview(switchRow("Key click sound", settings.clicks) { [weak self] on in self?.settings.set(Prefs.clicks, on) })
         stack.addArrangedSubview(sliderRow("Long-press delay", Prefs.longPressMs, format: { "\($0) ms" }))
 
-        stack.addArrangedSubview(linkButton("Reset layout") { [weak self] in self?.onResetLayout?() })
         stack.addArrangedSubview(linkButton("Reset all settings") { [weak self] in
             guard let self = self else { return }
             self.settings.resetAll()

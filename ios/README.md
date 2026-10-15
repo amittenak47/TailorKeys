@@ -1,8 +1,12 @@
 # TailorKeys for iOS
 
 A Swift port of the Android keyboard: the same grid, swipe keys, suggestion wheels, split layout with tilt and
-ergonomic curve, themes, one-hand slide bar and drag-and-drop editor. Settings live inside the keyboard (the gear
-in the middle of the suggestion bar), so it needs no App Group and works with a free Apple ID.
+ergonomic curve, themes, one-hand slide bar and drag-and-drop editor with undo, templates and share codes.
+The gear between the suggestions starts rearranging; the gear in that toolbar opens the settings. Keeping settings
+inside the keyboard means it needs no App Group and works with a free Apple ID. The app itself is a paged setup guide.
+
+Layout codes (`TK1-…`) are the same on both platforms. Without Full Access a keyboard can't use the clipboard, so
+on iOS the settings panel types your code into the text field, and imports a code you've pasted into the text field.
 
 ## Build (no Mac needed)
 

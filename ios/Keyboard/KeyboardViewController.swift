@@ -13,7 +13,6 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private var keyboard: KeyboardView!
     private var heightConstraint: NSLayoutConstraint?
     private var panel: SettingsPanel?
-    private let hintLabel = UILabel()
     private var lastSpace: CFTimeInterval = 0
     private var lastAbcTap: CFTimeInterval = 0
 
@@ -45,18 +44,6 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             if self?.heightConstraint?.constant != h { self?.heightConstraint?.constant = h }
         }
         keyboard = kb
-
-        // Shown above the keys while rearranging, in place of the suggestions.
-        hintLabel.font = .systemFont(ofSize: 13)
-        hintLabel.textAlignment = .center
-        hintLabel.isHidden = true
-        hintLabel.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(hintLabel)
-        NSLayoutConstraint.activate([
-            hintLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
-            hintLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
-            hintLabel.topAnchor.constraint(equalTo: view.topAnchor, constant: 2),
-        ])
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -136,23 +123,37 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     func spaceLongPressed() { advanceToNextInputMode() }
 
+    /// The gear in the rearranging toolbar: leaves rearranging and shows the settings panel.
     func openSettings() {
-        if keyboard.editMode {
-            keyboard.editMode = false
-            hintLabel.isHidden = true
-            return
-        }
+        keyboard.editMode = false
         guard panel == nil else { return }
-        let p = SettingsPanel(settings: settings, landscape: UIScreen.main.bounds.width > UIScreen.main.bounds.height)
+        let landscape = UIScreen.main.bounds.width > UIScreen.main.bounds.height
+        let p = SettingsPanel(settings: settings, landscape: landscape)
         p.onChange = { [weak self] in self?.keyboard.reloadSettings() }
         p.onClose = { [weak self] in self?.closePanel() }
-        p.onRearrange = { [weak self] in
+        p.onRearrange = { [weak self] in self?.rearrange() }
+        p.onTemplate = { [weak self] t in
             guard let self = self else { return }
+            let g = KeyGrid.template(t)
+            if self.settings.numberRow { g.setNumberRow(true) }
+            self.keyboard.replaceGrid(g)
+            if t.split { self.settings.setSplitFor(landscape, true) }
+            self.rearrange()
+        }
+        // Without Full Access a keyboard can't use the clipboard, so codes go through the text field instead.
+        p.onTypeCode = { [weak self] in
+            guard let self = self else { return }
+            self.textDocumentProxy.insertText(self.keyboard.grid.toCode())
             self.closePanel()
-            self.keyboard.editMode = true
-            self.hintLabel.text = "Drag keys to rearrange. Tap ✓ when done."
-            self.hintLabel.textColor = .secondaryLabel
-            self.hintLabel.isHidden = false
+        }
+        p.onImportCode = { [weak self] in
+            guard let self = self else { return false }
+            let proxy = self.textDocumentProxy
+            let text = (proxy.documentContextBeforeInput ?? "") + (proxy.documentContextAfterInput ?? "")
+            guard let g = KeyGrid.fromCode(text) else { return false }
+            self.keyboard.replaceGrid(g)
+            self.rearrange()
+            return true
         }
         p.onResetLayout = { [weak self] in
             guard let self = self else { return }
@@ -187,12 +188,13 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         keyboard.reloadSettings()
     }
 
-    func gridEdited() { settings.saveGrid(keyboard.grid) }
-
-    func editHint(_ text: String?) {
-        hintLabel.text = text ?? "Drag keys to rearrange. Tap ✓ when done."
-        hintLabel.textColor = text == nil ? .secondaryLabel : .systemBlue
+    /// Closes the panel and shows the keys wiggling, with undo in the toolbar.
+    private func rearrange() {
+        closePanel()
+        keyboard.editMode = true
     }
+
+    func gridEdited() { settings.saveGrid(keyboard.grid) }
 
     // MARK: - Typing
 

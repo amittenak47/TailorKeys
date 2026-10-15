@@ -101,7 +101,11 @@ final class KeyboardSettings {
         return g
     }
 
-    func saveGrid(_ g: KeyGrid) { d.set(g.toJSON(), forKey: Prefs.layout) }
+    /// Saves the layout. The number-row switch follows whether the layout has a number row.
+    func saveGrid(_ g: KeyGrid) {
+        d.set(g.toJSON(), forKey: Prefs.layout)
+        d.set(g.rows == 5, forKey: Prefs.numberRow)
+    }
 
     func resetAll() {
         for key in d.dictionaryRepresentation().keys where key != "user_words" { d.removeObject(forKey: key) }

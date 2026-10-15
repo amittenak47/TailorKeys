@@ -1,6 +1,8 @@
 package app.tailorkeys
 
 import android.app.Activity
+import android.app.AlertDialog
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -33,6 +35,7 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import app.tailorkeys.layout.KeyGrid
+import app.tailorkeys.layout.Template
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -43,7 +46,6 @@ class SettingsActivity : Activity() {
     private lateinit var content: LinearLayout
     private lateinit var status: TextView
     private lateinit var editor: KeyboardView
-    private lateinit var editHint: TextView
     private lateinit var orientHeader: LinearLayout
     private lateinit var panel: SwipePanel
     /** The orientation the size panel is showing. */
@@ -56,13 +58,19 @@ class SettingsActivity : Activity() {
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         refreshers.forEach { it() }
         panelRefreshers.forEach { it() }
-        if (key == null) editor.grid = settings.loadGrid()
+        // Layouts changed elsewhere (the keyboard's own editor, a reset) show up here; our own saves already are.
+        if (key == null || key == Prefs.LAYOUT) settings.loadGrid().let { if (it.toJson() != editor.grid.toJson()) editor.grid = it }
         editor.reloadSettings()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = KeyboardSettings(this)
+        if (!settings.bool(Prefs.ONBOARDED)) {
+            startActivity(Intent(this, OnboardingActivity::class.java))
+            finish()
+            return
+        }
         page = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         drawEdgeToEdge()
         content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -112,6 +120,9 @@ class SettingsActivity : Activity() {
                 else startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
             }
         })
+        content.addView(linkButton("Show the guide") {
+            startActivity(Intent(this, OnboardingActivity::class.java))
+        })
         content.addView(EditText(this).apply {
             hint = "Try the keyboard here. Changes below apply live."
             minLines = 2
@@ -119,13 +130,9 @@ class SettingsActivity : Activity() {
 
         // ---- Arrange keys ----
         section("Arrange keys")
-        body("Drag a key to an empty cell, onto another key's edge to insert it, onto its middle to combine them into a swipe key, or onto a spacebar to sit beside it. Tap the x on a swipe key to separate it.")
-        editHint = TextView(this).apply { setTextColor(getColor(R.color.accent)); minHeight = dp(22); textSize = 14f }
-        content.addView(editHint)
         editor = KeyboardView(this, settings).apply {
             editMode = true
             grid = settings.loadGrid()
-            setSuggestions(listOf("helpful", "helicopter", "helmet"), listOf("hello", "help", "held"), "hel")
             listener = object : KeyboardView.Listener {
                 override fun onKey(code: String) = Unit
                 override fun onLongPressText(text: String) = Unit
@@ -133,15 +140,14 @@ class SettingsActivity : Activity() {
                 override fun onSuggestion(text: String) = Unit
                 override fun onPickIme() = Unit
                 override fun onEdited() = settings.saveGrid(grid)
-                override fun onEditHint(text: String?) { editHint.text = text ?: "" }
             }
         }
         content.addView(editor, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        content.addView(linkButton("Reset layout") {
-            val g = KeyGrid.default()
-            if (settings.bool(Prefs.NUMBER_ROW)) g.setNumberRow(true)
-            settings.saveGrid(g)
-            editor.grid = g
+        content.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(linkButton("Start from…") { pickTemplate() }.apply { setPadding(0, dp(12), dp(24), dp(12)) })
+            addView(linkButton("Share") { shareLayout() }.apply { setPadding(0, dp(12), dp(24), dp(12)) })
+            addView(linkButton("Import") { importLayout() })
         })
 
         // ---- Size and split, one orientation at a time ----
@@ -300,10 +306,50 @@ class SettingsActivity : Activity() {
                 refreshers.forEach { it() }
                 return@switchRow
             }
-            settings.saveGrid(g)
-            settings.set(Prefs.NUMBER_ROW, on)
-            editor.grid = g
+            editor.replaceGrid(g)
         }, refreshers))
+    }
+
+    // ---- Layout templates and sharing ----
+
+    private fun pickTemplate() {
+        val list = Template.entries
+        AlertDialog.Builder(this)
+            .setTitle("Start from")
+            .setItems(list.map { it.title }.toTypedArray()) { _, i ->
+                val t = list[i]
+                val g = KeyGrid.template(t)
+                if (settings.bool(Prefs.NUMBER_ROW)) g.setNumberRow(true)
+                editor.replaceGrid(g)
+                if (t.split) settings.setSplitFor(page, true)
+                Toast.makeText(this, "${t.title} layout. Tap undo above the keys to go back.", Toast.LENGTH_SHORT).show()
+            }
+            .show()
+    }
+
+    private fun shareLayout() {
+        val send = Intent(Intent.ACTION_SEND).setType("text/plain")
+            .putExtra(Intent.EXTRA_TEXT, "My TailorKeys layout: ${editor.grid.toCode()}")
+        startActivity(Intent.createChooser(send, "Share layout"))
+    }
+
+    /** Paste box for a layout code, filled in from the clipboard when it holds one. */
+    private fun importLayout() {
+        val box = EditText(this).apply { hint = "Paste a layout code (starts with TK1-)"; minLines = 2 }
+        val clip = getSystemService(ClipboardManager::class.java).primaryClip
+        clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()
+            ?.takeIf { KeyGrid.fromCode(it) != null }?.let { box.setText(it) }
+        val frame = LinearLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(box, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)) }
+        AlertDialog.Builder(this)
+            .setTitle("Import layout")
+            .setView(frame)
+            .setPositiveButton("Import") { _, _ ->
+                val g = KeyGrid.fromCode(box.text.toString())
+                if (g == null) Toast.makeText(this, "That isn't a TailorKeys layout code", Toast.LENGTH_SHORT).show()
+                else editor.replaceGrid(g)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun refreshStatus() {
@@ -312,9 +358,8 @@ class SettingsActivity : Activity() {
             ?.startsWith("$packageName/") == true
         status.text = when {
             selected -> "✓ TailorKeys is on and selected."
-            enabled -> "TailorKeys is turned on. Tap the button to switch to it."
-            else -> "TailorKeys isn't turned on yet. Tap the button, turn it on, then come back and switch to it. " +
-                "Android warns that keyboards can collect what you type. TailorKeys has no internet permission, so nothing you type can leave your phone."
+            enabled -> "TailorKeys is turned on but not selected."
+            else -> "TailorKeys isn't turned on yet."
         }
     }
 

@@ -9,6 +9,21 @@ enum Keys {
     static let sym = "sym"
 }
 
+/// Starting layouts offered in the editor. `split` also turns on the split keyboard.
+enum Template: CaseIterable {
+    case standard, split, thumbs
+
+    var title: String {
+        switch self {
+        case .standard: return "Standard"
+        case .split: return "Ergonomic split"
+        case .thumbs: return "Thumb keys"
+        }
+    }
+
+    var split: Bool { self == .split }
+}
+
 /// One key on the grid. A key with more than one entry in `keys` is a swipe key that cycles through them.
 final class GridKey {
     let id: Int
@@ -181,6 +196,66 @@ final class KeyGrid {
             rows = 4
         }
         return true
+    }
+
+    /// True when every key fits on the grid without overlapping. Imported layouts must pass this.
+    var isSound: Bool {
+        (4...5).contains(rows) && !items.isEmpty && items.allSatisfy { !$0.keys.isEmpty && $0.w >= 1 && valid($0) }
+    }
+
+    // MARK: - Sharing
+
+    private static let codePrefix = "TK1-"
+
+    /// A short text code for sharing the layout: the JSON, raw-deflated and base64url-encoded.
+    /// Android reads and writes the same codes.
+    func toCode() -> String {
+        guard let raw = toJSON().data(using: .utf8),
+              let packed = try? (raw as NSData).compressed(using: .zlib) as Data else { return "" }
+        let b64 = packed.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        return KeyGrid.codePrefix + b64
+    }
+
+    /// Finds a layout code anywhere in `text`, so a whole pasted message works. Nil if there's none or it's broken.
+    static func fromCode(_ text: String) -> KeyGrid? {
+        guard let start = text.range(of: codePrefix) else { return nil }
+        let allowed = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+        var b64 = String(text[start.upperBound...].prefix { allowed.contains($0) })
+            .replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        while b64.count % 4 != 0 { b64 += "=" }
+        guard let packed = Data(base64Encoded: b64),
+              let raw = try? (packed as NSData).decompressed(using: .zlib) as Data,
+              let g = fromJSON(String(decoding: raw, as: UTF8.self)), g.isSound else { return nil }
+        return g
+    }
+
+    // MARK: - Templates
+
+    /// Starting layouts. Standard is the default; the others put B on the left hand like ergonomic keyboards.
+    static func template(_ t: Template) -> KeyGrid {
+        if t == .standard { return makeDefault() }
+        var items: [GridKey] = []
+        func add(_ r: Int, _ c: Int, _ keys: [String], _ w: Int = 1) { items.append(GridKey(id: items.count, r: r, c: c, w: w, keys: keys)) }
+        func row(_ r: Int, _ c0: Int, _ s: String) { for (i, ch) in s.enumerated() { add(r, c0 + i, [String(ch)]) } }
+        row(0, 0, "qwert"); row(0, 6, "yuiop")
+        row(1, 0, "asdfg"); row(1, 6, "hjkl'")
+        row(2, 0, "zxcvb"); row(2, 6, "nm,.")
+        add(3, 0, [Keys.abc, Keys.num, Keys.sym])
+        if t == .split {
+            add(2, 10, [Keys.backspace])
+            add(3, 1, [Keys.space], 4)
+            add(3, 6, [Keys.space], 4)
+            add(3, 10, [Keys.enter])
+        } else {
+            // Backspace and enter sit at the inner ends of the spacebars, under the thumbs.
+            add(2, 10, ["?"])
+            add(3, 1, [Keys.space], 3)
+            add(3, 4, [Keys.backspace])
+            add(3, 6, [Keys.enter])
+            add(3, 7, [Keys.space], 4)
+        }
+        return KeyGrid(rows: 4, items: items, nextId: items.count)
     }
 
     private struct ItemDTO: Codable { let r: Int; let c: Int; let w: Int; let k: [String]; let i: Int }

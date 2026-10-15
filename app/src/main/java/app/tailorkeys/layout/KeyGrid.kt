@@ -1,7 +1,11 @@
 package app.tailorkeys.layout
 
+import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.util.zip.Deflater
+import java.util.zip.Inflater
 import kotlin.math.abs
 
 object Keys {
@@ -11,6 +15,13 @@ object Keys {
     const val ABC = "abc"
     const val NUM = "num"
     const val SYM = "sym"
+}
+
+/** Starting layouts offered in the editor. [split] also turns on the split keyboard. */
+enum class Template(val title: String, val split: Boolean) {
+    STANDARD("Standard", false),
+    SPLIT("Ergonomic split", true),
+    THUMBS("Thumb keys", false),
 }
 
 /** One key on the grid. A key with more than one entry in [keys] is a swipe key that cycles through them. */
@@ -152,6 +163,9 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         return true
     }
 
+    /** True when every key fits on the grid without overlapping. Imported layouts must pass this. */
+    fun isSound() = rows in 4..5 && items.isNotEmpty() && items.all { it.keys.isNotEmpty() && it.w >= 1 && valid(it) }
+
     fun toJson(): String {
         val a = JSONArray()
         items.forEach {
@@ -160,12 +174,72 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         return JSONObject().put("rows", rows).put("items", a).toString()
     }
 
+    /** A short text code for sharing the layout: the JSON, compressed and base64url-encoded. iOS reads the same codes. */
+    fun toCode(): String {
+        val raw = toJson().toByteArray()
+        val d = Deflater(Deflater.BEST_COMPRESSION, true)
+        d.setInput(raw)
+        d.finish()
+        val buf = ByteArray(raw.size + 64)
+        val n = d.deflate(buf)
+        d.end()
+        return CODE_PREFIX + Base64.encodeToString(buf, 0, n, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+    }
+
     companion object {
         const val COLS = 11
         const val CENTER = 5
+        private const val CODE_PREFIX = "TK1-"
+        private val CODE = Regex("TK1-([A-Za-z0-9_-]+)")
 
         fun region(c: Int) = when { c < 5 -> 0; c == 5 -> 1; else -> 2 }
         fun bounds(c: Int) = when (region(c)) { 0 -> 0..4; 1 -> 5..5; else -> 6..10 }
+
+        /** Finds a layout code anywhere in [text], so a whole pasted message works. Null if there's none or it's broken. */
+        fun fromCode(text: String): KeyGrid? {
+            val m = CODE.find(text) ?: return null
+            return try {
+                val inf = Inflater(true)
+                inf.setInput(Base64.decode(m.groupValues[1], Base64.URL_SAFE) + 0) // raw deflate wants one spare byte
+                val out = ByteArrayOutputStream()
+                val buf = ByteArray(1024)
+                while (!inf.finished() && out.size() < 64 * 1024) {
+                    val n = inf.inflate(buf)
+                    if (n == 0 && inf.needsInput()) break
+                    out.write(buf, 0, n)
+                }
+                inf.end()
+                fromJson(out.toString("UTF-8"))?.takeIf { it.isSound() }
+            } catch (e: Exception) {
+                null
+            }
+        }
+
+        /** Starting layouts. Standard is [default]; the others put B on the left hand like ergonomic keyboards. */
+        fun template(t: Template): KeyGrid {
+            if (t == Template.STANDARD) return default()
+            val items = mutableListOf<GridKey>()
+            fun add(r: Int, c: Int, keys: List<String>, w: Int = 1) { items.add(GridKey(items.size, r, c, w, keys.toMutableList())) }
+            fun row(r: Int, c0: Int, s: String) = s.forEachIndexed { i, ch -> add(r, c0 + i, listOf(ch.toString())) }
+            row(0, 0, "qwert"); row(0, 6, "yuiop")
+            row(1, 0, "asdfg"); row(1, 6, "hjkl'")
+            row(2, 0, "zxcvb"); row(2, 6, "nm,.")
+            add(3, 0, listOf(Keys.ABC, Keys.NUM, Keys.SYM))
+            if (t == Template.SPLIT) {
+                add(2, 10, listOf(Keys.BACKSPACE))
+                add(3, 1, listOf(Keys.SPACE), 4)
+                add(3, 6, listOf(Keys.SPACE), 4)
+                add(3, 10, listOf(Keys.ENTER))
+            } else {
+                // Backspace and enter sit at the inner ends of the spacebars, under the thumbs.
+                add(2, 10, listOf("?"))
+                add(3, 1, listOf(Keys.SPACE), 3)
+                add(3, 4, listOf(Keys.BACKSPACE))
+                add(3, 6, listOf(Keys.ENTER))
+                add(3, 7, listOf(Keys.SPACE), 4)
+            }
+            return KeyGrid(4, items, items.size)
+        }
 
         fun default(): KeyGrid {
             val items = mutableListOf<GridKey>()
