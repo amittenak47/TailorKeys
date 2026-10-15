@@ -114,13 +114,14 @@ class OnboardingActivity : Activity() {
 
     // ---- Paging ----
 
-    private val swipes = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+    // Lazy: a GestureDetector needs the activity's resources, which don't exist yet while it's being constructed.
+    private val swipes by lazy { GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
         override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
             if (abs(vx) < abs(vy) * 1.5f || abs(vx) < 600) return false
             go(if (vx < 0) index + 1 else index - 1)
             return true
         }
-    })
+    }) }
 
     override fun dispatchTouchEvent(e: MotionEvent): Boolean {
         swipes.onTouchEvent(e)
