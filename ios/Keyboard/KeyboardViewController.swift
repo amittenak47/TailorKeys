@@ -44,6 +44,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             if self?.heightConstraint?.constant != h { self?.heightConstraint?.constant = h }
         }
         keyboard = kb
+        predictor.setLayout(kb.grid)
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -112,10 +113,12 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         if state.layer != .abc {
             textDocumentProxy.insertText(text)
         } else {
-            let prefix = currentWord(textDocumentProxy.documentContextBeforeInput ?? "")
+            let before = textDocumentProxy.documentContextBeforeInput ?? ""
+            let prefix = currentWord(before)
+            let prev = previousWord(before)
             for _ in 0..<prefix.count { textDocumentProxy.deleteBackward() }
             textDocumentProxy.insertText(text + " ")
-            predictor.learn(text)
+            predictor.learn(text, prev)
         }
         updateAutoCap()
         updateSuggestions()
@@ -161,6 +164,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             if self.settings.numberRow { g.setNumberRow(true) }
             self.settings.saveGrid(g)
             self.keyboard.grid = g
+            self.predictor.setLayout(g)
         }
         p.onNumberRow = { [weak self] on in
             guard let self = self else { return false }
@@ -169,6 +173,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             self.settings.saveGrid(g)
             self.settings.set(Prefs.numberRow, on)
             self.keyboard.grid = g
+            self.predictor.setLayout(g)
             return true
         }
         p.translatesAutoresizingMaskIntoConstraints = false
@@ -194,7 +199,10 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         keyboard.editMode = true
     }
 
-    func gridEdited() { settings.saveGrid(keyboard.grid) }
+    func gridEdited() {
+        predictor.setLayout(keyboard.grid)
+        settings.saveGrid(keyboard.grid)
+    }
 
     // MARK: - Typing
 
@@ -220,7 +228,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func typeSpace() {
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         let word = currentWord(before)
-        if word.count > 1 { predictor.learn(word) }
+        if word.count > 1 { predictor.learn(word, previousWord(before)) }
         let now = CACurrentMediaTime()
         if settings.doubleSpace && state.layer == .abc && now - lastSpace < 0.6,
            before.hasSuffix(" "), let prev = before.dropLast().last, prev.isLetter || prev.isNumber {
@@ -253,6 +261,17 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         return String(chars.reversed())
     }
 
+    private func previousWord(_ before: String) -> String? {
+        var remaining = before.dropLast(currentWord(before).count)
+        while let ch = remaining.last {
+            if ch == "." || ch == "!" || ch == "?" || ch.isNewline { return nil }
+            if ch.isLetter || ch == "'" { break }
+            remaining.removeLast()
+        }
+        let word = currentWord(String(remaining)).lowercased()
+        return word.isEmpty ? nil : word
+    }
+
     private func updateSuggestions() {
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         if state.layer != .abc {
@@ -261,7 +280,8 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             return
         }
         let prefix = currentWord(before)
-        keyboard.setSuggestions(left: predictor.explore(prefix), right: predictor.closest(prefix), prefix: prefix)
+        let prev = previousWord(before)
+        keyboard.setSuggestions(left: predictor.explore(prefix, prev), right: predictor.closest(prefix, prev), prefix: prefix)
     }
 
     /// Turns on a one-shot capital where the field asks for one: sentence starts, word starts, or always.

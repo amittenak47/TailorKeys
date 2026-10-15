@@ -34,6 +34,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             val g = settings.loadGrid()
             if (g.toJson() != grid.toJson()) {
                 grid = g
+                predictor.setLayout(g)
                 keyboardView?.grid = g
             }
         }
@@ -45,6 +46,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         settings = KeyboardSettings(this)
         predictor = Predictor(this)
         grid = settings.loadGrid()
+        predictor.setLayout(grid)
         settings.prefs.registerOnSharedPreferenceChangeListener(prefsListener)
     }
 
@@ -132,10 +134,12 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             ic.commitText(text, 1)
             return
         }
-        val prefix = currentWord(ic.getTextBeforeCursor(48, 0))
+        val before = ic.getTextBeforeCursor(64, 0)
+        val prefix = currentWord(before)
+        val prev = previousWord(before)
         if (prefix.isNotEmpty()) ic.deleteSurroundingText(prefix.length, 0)
         ic.commitText("$text ", 1)
-        if (learn) predictor.learn(text)
+        if (learn) predictor.learn(text, prev)
     }
 
     override fun onPickIme() {
@@ -145,6 +149,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     /** A drag in the keyboard's own editor (the gear) changed the layout. */
     override fun onEdited() {
         grid = keyboardView?.grid ?: return
+        predictor.setLayout(grid)
         settings.saveGrid(grid)
     }
 
@@ -179,9 +184,9 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     private fun typeSpace() {
         val ic = currentInputConnection ?: return
-        val before = ic.getTextBeforeCursor(48, 0)
+        val before = ic.getTextBeforeCursor(64, 0)
         val word = currentWord(before)
-        if (learn && word.length > 1) predictor.learn(word)
+        if (learn && word.length > 1) predictor.learn(word, previousWord(before))
         val now = SystemClock.uptimeMillis()
         if (settings.bool(Prefs.DOUBLE_SPACE_PERIOD) && state.layer == Layer.ABC && now - lastSpaceAt < DOUBLE_SPACE_MS) {
             val last2 = ic.getTextBeforeCursor(2, 0)
@@ -226,17 +231,33 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         return before.subSequence(i, before.length).toString()
     }
 
+    private fun previousWord(before: CharSequence?): String? {
+        if (before == null) return null
+        var end = before.length - currentWord(before).length
+        while (end > 0) {
+            val ch = before[end - 1]
+            if (ch == '.' || ch == '!' || ch == '?' || ch == '\n' || ch == '\r') return null
+            if (ch.isLetter() || ch == '\'') break
+            end--
+        }
+        var start = end
+        while (start > 0 && (before[start - 1].isLetter() || before[start - 1] == '\'')) start--
+        if (start == end || start == 0 && before.length == 64) return null
+        return before.subSequence(start, end).toString().lowercase()
+    }
+
     private fun updateSuggestions() {
         val view = keyboardView ?: return
         if (!learn) { view.setSuggestions(emptyList(), emptyList(), ""); return }
-        val before = currentInputConnection?.getTextBeforeCursor(48, 0)
+        val before = currentInputConnection?.getTextBeforeCursor(64, 0)
         if (state.layer != Layer.ABC) {
             val (explore, closest) = predictor.symbols(before?.lastOrNull())
             view.setSuggestions(explore, closest, "")
             return
         }
         val prefix = currentWord(before)
-        view.setSuggestions(predictor.explore(prefix), predictor.closest(prefix), prefix)
+        val prev = previousWord(before)
+        view.setSuggestions(predictor.explore(prefix, prev), predictor.closest(prefix, prev), prefix)
     }
 
     /** Turns on a one-shot capital at the start of a sentence, when the field asks for it. */

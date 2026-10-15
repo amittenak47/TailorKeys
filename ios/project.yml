@@ -36,6 +36,8 @@ targets:
       # Same word list as the Android app.
       - path: ../app/src/main/assets/words.txt
         buildPhase: resources
+      - path: ../app/src/main/assets/bigrams.txt
+        buildPhase: resources
     info:
       path: Keyboard/Info.plist
       properties:
