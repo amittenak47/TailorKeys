@@ -47,6 +47,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         fun onStackFace(code: String)
         fun onSuggestion(text: String)
         fun onPickIme()
+        fun onCursor(steps: Int) {}
         fun onEdited() {}
         fun onOpenSettings() {}
     }
@@ -86,6 +87,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val cells = ArrayList<Cell>()
     private val wheels = listOf(Wheel(0), Wheel(1))
     private val handleRect = RectF()
+    private val cursorRect = RectF()
     private val gearRect = RectF()
     private val undoRect = RectF()
     private val hintRect = RectF()
@@ -269,6 +271,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             hintRect.set(undoRect.right, 0f, right - undoRect.width(), stripH)
         }
         handleRect.set(areaLeft, y0 + hc, areaLeft + areaW, y0 + hc + handleH)
+        if (split && !editMode) cursorRect.set(innerLeft + half, stripH, innerLeft + half + gapPx, handleRect.top)
+        else cursorRect.setEmpty()
         val minSpace = 40 * d
         leftSpace = if (areaLeft >= minSpace) RectF(0f, stripH, areaLeft, y0 + hc) else null
         rightSpace = if (width - (areaLeft + areaW) >= minSpace) RectF(areaLeft + areaW, stripH, width.toFloat(), y0 + hc) else null
@@ -301,6 +305,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             if (gearRect.width() >= 20 * density) drawGear(canvas, gearRect.centerX(), gearRect.centerY(), 20 * density, palette.hint)
         }
         val radius = settings.int(Prefs.CORNER_RADIUS) * density
+        if (!editMode && !cursorRect.isEmpty) drawCursor(canvas, radius)
         val pressed = trackers.values.mapNotNull { it.pk?.item }.toSet()
         val now = SystemClock.uptimeMillis()
         for (pk in placed) {
@@ -468,6 +473,22 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         canvas.drawPath(shape(area.centerX(), area.centerY(), s, false, 0.25f * dir, -0.5f, -0.25f * dir, 0f, 0.25f * dir, 0.5f), strokeIn(palette.hint, s * 1.5f, 255))
     }
 
+    private fun drawCursor(canvas: Canvas, radius: Float) {
+        if (trackers.values.any { it.kind == K_CURSOR }) {
+            fill.color = palette.pressed
+            fill.alpha = 64
+            canvas.drawRoundRect(cursorRect, radius, radius, fill)
+            fill.alpha = 255
+        }
+        val cx = cursorRect.centerX()
+        val cy = cursorRect.centerY()
+        if (findKey(cx, cy, strict = true) != null) return
+        val s = min(cursorRect.width() * 0.5f, 18 * density)
+        val p = strokeIn(palette.hint, s, 89)
+        canvas.drawPath(shape(cx, cy, s, false, -0.2f, -0.25f, -0.45f, 0f, -0.2f, 0.25f), p)
+        canvas.drawPath(shape(cx, cy, s, false, 0.2f, -0.25f, 0.45f, 0f, 0.2f, 0.25f), p)
+    }
+
     private fun drawHandle(canvas: Canvas) {
         fill.color = palette.hint
         val w = 44 * density
@@ -618,7 +639,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             moveKeyboardToward(x, y)
             return
         }
-        val pk = findKey(x, y) ?: return
+        val hit = findKey(x, y, strict = true)
+        if (hit == null && cursorRect.contains(x, y)) {
+            trackers[id] = Tracker(K_CURSOR, null).also { it.x0 = x }
+            invalidate()
+            return
+        }
+        val pk = hit ?: findKey(x, y) ?: return
         haptic(HapticFeedbackConstants.KEYBOARD_TAP)
         if (pk.item.isStack) {
             trackers[id] = Tracker(K_STACK, pk).also { it.y0 = y }
@@ -647,6 +674,15 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 if (t.moved) { t.wheel!!.dragDx = dx; invalidate() }
             }
             K_HANDLE -> { t.lastX = x; if (abs(x - t.x0) > 8 * density) t.moved = true }
+            K_CURSOR -> {
+                val step = 9 * density
+                val steps = ((x - t.x0) / step).toInt()
+                if (steps != 0) {
+                    listener?.onCursor(steps)
+                    t.x0 += steps * step
+                    repeat(abs(steps)) { haptic(HapticFeedbackConstants.CLOCK_TICK) }
+                }
+            }
             K_STACK -> {
                 // One swipe moves exactly one face; the rest of the gesture is ignored.
                 val sw = swipe ?: return
@@ -956,6 +992,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         const val K_WHEEL = 2
         const val K_HANDLE = 3
         const val K_GEAR = 4
+        const val K_CURSOR = 5
         const val MAX_UNDO = 50
         const val T_MOVE = 0
         const val T_SPACE = 1

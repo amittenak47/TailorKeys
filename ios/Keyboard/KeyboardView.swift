@@ -7,6 +7,7 @@ protocol KeyboardViewDelegate: AnyObject {
     func suggestionPicked(_ text: String)
     func spaceLongPressed()
     func openSettings()
+    func moveCursor(_ steps: Int)
     func gridEdited()
 }
 
@@ -51,6 +52,7 @@ final class KeyboardView: UIView {
     private var cells: [Cell] = []
     private let wheels = [Wheel(side: 0), Wheel(side: 1)]
     private var handleRect = CGRect.zero
+    private var cursorRect = CGRect.zero
     private var gearRect = CGRect.zero
     private var undoRect = CGRect.zero
     private var hintRect = CGRect.zero
@@ -251,6 +253,7 @@ final class KeyboardView: UIView {
         moreRect = CGRect(x: doneRect.minX - 44, y: 0, width: 44, height: strip)
         hintRect = CGRect(x: undoRect.maxX, y: 0, width: Swift.max(0, moreRect.minX - undoRect.maxX), height: strip)
         handleRect = CGRect(x: areaLeft, y: y0 + hc, width: areaW, height: handleH)
+        cursorRect = split && !editMode ? CGRect(x: innerLeft + half, y: stripH, width: gapPx, height: handleRect.minY - stripH) : .zero
         leftSpace = areaLeft >= 40 ? CGRect(x: 0, y: strip, width: areaLeft, height: y0 + hc - strip) : nil
         rightSpace = width - (areaLeft + areaW) >= 40 ? CGRect(x: areaLeft + areaW, y: strip, width: width - areaLeft - areaW, height: y0 + hc - strip) : nil
         builtWidth = width
@@ -284,6 +287,7 @@ final class KeyboardView: UIView {
             drawGear()
         }
         let radius = CGFloat(settings.int(Prefs.cornerRadius))
+        if !editMode && !cursorRect.isEmpty { drawCursor(radius) }
         let pressed = Set(trackers.values.compactMap { $0.pk?.item.id })
         let now = CACurrentMediaTime()
         for pk in placed {
@@ -424,6 +428,19 @@ final class KeyboardView: UIView {
         path.stroke()
     }
 
+    private func drawCursor(_ radius: CGFloat) {
+        if trackers.values.contains(where: { $0.kind == .cursor }) {
+            palette.pressed.withAlphaComponent(0.25).setFill()
+            UIBezierPath(roundedRect: cursorRect, cornerRadius: radius).fill()
+        }
+        let c = CGPoint(x: cursorRect.midX, y: cursorRect.midY)
+        if findKey(c, strict: true) != nil { return }
+        let s = Swift.min(cursorRect.width * 0.5, 18)
+        palette.hint.withAlphaComponent(0.35).setStroke()
+        poly(c, s, false, [-0.2, -0.25, -0.45, 0, -0.2, 0.25]).stroke()
+        poly(c, s, false, [0.2, -0.25, 0.45, 0, 0.2, 0.25]).stroke()
+    }
+
     private func drawHandle() {
         palette.hint.setFill()
         UIBezierPath(roundedRect: CGRect(x: handleRect.midX - 22, y: handleRect.midY - 2, width: 44, height: 4), cornerRadius: 2).fill()
@@ -514,7 +531,7 @@ final class KeyboardView: UIView {
 
     // MARK: - Touch
 
-    private enum Kind { case key, stack, wheel, handle, gear }
+    private enum Kind { case key, stack, wheel, handle, gear, cursor }
 
     private final class Tracker {
         let kind: Kind
@@ -590,7 +607,13 @@ final class KeyboardView: UIView {
             return
         }
         if leftSpace?.contains(p) == true || rightSpace?.contains(p) == true { moveToward(p); return }
-        guard let pk = findKey(p) else { return }
+        let hit = findKey(p, strict: true)
+        if hit == nil && cursorRect.contains(p) {
+            let t = Tracker(kind: .cursor, pk: nil); t.x0 = p.x; trackers[id] = t
+            setNeedsDisplay()
+            return
+        }
+        guard let pk = hit ?? findKey(p) else { return }
         click()
         if pk.item.isStack {
             let t = Tracker(kind: .stack, pk: pk); t.y0 = p.y; trackers[id] = t
@@ -624,6 +647,13 @@ final class KeyboardView: UIView {
         case .handle:
             t.lastX = p.x
             if abs(p.x - t.x0) > 8 { t.moved = true }
+        case .cursor:
+            let steps = Int((p.x - t.x0) / 9)
+            if steps != 0 {
+                delegate?.moveCursor(steps)
+                t.x0 += CGFloat(steps) * 9
+                for _ in 0..<abs(steps) { click() }
+            }
         case .stack:
             // One swipe moves exactly one face; the rest of the gesture is ignored.
             guard let sw = swipe, !sw.stepped, let pk = t.pk else { return }
@@ -684,6 +714,8 @@ final class KeyboardView: UIView {
             if !t.consumed { commit(t) }
         case .gear:
             editMode = true
+        case .cursor:
+            break
         }
         setNeedsDisplay()
     }

@@ -92,6 +92,12 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         keyboard.setNeedsDisplay()
     }
 
+    func moveCursor(_ steps: Int) {
+        textDocumentProxy.adjustTextPosition(byCharacterOffset: steps)
+        updateAutoCap()
+        updateSuggestions()
+    }
+
     func longPressText(_ text: String) {
         insert(text)
         updateSuggestions()

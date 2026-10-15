@@ -14,6 +14,7 @@ import app.tailorkeys.layout.KeyGrid
 import app.tailorkeys.layout.KeyText
 import app.tailorkeys.layout.Keys
 import app.tailorkeys.layout.Layer
+import kotlin.math.abs
 
 class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
@@ -111,6 +112,11 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             else -> KeyText.output(code, state)?.let { commit(it) }
         }
         keyboardView?.invalidate()
+    }
+
+    override fun onCursor(steps: Int) {
+        val code = if (steps < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
+        repeat(abs(steps)) { sendDownUpKeyEvents(code) }
     }
 
     override fun onLongPressText(text: String) = commit(text)
