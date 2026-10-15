@@ -1,0 +1,54 @@
+# XcodeGen spec. The cloud build runs `xcodegen generate` to make TailorKeys.xcodeproj from this file.
+name: TailorKeys
+options:
+  bundleIdPrefix: app.tailorkeys
+  deploymentTarget:
+    iOS: "15.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    CODE_SIGN_STYLE: Automatic
+targets:
+  TailorKeys:
+    type: application
+    platform: iOS
+    sources: [App]
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: TailorKeys
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.tailorkeys
+    dependencies:
+      - target: TailorKeysKeyboard
+  TailorKeysKeyboard:
+    type: app-extension
+    platform: iOS
+    sources:
+      - Keyboard
+      # Same word list as the Android app.
+      - path: ../app/src/main/assets/words.txt
+        buildPhase: resources
+    info:
+      path: Keyboard/Info.plist
+      properties:
+        CFBundleDisplayName: TailorKeys
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.keyboard-service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).KeyboardViewController
+          NSExtensionAttributes:
+            IsASCIICapable: true
+            PrefersRightToLeft: false
+            PrimaryLanguage: en-US
+            # No Full Access: the keyboard never needs the network or shared storage.
+            RequestsOpenAccess: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.tailorkeys.keyboard
