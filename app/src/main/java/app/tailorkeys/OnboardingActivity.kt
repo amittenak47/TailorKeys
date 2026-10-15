@@ -38,6 +38,8 @@ class OnboardingActivity : Activity() {
     /** Re-checks the "turned on" and "selected" lines when returning from system screens. */
     private var refreshStatus: (() -> Unit)? = null
 
+    private val slotHeight get() = dp(if (resources.configuration.smallestScreenWidthDp >= 600) 320 else 240)
+
     private val landscape get() = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     private val pages by lazy {
@@ -182,7 +184,7 @@ class OnboardingActivity : Activity() {
             col.addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         } else {
             col.orientation = LinearLayout.VERTICAL
-            col.addView(slot, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(240)).apply { bottomMargin = dp(28); topMargin = dp(8) })
+            col.addView(slot, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, slotHeight).apply { bottomMargin = dp(28); topMargin = dp(8) })
             col.addView(text)
         }
         val scroll = ScrollView(this).apply { isVerticalScrollBarEnabled = false; isFillViewport = true }
@@ -225,7 +227,9 @@ class OnboardingActivity : Activity() {
             setSuggestions(listOf("helpful", "helicopter", "helmet"), listOf("hello", "help", "held"), "hel")
             editMode = editing
         }
-        return MiniatureBox(this, view, 0.62f, dp(232))
+        // Aim for a keyboard laid out about 520dp wide: small on phones, close to full size on tablets.
+        val slotWidthDp = resources.displayMetrics.widthPixels / resources.displayMetrics.density / (if (landscape) 2 else 1) - 48
+        return MiniatureBox(this, view, (slotWidthDp / 520f).coerceIn(0.55f, 1f), slotHeight - dp(24))
     }
 
     // ---- Setup checks ----
