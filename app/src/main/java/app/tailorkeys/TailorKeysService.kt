@@ -25,6 +25,11 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private var grid: KeyGrid = KeyGrid.default()
     private var lastSpaceAt = 0L
     private var lastAbcTap = 0L
+    private var selStart = 0
+    private var selEnd = 0
+    private var selectAnchor: Int? = null
+    private var selectFocus = 0
+    private var selectTotal = 0
     /** False in password and no-suggestion fields: nothing is suggested or learned there. */
     private var learn = true
 
@@ -97,6 +102,8 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         oldSelStart: Int, oldSelEnd: Int, newSelStart: Int, newSelEnd: Int, candidatesStart: Int, candidatesEnd: Int,
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        selStart = newSelStart
+        selEnd = newSelEnd
         updateAutoCap()
         updateSuggestions()
     }
@@ -114,7 +121,23 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         keyboardView?.invalidate()
     }
 
-    override fun onCursor(steps: Int) {
+    override fun onSelectMode(on: Boolean) {
+        if (on) {
+            selectAnchor = selStart
+            selectFocus = selEnd
+            selectTotal = selEnd + (currentInputConnection?.getTextAfterCursor(10000, 0)?.length ?: 0)
+        } else {
+            selectAnchor = null
+        }
+    }
+
+    override fun onCursor(steps: Int, select: Boolean) {
+        if (select) {
+            val anchor = selectAnchor ?: return
+            selectFocus = (selectFocus + steps).coerceIn(0, selectTotal)
+            currentInputConnection?.setSelection(anchor, selectFocus)
+            return
+        }
         val code = if (steps < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
         repeat(abs(steps)) { sendDownUpKeyEvents(code) }
     }

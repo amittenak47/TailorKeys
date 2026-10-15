@@ -648,6 +648,7 @@ final class KeyboardView: UIView {
             t.lastX = p.x
             if abs(p.x - t.x0) > 8 { t.moved = true }
         case .cursor:
+            // UITextDocumentProxy has no API to select text.
             let steps = Int((p.x - t.x0) / 9)
             if steps != 0 {
                 delegate?.moveCursor(steps)

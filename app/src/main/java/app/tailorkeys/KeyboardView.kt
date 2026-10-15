@@ -47,7 +47,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         fun onStackFace(code: String)
         fun onSuggestion(text: String)
         fun onPickIme()
-        fun onCursor(steps: Int) {}
+        fun onCursor(steps: Int, select: Boolean) {}
+        fun onSelectMode(on: Boolean) {}
         fun onEdited() {}
         fun onOpenSettings() {}
     }
@@ -475,8 +476,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     private fun drawCursor(canvas: Canvas, radius: Float) {
         if (trackers.values.any { it.kind == K_CURSOR }) {
-            fill.color = palette.pressed
-            fill.alpha = 64
+            val select = trackers.values.any { it.kind == K_CURSOR && it.select }
+            fill.color = if (select) palette.accent else palette.pressed
+            fill.alpha = if (select) 77 else 64
             canvas.drawRoundRect(cursorRect, radius, radius, fill)
             fill.alpha = 255
         }
@@ -576,6 +578,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         var x0 = 0f
         var y0 = 0f
         var lastX = 0f
+        var holdX = 0f
+        var holdY = 0f
+        var select = false
         var wheel: Wheel? = null
         val longPress = Runnable { onLongPress(this) }
         val repeat: Runnable = object : Runnable {
@@ -593,7 +598,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private var swipe: Swipe? = null
 
     fun cancelTouches() {
-        trackers.values.forEach { stopTimers(it) }
+        trackers.values.forEach { stopTimers(it); if (it.select) listener?.onSelectMode(false) }
         trackers.clear()
         swipe = null
         drag = null
@@ -641,7 +646,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         }
         val hit = findKey(x, y, strict = true)
         if (hit == null && cursorRect.contains(x, y)) {
-            trackers[id] = Tracker(K_CURSOR, null).also { it.x0 = x }
+            trackers[id] = Tracker(K_CURSOR, null).also {
+                it.x0 = x; it.holdX = x; it.holdY = y
+                timers.postDelayed(it.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong())
+            }
             invalidate()
             return
         }
@@ -675,10 +683,15 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             }
             K_HANDLE -> { t.lastX = x; if (abs(x - t.x0) > 8 * density) t.moved = true }
             K_CURSOR -> {
+                if (!t.select && hypot(x - t.holdX, y - t.holdY) > 6 * density) {
+                    t.holdX = x; t.holdY = y
+                    timers.removeCallbacks(t.longPress)
+                    timers.postDelayed(t.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong())
+                }
                 val step = 9 * density
                 val steps = ((x - t.x0) / step).toInt()
                 if (steps != 0) {
-                    listener?.onCursor(steps)
+                    listener?.onCursor(steps, select = t.select)
                     t.x0 += steps * step
                     repeat(abs(steps)) { haptic(HapticFeedbackConstants.CLOCK_TICK) }
                 }
@@ -745,6 +758,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             }
             K_KEY -> if (!t.consumed) commit(t)
             K_GEAR -> editMode = true
+            K_CURSOR -> if (t.select) listener?.onSelectMode(false)
         }
         invalidate()
     }
@@ -755,6 +769,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun onLongPress(t: Tracker) {
+        if (t.kind == K_CURSOR) {
+            t.select = true
+            haptic(HapticFeedbackConstants.LONG_PRESS)
+            listener?.onSelectMode(true)
+            invalidate()
+            return
+        }
         val code = t.pk?.item?.keys?.get(0) ?: return
         if (code == Keys.SPACE) {
             listener?.onPickIme()
