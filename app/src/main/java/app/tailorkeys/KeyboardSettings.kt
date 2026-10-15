@@ -1,0 +1,106 @@
+package app.tailorkeys
+
+import android.content.Context
+import android.content.SharedPreferences
+import app.tailorkeys.layout.KeyGrid
+
+enum class Align { LEFT, CENTER, RIGHT }
+
+class IntPref(val key: String, val default: Int, val min: Int, val max: Int)
+class BoolPref(val key: String, val default: Boolean)
+
+/** Every user setting with its default and allowed range, shared by the keyboard and the settings screen. */
+object Prefs {
+    // Size and split are stored separately for portrait (_p) and landscape (_l).
+    private val HEIGHT_P = IntPref("height_p", 38, 24, 70)
+    private val HEIGHT_L = IntPref("height_l", 52, 24, 70)
+    private val WIDTH_P = IntPref("width_p", 100, 50, 100)
+    private val WIDTH_L = IntPref("width_l", 100, 50, 100)
+    private val BOTTOM_P = IntPref("bottom_pad_p", 0, 0, 48)
+    private val BOTTOM_L = IntPref("bottom_pad_l", 0, 0, 48)
+    private val GAP_P = IntPref("split_gap_p", 16, 8, 40)
+    private val GAP_L = IntPref("split_gap_l", 22, 8, 40)
+    private val TILT_P = IntPref("tilt_p", 0, -15, 20)
+    private val TILT_L = IntPref("tilt_l", 0, -15, 20)
+
+    fun height(landscape: Boolean) = if (landscape) HEIGHT_L else HEIGHT_P
+    fun width(landscape: Boolean) = if (landscape) WIDTH_L else WIDTH_P
+    fun bottomPadding(landscape: Boolean) = if (landscape) BOTTOM_L else BOTTOM_P
+    fun splitGap(landscape: Boolean) = if (landscape) GAP_L else GAP_P
+    fun tilt(landscape: Boolean) = if (landscape) TILT_L else TILT_P
+    fun alignKey(landscape: Boolean) = if (landscape) "align_l" else "align_p"
+    fun splitKey(landscape: Boolean) = if (landscape) "split_l" else "split_p"
+
+    /** Ergonomic curve for split layout, as a percentage. */
+    val CURVE = IntPref("curve", 70, 0, 100)
+    val KEY_GAP = IntPref("key_gap", 5, 0, 14)
+    val CORNER_RADIUS = IntPref("corner_radius", 8, 0, 20)
+    val TEXT_SCALE = IntPref("text_scale", 100, 60, 160)
+    val LONG_PRESS_MS = IntPref("long_press_ms", 350, 150, 800)
+
+    val NUMBER_ROW = BoolPref("number_row", false)
+    val SHOW_HINTS = BoolPref("show_hints", true)
+    val AUTO_CAP = BoolPref("auto_cap", true)
+    val DOUBLE_SPACE_PERIOD = BoolPref("double_space_period", true)
+    val HAPTICS = BoolPref("haptics", true)
+    val LOCK_SIZE = BoolPref("lock_size", false)
+
+    const val THEME = "theme"
+    const val LAYOUT = "layout"
+}
+
+data class SizeProfile(
+    val heightPercent: Int,
+    val widthPercent: Int,
+    val align: Align,
+    val bottomPaddingDp: Int,
+    val split: Boolean,
+    val gap: Int,
+    val tilt: Int,
+)
+
+class KeyboardSettings(context: Context) {
+    val prefs: SharedPreferences = context.applicationContext.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    private val tablet = context.resources.configuration.smallestScreenWidthDp >= 600
+
+    fun int(p: IntPref) = prefs.getInt(p.key, p.default).coerceIn(p.min, p.max)
+    fun bool(p: BoolPref) = prefs.getBoolean(p.key, p.default)
+    fun set(p: IntPref, value: Int) = prefs.edit().putInt(p.key, value.coerceIn(p.min, p.max)).apply()
+    fun set(p: BoolPref, value: Boolean) = prefs.edit().putBoolean(p.key, value).apply()
+
+    fun align(landscape: Boolean): Align {
+        val name = prefs.getString(Prefs.alignKey(landscape), null)
+        return Align.entries.firstOrNull { it.name == name } ?: Align.CENTER
+    }
+
+    fun setAlign(landscape: Boolean, align: Align) =
+        prefs.edit().putString(Prefs.alignKey(landscape), align.name).apply()
+
+    /** Split defaults to on for tablets in landscape. */
+    fun split(landscape: Boolean) = prefs.getBoolean(Prefs.splitKey(landscape), landscape && tablet)
+    fun setSplit(landscape: Boolean, on: Boolean) = prefs.edit().putBoolean(Prefs.splitKey(landscape), on).apply()
+
+    fun profile(landscape: Boolean) = SizeProfile(
+        heightPercent = int(Prefs.height(landscape)),
+        widthPercent = int(Prefs.width(landscape)),
+        align = align(landscape),
+        bottomPaddingDp = int(Prefs.bottomPadding(landscape)),
+        split = split(landscape),
+        gap = int(Prefs.splitGap(landscape)),
+        tilt = int(Prefs.tilt(landscape)),
+    )
+
+    fun theme(): ThemeName {
+        val name = prefs.getString(Prefs.THEME, null)
+        return ThemeName.entries.firstOrNull { it.name == name } ?: ThemeName.SYSTEM
+    }
+
+    fun setTheme(theme: ThemeName) = prefs.edit().putString(Prefs.THEME, theme.name).apply()
+
+    fun loadGrid(): KeyGrid = KeyGrid.fromJson(prefs.getString(Prefs.LAYOUT, null))
+        ?: KeyGrid.default().also { if (bool(Prefs.NUMBER_ROW)) it.setNumberRow(true) }
+
+    fun saveGrid(grid: KeyGrid) = prefs.edit().putString(Prefs.LAYOUT, grid.toJson()).apply()
+
+    fun resetAll() = prefs.edit().clear().apply()
+}
