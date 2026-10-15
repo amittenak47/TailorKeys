@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Every user-visible string of the guide. Placeholders: write the real text here. Use \n for a new paragraph. -->
+<resources>
+    <string name="onboarding_1_title">Slide 1 title</string>
+    <string name="onboarding_1_body">Slide 1 text. Write this.</string>
+    <string name="onboarding_2_title">Slide 2 title</string>
+    <string name="onboarding_2_body">Slide 2 text. Write this.</string>
+    <string name="onboarding_3_title">Slide 3 title</string>
+    <string name="onboarding_3_body">Slide 3 text. Write this.</string>
+    <string name="onboarding_4_title">Slide 4 title</string>
+    <string name="onboarding_4_body">Slide 4 text. Write this.</string>
+    <string name="onboarding_5_title">Slide 5 title</string>
+    <string name="onboarding_5_body">Slide 5 text. Write this.</string>
+    <string name="onboarding_6_title">Slide 6 title</string>
+    <string name="onboarding_6_body">Slide 6 text. Write this.</string>
+
+    <string name="onboarding_skip">Skip</string>
+    <string name="onboarding_back">Back</string>
+    <string name="onboarding_next">Next</string>
+    <string name="onboarding_finish">Finish</string>
+    <string name="onboarding_open_keyboard_settings">Open keyboard settings</string>
+    <string name="onboarding_enabled_check">✓ TailorKeys is turned on</string>
+    <string name="onboarding_choose_keyboard">Choose keyboard</string>
+    <string name="onboarding_selected_check">✓ TailorKeys is your keyboard</string>
+    <string name="onboarding_try_hint">Type here</string>
+</resources>

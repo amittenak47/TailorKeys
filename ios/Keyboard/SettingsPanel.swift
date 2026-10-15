@@ -21,6 +21,9 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
     /// The orientation being edited.
     private var page: Bool
     private var ratio: CGFloat = 1
+    /// Which tab is showing: 0 Layout, 1 Size, 2 Look, 3 Typing.
+    private var tab = 0
+    private static let tabNames = ["Layout", "Size", "Look", "Typing"]
 
     init(settings: KeyboardSettings, landscape: Bool) {
         self.settings = settings
@@ -43,19 +46,33 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
         bar.spacing = 16
         bar.alignment = .center
 
+        // Tabs under the bar: each one shows only its own controls.
+        let tabs = UISegmentedControl(items: SettingsPanel.tabNames)
+        tabs.selectedSegmentIndex = 0
+        tabs.addAction(UIAction { [weak self, weak tabs] _ in
+            guard let self = self, let i = tabs?.selectedSegmentIndex else { return }
+            self.tab = i
+            self.scroll.setContentOffset(.zero, animated: false)
+            self.build()
+        }, for: .valueChanged)
+
         stack.axis = .vertical
         stack.spacing = 10
         scroll.addSubview(stack)
-        for v in [bar, scroll] as [UIView] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        for v in [bar, tabs, scroll] as [UIView] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
         stack.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             bar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             bar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
             bar.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             bar.heightAnchor.constraint(equalToConstant: 32),
+            tabs.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            tabs.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            tabs.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: 4),
+            tabs.heightAnchor.constraint(equalToConstant: 30),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: bar.bottomAnchor, constant: 4),
+            scroll.topAnchor.constraint(equalTo: tabs.bottomAnchor, constant: 6),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 14),
             stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -14),
@@ -82,7 +99,7 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
     }
 
     @objc private func swiped(_ g: UISwipeGestureRecognizer) {
-        guard !settings.sameOrientations else { return }
+        guard tab == 1, !settings.sameOrientations else { return }
         let landscape = g.direction == .left
         if landscape != page { page = landscape; build() }
     }
@@ -99,9 +116,16 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
 
     private func build() {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let l = page
+        switch tab {
+        case 0: buildLayoutTab()
+        case 1: buildSizeTab()
+        case 2: buildLookTab()
+        default: buildTypingTab()
+        }
+    }
 
-        // Layout: templates and sharing. Codes go through the text field because the keyboard has no clipboard access.
+    private func buildLayoutTab() {
+        // Templates and sharing. Codes go through the text field because the keyboard has no clipboard access.
         stack.addArrangedSubview(menuRow("Start from", current: "Choose", options: Template.allCases.map { $0.title }) { [weak self] title in
             guard let t = Template.allCases.first(where: { $0.title == title }) else { return }
             self?.onTemplate?(t)
@@ -117,7 +141,10 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
             }
         }, for: .touchUpInside)
         stack.addArrangedSubview(importButton)
+    }
 
+    private func buildSizeTab() {
+        let l = page
         stack.addArrangedSubview(switchRow("Same for portrait and landscape", settings.sameOrientations) { [weak self] on in
             guard let self = self else { return }
             if on { self.settings.linkOrientations(from: self.page) } else { self.settings.set(Prefs.sameOrientations, false) }
@@ -182,6 +209,9 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
             stack.addArrangedSubview(sliderRow("Ergonomic curve", Prefs.curve, format: { "\($0)%" }))
         }
 
+    }
+
+    private func buildLookTab() {
         stack.addArrangedSubview(menuRow("Theme", current: settings.theme.title, options: ThemeName.allCases.map { $0.title }) { [weak self] title in
             guard let self = self, let t = ThemeName.allCases.first(where: { $0.title == title }) else { return }
             self.settings.theme = t
@@ -196,6 +226,9 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
             self.changed()
         })
         stack.addArrangedSubview(switchRow("Long-press hints", settings.showHints) { [weak self] on in self?.settings.set(Prefs.showHints, on); self?.changed() })
+    }
+
+    private func buildTypingTab() {
         stack.addArrangedSubview(switchRow("Capitalize sentences", settings.autoCap) { [weak self] on in self?.settings.set(Prefs.autoCap, on) })
         stack.addArrangedSubview(switchRow("Double space types a period", settings.doubleSpace) { [weak self] on in self?.settings.set(Prefs.doubleSpace, on) })
         stack.addArrangedSubview(switchRow("Key click sound", settings.clicks) { [weak self] on in self?.settings.set(Prefs.clicks, on) })
