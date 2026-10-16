@@ -163,6 +163,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     /** The last worst-case tilt solution and the inputs it was computed for (see [layoutFor]). */
     private var reservedCache: Pair<List<Any>, FloatArray>? = null
+    // Scratch space for layoutFor's rotated-bounds math, reused so the tilt search allocates nothing.
+    private val boundsLetters = FloatArray(4)
+    private val boundsSpace = FloatArray(4)
 
     /** Places every key for this width and returns the keyboard height. */
     private fun layoutFor(width: Int): Int {
@@ -267,27 +270,29 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 fanX = max(fanX, max(0f, un - gap) * sines[i] / 2)
                 fanY = max(fanY, max(0f, widths[i] * cw / 5 - gap) * sines[i] / 2)
             }
-            fun bounds(x0: Float, y0: Float, x1: Float, y1: Float, a: Double): RectF {
-                val rect = RectF(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY)
-                for ((x, y) in listOf(x0 to y0, x0 to y1, x1 to y0, x1 to y1)) {
-                    val rx = (x * cos(a) - y * sin(a)).toFloat()
-                    val ry = (x * sin(a) + y * cos(a)).toFloat()
-                    rect.left = min(rect.left, rx); rect.right = max(rect.right, rx)
-                    rect.top = min(rect.top, ry); rect.bottom = max(rect.bottom, ry)
-                }
-                return rect
+            // Axis-aligned bounds of a rotated rectangle, written into [out] as left, top, right, bottom.
+            // Allocation-free: this runs hundreds of times per layout.
+            fun bounds(x0: Float, y0: Float, x1: Float, y1: Float, a: Double, out: FloatArray) {
+                val c = cos(a).toFloat()
+                val s = sin(a).toFloat()
+                val ax = x0 * c - y0 * s; val bx = x0 * c - y1 * s; val cx = x1 * c - y0 * s; val dx = x1 * c - y1 * s
+                val ay = x0 * s + y0 * c; val by = x0 * s + y1 * c; val cy = x1 * s + y0 * c; val dy = x1 * s + y1 * c
+                out[0] = min(min(ax, bx), min(cx, dx)); out[2] = max(max(ax, bx), max(cx, dx))
+                out[1] = min(min(ay, by), min(cy, dy)); out[3] = max(max(ay, by), max(cy, dy))
             }
-            val letters = bounds(-cw + gap / 2 - fanX, -letterH + gap / 2 - 0.38f * bend * un - fanY,
-                -gap / 2 + fanX, -gap / 2 + fanY, angle)
-            val space = bounds(-cw + gap / 2, gap / 2, -gap / 2, un - gap / 2, spaceAngle)
+            val letters = boundsLetters
+            val space = boundsSpace
+            bounds(-cw + gap / 2 - fanX, -letterH + gap / 2 - 0.38f * bend * un - fanY, -gap / 2 + fanX, -gap / 2 + fanY, angle, letters)
+            bounds(-cw + gap / 2, gap / 2, -gap / 2, un - gap / 2, spaceAngle, space)
             // Separate the complete rotated bounds by the normal gap, including opposing tilts.
-            val contentH = letters.height() + gap + space.height()
+            val lettersH = letters[3] - letters[1]
+            val contentH = lettersH + gap + (space[3] - space[1])
             val hc = max(n * un, contentH)
             val extra = (hc - contentH) / 2
-            val left = min(letters.left, space.left)
-            val right = max(letters.right, space.right)
-            return Sol(un, hc, cw, -left, 0f, pad, -letters.top - letterH + extra,
-                letters.height() + gap - space.top + extra, right - left)
+            val left = min(letters[0], space[0])
+            val right = max(letters[2], space[2])
+            return Sol(un, hc, cw, -left, 0f, pad, -letters[1] - letterH + extra,
+                lettersH + gap - space[1] + extra, right - left)
         }
         val reserve = split && !editMode
         val s = if (reserve) {
@@ -296,10 +301,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             val spaceRange = Prefs.spaceTilt(landscape)
             val angles = listOf(range.min, range.max).map { Math.toRadians(it.toDouble()) }
             val spaceAngles = listOf(spaceRange.min, spaceRange.max).map { Math.toRadians(it.toDouble()) }
+            // 14 halvings resolve widths and heights far below a pixel.
             fun worst(un: Float): Sol {
                 var lo = gap
                 var hi = half
-                repeat(20) {
+                repeat(14) {
                     val cw = (lo + hi) / 2
                     if (angles.all { a -> spaceAngles.all { b -> blocks(un, cw, a, b, 1f).span <= half } }) lo = cw else hi = cw
                 }
@@ -312,7 +318,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             val reserved = reservedCache?.takeIf { it.first == key }?.second ?: run {
                 var lo = 14 * d
                 var hi = max(lo, (target - stripH - handleH - pad - bottomPad) / n)
-                repeat(20) {
+                repeat(14) {
                     val un = (lo + hi) / 2
                     if (worst(un).total <= target) lo = un else hi = un
                 }
