@@ -16,7 +16,7 @@ enum Prefs {
     static func width(_ l: Bool) -> IntPref { IntPref(key: l ? "width_l" : "width_p", def: 100, min: 50, max: 100) }
     static func bottomPadding(_ l: Bool) -> IntPref { IntPref(key: l ? "bottom_pad_l" : "bottom_pad_p", def: 0, min: 0, max: 48) }
     static func splitGap(_ l: Bool) -> IntPref { l ? IntPref(key: "split_gap_l", def: 22, min: 8, max: 40) : IntPref(key: "split_gap_p", def: 16, min: 8, max: 40) }
-    static func tilt(_ l: Bool) -> IntPref { IntPref(key: l ? "tilt_l" : "tilt_p", def: 0, min: -15, max: 20) }
+    static func tilt(_ l: Bool) -> IntPref { IntPref(key: l ? "tilt_l" : "tilt_p", def: 0, min: -10, max: 10) }
     static func alignKey(_ l: Bool) -> String { l ? "align_l" : "align_p" }
     static func splitKey(_ l: Bool) -> String { l ? "split_l" : "split_p" }
 

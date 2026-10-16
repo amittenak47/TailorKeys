@@ -20,8 +20,9 @@ object Prefs {
     private val BOTTOM_L = IntPref("bottom_pad_l", 0, 0, 48)
     private val GAP_P = IntPref("split_gap_p", 16, 8, 40)
     private val GAP_L = IntPref("split_gap_l", 22, 8, 40)
-    private val TILT_P = IntPref("tilt_p", 0, -15, 20)
-    private val TILT_L = IntPref("tilt_l", 0, -15, 20)
+    // Tilt is capped at ±10°: the layout reserves room for both ends, so a wider range would make every key narrower.
+    private val TILT_P = IntPref("tilt_p", 0, -10, 10)
+    private val TILT_L = IntPref("tilt_l", 0, -10, 10)
 
     fun height(landscape: Boolean) = if (landscape) HEIGHT_L else HEIGHT_P
     fun width(landscape: Boolean) = if (landscape) WIDTH_L else WIDTH_P

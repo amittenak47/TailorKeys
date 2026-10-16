@@ -598,12 +598,6 @@ final class KeyboardView: UIView {
             palette.pressed.withAlphaComponent(0.25).setFill()
             UIBezierPath(roundedRect: cursorRect, cornerRadius: radius).fill()
         }
-        let c = CGPoint(x: cursorRect.midX, y: cursorRect.midY)
-        if findKey(c, strict: true) != nil { return }
-        let s = Swift.min(cursorRect.width * 0.5, 18)
-        palette.hint.withAlphaComponent(0.35).setStroke()
-        poly(c, s, false, [-0.2, -0.25, -0.45, 0, -0.2, 0.25]).stroke()
-        poly(c, s, false, [0.2, -0.25, 0.45, 0, 0.2, 0.25]).stroke()
     }
 
     private func drawHandle() {

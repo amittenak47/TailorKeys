@@ -771,13 +771,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             canvas.drawRoundRect(cursorRect, radius, radius, fill)
             fill.alpha = 255
         }
-        val cx = cursorRect.centerX()
-        val cy = cursorRect.centerY()
-        if (findKey(cx, cy, strict = true) != null) return
-        val s = min(cursorRect.width() * 0.5f, 18 * density)
-        val p = strokeIn(palette.hint, s, 89)
-        canvas.drawPath(shape(cx, cy, s, false, -0.2f, -0.25f, -0.45f, 0f, -0.2f, 0.25f), p)
-        canvas.drawPath(shape(cx, cy, s, false, 0.2f, -0.25f, 0.45f, 0f, 0.2f, 0.25f), p)
     }
 
     private fun drawHandle(canvas: Canvas) {
