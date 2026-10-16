@@ -10,10 +10,13 @@ class Chords(rankedWords: List<String>) {
     init {
         val words = rankedWords.take(20_000).distinct()
         val sets = words.map { letters(it) }
-        val counts = sets.groupingBy { it }.eachCount()
-        candidates = words.zip(sets).filter { it.second.length >= 3 }.take(400)
-            .filter { (_, keys) -> keys.length in 3..6 && counts[keys] == 1 }
-            .map { (word, keys) -> Chord(keys, word) }
+        // A letter set belongs to its most frequent word, unless another common word (top 2,000) shares it:
+        // "the" keeps t+h+e even though rare "thee" and "teeth" use the same letters.
+        val common = sets.take(2_000).groupingBy { it }.eachCount()
+        val first = HashMap<String, Int>().also { m -> sets.forEachIndexed { i, s -> m.putIfAbsent(s, i) } }
+        candidates = words.zip(sets).withIndex().filter { it.value.second.length >= 3 }.take(400)
+            .filter { (i, pair) -> pair.second.length in 3..6 && first[pair.second] == i && (common[pair.second] ?: 0) <= 1 }
+            .map { (_, pair) -> Chord(pair.second, pair.first) }
     }
 
     fun forLetters(keys: Set<Char>): List<Chord> = candidates.filter { chord -> chord.keys.all { it in keys } }.take(250)

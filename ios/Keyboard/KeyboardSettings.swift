@@ -204,11 +204,15 @@ struct Chords {
         var seen = Set<String>()
         let words = Array(rankedWords.prefix(20_000)).filter { seen.insert($0).inserted }
         let sets = words.map(Self.letters)
-        var counts: [String: Int] = [:]
-        for keys in sets { counts[keys, default: 0] += 1 }
-        candidates = zip(words, sets).filter { $0.1.count >= 3 }.prefix(400)
-            .filter { (3...6).contains($0.1.count) && counts[$0.1] == 1 }
-            .map { Chord(keys: $0.1, word: $0.0) }
+        // A letter set belongs to its most frequent word, unless another common word (top 2,000) shares it:
+        // "the" keeps t+h+e even though rare "thee" and "teeth" use the same letters.
+        var common: [String: Int] = [:]
+        for keys in sets.prefix(2_000) { common[keys, default: 0] += 1 }
+        var first: [String: Int] = [:]
+        for (i, keys) in sets.enumerated() where first[keys] == nil { first[keys] = i }
+        candidates = Array(sets.indices).filter { sets[$0].count >= 3 }.prefix(400)
+            .filter { (3...6).contains(sets[$0].count) && first[sets[$0]] == $0 && (common[sets[$0]] ?? 0) <= 1 }
+            .map { Chord(keys: sets[$0], word: words[$0]) }
     }
     func forLetters(_ keys: Set<Character>) -> [Chord] {
         Array(candidates.filter { Set($0.keys).isSubset(of: keys) }.prefix(250))
