@@ -9,6 +9,14 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     private var settings: KeyboardSettings!
     private let predictor = Predictor()
+    private lazy var gestureDecoder = GestureDecoder(predictor.gestureWords())
+    private var glideWord: String?
+    private var glideBefore: String?
+    private var glideDocument: UUID?
+    private var glideCandidates: [String] = []
+    private var glideExplore: [String] = []
+    private var changingGlide = false
+    private var suggestAllowed: Bool { textDocumentProxy.isSecureTextEntry != true }
     private let state = InputState()
     private var keyboard: KeyboardView!
     private var heightConstraint: NSLayoutConstraint?
@@ -55,6 +63,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             if self?.heightConstraint?.constant != h { self?.heightConstraint?.constant = h }
         }
         keyboard = kb
+        _ = gestureDecoder // Build the dictionary index before the first finger gesture.
         predictor.setLayout(kb.grid)
     }
 
@@ -68,6 +77,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         if panel != nil { panel?.removeFromSuperview(); panel = nil; openSettings() }
         let numeric: [UIKeyboardType] = [.numberPad, .decimalPad, .phonePad, .numbersAndPunctuation, .asciiCapableNumberPad]
         state.layer = numeric.contains(textDocumentProxy.keyboardType ?? .default) ? .num : .abc
+        clearGlide()
         state.shift = false
         state.capsLock = false
         keyboard.enterLabel = enterLabel()
@@ -92,6 +102,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     override func textDidChange(_ textInput: UITextInput?) {
+        if changingGlide { return }
         updateAutoCap()
         updateSuggestions()
     }
@@ -100,11 +111,19 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     func keyTapped(_ code: String) {
         switch code {
-        case Keys.backspace: textDocumentProxy.deleteBackward()
+        case Keys.backspace: clearGlide(); textDocumentProxy.deleteBackward()
         case Keys.space: typeSpace()
-        case Keys.enter: textDocumentProxy.insertText("\n")
+        case Keys.enter: finishGlideLearning(); clearGlide(); textDocumentProxy.insertText("\n")
         default:
-            if KeyText.isLayerKey(code) { tapLayerKey(code) } else if let s = KeyText.output(code, state) { insert(s) }
+            if KeyText.isLayerKey(code) { tapLayerKey(code) } else {
+                if state.layer == .abc && code.count == 1 && code.first!.isLetter && currentGlide() {
+                    let shifted = state.shift
+                    typeSpace()
+                    updateAutoCap()
+                    state.shift = state.shift || shifted
+                }
+                if let s = KeyText.output(code, state) { insert(s) }
+            }
         }
         // No typo buzz on iOS: keyboards can't vibrate without Full Access.
         updateAutoCap()
@@ -113,6 +132,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     func moveCursor(_ steps: Int) {
+        clearGlide()
         textDocumentProxy.adjustTextPosition(byCharacterOffset: steps)
         updateAutoCap()
         updateSuggestions()
@@ -135,18 +155,86 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     /// A word from a wheel replaces the word being typed. A symbol is just inserted.
     func suggestionPicked(_ text: String) {
-        if state.layer != .abc {
+        if state.layer == .abc && currentGlide() {
+            changingGlide = true
+            defer { changingGlide = false }
+            for _ in 0..<glideWord!.count { textDocumentProxy.deleteBackward() }
             textDocumentProxy.insertText(text)
+            glideWord = text
+            glideBefore = textDocumentProxy.documentContextBeforeInput
+            updateAutoCap()
+            updateSuggestions()
+            return
+        }
+        if state.layer != .abc {
+            insert(text)
         } else {
+            clearGlide()
             let before = textDocumentProxy.documentContextBeforeInput ?? ""
             let prefix = currentWord(before)
             let prev = previousWord(before)
             for _ in 0..<prefix.count { textDocumentProxy.deleteBackward() }
             textDocumentProxy.insertText(text + " ")
-            predictor.learn(text, prev)
+            if suggestAllowed { predictor.learn(text, prev) }
         }
         updateAutoCap()
         updateSuggestions()
+    }
+
+    func glideFinished(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat) {
+        guard suggestAllowed, settings.swipeTyping, state.layer == .abc else { return }
+        gestureDecoder.addWords(predictor.gestureUserWords())
+        gestureDecoder.setKeys(keys, keyWidth)
+        let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        let needsSpace = before.last.map { $0.isLetter || $0.isNumber } ?? false
+        let prev = previousWord(needsSpace ? before + " " : before)
+        let matches = gestureDecoder.decode(points, prev, frequency: predictor.gestureFrequency, context: predictor.contextScore)
+        guard !matches.isEmpty else { return }
+        changingGlide = true
+        defer { changingGlide = false }
+        let shifted = state.shift
+        if needsSpace { typeSpace() }
+        updateAutoCap()
+        state.shift = state.shift || shifted
+        let upper = state.capsLock || (settings.autoCap && textDocumentProxy.autocapitalizationType == .allCharacters)
+        let capital = state.shift
+        let candidates = matches.map { match -> String in
+            if upper { return match.word.uppercased() }
+            if capital { return match.word.prefix(1).uppercased() + match.word.dropFirst() }
+            return match.word
+        }
+        clearGlide()
+        insert(candidates[0])
+        glideWord = candidates[0]
+        glideCandidates = candidates
+        var rng = SplitMix(seed: candidates[0].utf8.reduce(5381) { ($0 &* 33) &+ UInt64($1) })
+        // Weighted sampling at temperature 2.5, restricted to alternatives beyond the right wheel.
+        glideExplore = matches.indices.dropFirst(8).map { i -> (String, Double) in
+            let u = max(1e-12, Double.random(in: 0..<1, using: &rng))
+            return (candidates[i], matches[i].score / 2.5 - log(-log(u)))
+        }.sorted { $0.1 > $1.1 }.map { $0.0 }
+        glideBefore = textDocumentProxy.documentContextBeforeInput
+        glideDocument = textDocumentProxy.documentIdentifier
+        lastSpace = 0
+        updateSuggestions()
+        keyboard.setNeedsDisplay()
+    }
+
+    private func clearGlide() {
+        glideWord = nil; glideBefore = nil; glideDocument = nil; glideCandidates = []; glideExplore = []
+    }
+
+    private func currentGlide() -> Bool {
+        guard glideWord != nil else { return false }
+        if textDocumentProxy.documentIdentifier == glideDocument,
+           (textDocumentProxy.selectedText ?? "").isEmpty,
+           textDocumentProxy.documentContextBeforeInput == glideBefore { return true }
+        clearGlide()
+        return false
+    }
+
+    private func finishGlideLearning() {
+        if currentGlide() && suggestAllowed { predictor.learn(glideWord!, previousWord(textDocumentProxy.documentContextBeforeInput ?? "")) }
     }
 
     func spaceLongPressed() { advanceToNextInputMode() }
@@ -235,6 +323,11 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     // MARK: - Typing
 
     private func insert(_ s: String) {
+        if currentGlide() {
+            if s.first?.isLetter == true { typeSpace() }
+            else if s.contains(where: { !$0.isLetter && !$0.isNumber && $0 != "'" }) { finishGlideLearning() }
+        }
+        clearGlide()
         textDocumentProxy.insertText(s)
         if state.shift && !state.capsLock { state.shift = false }
     }
@@ -256,7 +349,8 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func typeSpace() {
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         let word = currentWord(before)
-        if word.count > 1 { predictor.learn(word, previousWord(before)) }
+        if suggestAllowed && word.count > 1 { predictor.learn(word, previousWord(before)) }
+        clearGlide()
         let now = CACurrentMediaTime()
         if settings.doubleSpace && state.layer == .abc && now - lastSpace < 0.6,
            before.hasSuffix(" "), let prev = before.dropLast().last, prev.isLetter || prev.isNumber {
@@ -303,10 +397,23 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func updateSuggestions() {
         guard keyboard != nil else { return }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        keyboard.glideAllowed = suggestAllowed
+        if !settings.swipeTyping { clearGlide() }
+        if !suggestAllowed {
+            clearGlide()
+            keyboard.keyWeights = [:]
+            keyboard.setSuggestions(left: [], right: [], prefix: "")
+            return
+        }
         if state.layer != .abc {
             keyboard.keyWeights = [:]
             let s = predictor.symbols(before: before.last)
             keyboard.setSuggestions(left: s.explore, right: s.closest, prefix: "")
+            return
+        }
+        if currentGlide() {
+            keyboard.keyWeights = [:]
+            keyboard.setSuggestions(left: glideExplore, right: Array(glideCandidates.prefix(8)), prefix: "")
             return
         }
         let prefix = currentWord(before)

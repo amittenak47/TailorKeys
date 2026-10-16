@@ -20,6 +20,11 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     private lateinit var settings: KeyboardSettings
     private lateinit var predictor: Predictor
+    private lateinit var gestureDecoder: GestureDecoder
+    private var glideWord: String? = null
+    private var glideBefore: String? = null
+    private var glideCandidates = emptyList<String>()
+    private var glideExplore = emptyList<String>()
     private var keyboardView: KeyboardView? = null
     private val state = InputState()
     private var grid: KeyGrid = KeyGrid.default()
@@ -55,6 +60,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         super.onCreate()
         settings = KeyboardSettings(this)
         predictor = Predictor(this)
+        gestureDecoder = GestureDecoder(predictor.gestureWords())
         grid = settings.loadGrid()
         predictor.setLayout(grid)
         settings.prefs.registerOnSharedPreferenceChangeListener(prefsListener)
@@ -71,6 +77,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         it.state = state
         it.grid = grid
         it.inKeyboard = true
+        it.glideAllowed = suggest
         keyboardView = it
     }
 
@@ -88,7 +95,9 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
             variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
             (cls == InputType.TYPE_CLASS_NUMBER && variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD)
+        clearGlide()
         suggest = !password
+        keyboardView?.glideAllowed = suggest
         learn = cls == InputType.TYPE_CLASS_TEXT && !password && info.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS == 0
         lastSpaceAt = 0L
         deadEnd = false
@@ -112,6 +121,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
         selStart = newSelStart
         selEnd = newSelEnd
+        if (newSelStart != newSelEnd) clearGlide()
         updateAutoCap()
         updateSuggestions()
     }
@@ -121,13 +131,21 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     override fun onKey(code: String) {
         var letterCommitted = false
         when {
-            code == Keys.BACKSPACE -> sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
+            code == Keys.BACKSPACE -> { clearGlide(); sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL) }
             code == Keys.SPACE -> typeSpace()
             code == Keys.ENTER -> pressEnter()
             KeyText.isLayerKey(code) -> tapLayerKey(code)
-            else -> KeyText.output(code, state)?.let {
-                commit(it)
-                letterCommitted = it.length == 1 && it[0].isLetter()
+            else -> {
+                if (state.layer == Layer.ABC && code.length == 1 && code[0].isLetter() && currentGlide()) {
+                    val shifted = state.shift
+                    typeSpace()
+                    updateAutoCap()
+                    state.shift = state.shift || shifted
+                }
+                KeyText.output(code, state)?.let {
+                    commit(it)
+                    letterCommitted = it.length == 1 && it[0].isLetter()
+                }
             }
         }
         updateSuggestions(letterCommitted)
@@ -145,6 +163,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onCursor(steps: Int, select: Boolean) {
+        clearGlide()
         if (select) {
             val anchor = selectAnchor ?: return
             selectFocus = (selectFocus + steps).coerceIn(0, selectTotal)
@@ -170,16 +189,78 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     /** A word from a wheel replaces the word being typed. A symbol is just inserted. */
     override fun onSuggestion(text: String) {
         val ic = currentInputConnection ?: return
-        if (state.layer != Layer.ABC) {
+        if (state.layer == Layer.ABC && currentGlide()) {
+            ic.beginBatchEdit()
+            ic.deleteSurroundingText(glideWord!!.length, 0)
             ic.commitText(text, 1)
+            glideWord = text
+            glideBefore = ic.getTextBeforeCursor(64, 0)?.toString()
+            ic.endBatchEdit()
+            updateSuggestions()
             return
         }
+        if (state.layer != Layer.ABC) {
+            commit(text)
+            updateSuggestions()
+            return
+        }
+        clearGlide()
         val before = ic.getTextBeforeCursor(64, 0)
         val prefix = currentWord(before)
         val prev = previousWord(before)
         if (prefix.isNotEmpty()) ic.deleteSurroundingText(prefix.length, 0)
         ic.commitText("$text ", 1)
         if (learn) predictor.learn(text, prev)
+    }
+
+    override fun onGlide(points: List<GestureDecoder.Point>, keys: Map<Char, GestureDecoder.Point>, keyWidth: Float) {
+        if (!suggest || !settings.bool(Prefs.SWIPE_TYPING) || state.layer != Layer.ABC) return
+        val ic = currentInputConnection ?: return
+        gestureDecoder.addWords(predictor.gestureUserWords())
+        gestureDecoder.setKeys(keys, keyWidth)
+        val before = ic.getTextBeforeCursor(64, 0)?.toString().orEmpty()
+        val prev = previousWord(if (before.lastOrNull()?.isLetterOrDigit() == true) "$before " else before)
+        val matches = gestureDecoder.decode(points, prev, predictor::gestureFrequency, predictor::contextScore)
+        if (matches.isEmpty()) return
+        ic.beginBatchEdit()
+        // Automatic separators must not consume a manually armed one-shot shift.
+        val shifted = state.shift
+        if (before.lastOrNull()?.isLetterOrDigit() == true) typeSpace()
+        updateAutoCap()
+        state.shift = state.shift || shifted
+        val allCaps = state.capsLock || (settings.bool(Prefs.AUTO_CAP) &&
+            (currentInputEditorInfo?.inputType ?: 0) and InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS != 0)
+        val candidates = matches.map { match ->
+            when {
+                allCaps -> match.word.uppercase()
+                state.shift -> match.word.replaceFirstChar { it.uppercase() }
+                else -> match.word
+            }
+        }
+        clearGlide()
+        commit(candidates.first())
+        glideWord = candidates.first()
+        glideCandidates = candidates
+        val rnd = kotlin.random.Random(candidates.first().hashCode())
+        glideExplore = matches.indices.drop(8).map { i ->
+            val u = rnd.nextDouble().coerceAtLeast(1e-12)
+            candidates[i] to (matches[i].score / 2.5 - kotlin.math.ln(-kotlin.math.ln(u)))
+        }.sortedByDescending { it.second }.map { it.first }
+        glideBefore = ic.getTextBeforeCursor(64, 0)?.toString()
+        lastSpaceAt = 0L
+        ic.endBatchEdit()
+        updateSuggestions()
+        keyboardView?.invalidate()
+    }
+
+    private fun clearGlide() { glideWord = null; glideBefore = null; glideCandidates = emptyList(); glideExplore = emptyList() }
+
+    private fun currentGlide(): Boolean {
+        if (glideWord == null) return false
+        val ic = currentInputConnection ?: return false
+        if (ic.getSelectedText(0).isNullOrEmpty() && ic.getTextBeforeCursor(64, 0)?.toString() == glideBefore) return true
+        clearGlide()
+        return false
     }
 
     override fun onPickIme() {
@@ -201,7 +282,15 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     // ---- Typing ----
 
     private fun commit(text: String) {
-        currentInputConnection?.commitText(text, 1) ?: return
+        val ic = currentInputConnection ?: return
+        if (currentGlide()) {
+            if (text.firstOrNull()?.isLetter() == true) typeSpace()
+            else if (text.any { !it.isLetterOrDigit() && it != '\'' } && learn) {
+                predictor.learn(glideWord!!, previousWord(ic.getTextBeforeCursor(64, 0)))
+            }
+        }
+        clearGlide()
+        ic.commitText(text, 1)
         if (state.shift && !state.capsLock) state.shift = false
     }
 
@@ -227,6 +316,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val before = ic.getTextBeforeCursor(64, 0)
         val word = currentWord(before)
         if (learn && word.length > 1) predictor.learn(word, previousWord(before))
+        clearGlide()
         val now = SystemClock.uptimeMillis()
         if (settings.bool(Prefs.DOUBLE_SPACE_PERIOD) && state.layer == Layer.ABC && now - lastSpaceAt < DOUBLE_SPACE_MS) {
             val last2 = ic.getTextBeforeCursor(2, 0)
@@ -242,6 +332,8 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     private fun pressEnter() {
+        if (currentGlide() && learn) predictor.learn(glideWord!!, previousWord(currentInputConnection?.getTextBeforeCursor(64, 0)))
+        clearGlide()
         val info = currentInputEditorInfo ?: return
         val action = editorAction(info)
         if (action == null) sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER) else currentInputConnection?.performEditorAction(action)
@@ -287,6 +379,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     private fun updateSuggestions(letterCommitted: Boolean = false) {
+        if (!settings.bool(Prefs.SWIPE_TYPING)) clearGlide()
         val before = currentInputConnection?.getTextBeforeCursor(64, 0)
         val prefix = currentWord(before)
         val isDeadEnd = predictor.isDeadEnd(prefix)
@@ -304,6 +397,11 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             view.keyWeights = emptyMap()
             val (explore, closest) = predictor.symbols(before?.lastOrNull())
             view.setSuggestions(explore, closest, "")
+            return
+        }
+        if (currentGlide()) {
+            view.keyWeights = emptyMap()
+            view.setSuggestions(glideExplore, glideCandidates.take(8), "")
             return
         }
         val prev = previousWord(before)

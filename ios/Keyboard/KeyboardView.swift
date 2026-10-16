@@ -1,5 +1,11 @@
 import UIKit
 
+/// Kept with the view so the app's keyboard preview needs no predictor/decoder dependency.
+struct GlidePoint {
+    let position: CGPoint
+    let time: TimeInterval
+}
+
 protocol KeyboardViewDelegate: AnyObject {
     func keyTapped(_ code: String)
     func longPressText(_ text: String)
@@ -9,6 +15,11 @@ protocol KeyboardViewDelegate: AnyObject {
     func openSettings()
     func moveCursor(_ steps: Int)
     func gridEdited()
+    func glideFinished(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat)
+}
+
+extension KeyboardViewDelegate {
+    func glideFinished(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat) {}
 }
 
 /// Draws the suggestion wheels and the key grid, and turns touches into key presses.
@@ -17,6 +28,7 @@ protocol KeyboardViewDelegate: AnyObject {
 final class KeyboardView: UIView {
 
     weak var delegate: KeyboardViewDelegate?
+    var glideAllowed = true { didSet { if glideAllowed != oldValue { cancelTouches() } } }
     var state = InputState() { didSet { rebuildAccessibilityElements(); setNeedsDisplay() } }
     var keyWeights: [Character: Double] = [:] { didSet { setNeedsDisplay() } }
     /// Setting a new grid from outside clears the undo history; `undo()` and `replaceGrid(_:)` keep it.
@@ -64,6 +76,8 @@ final class KeyboardView: UIView {
     private var rightSpace: CGRect?
     private var stripH: CGFloat = 0
     private var unit: CGFloat = 0
+    private var letterCentres: [Character: CGPoint] = [:]
+    private var letterWidth: CGFloat = 1
     private var builtWidth: CGFloat = -1
     private var restoreWidth: Int?
     private var palette: Palette
@@ -94,6 +108,7 @@ final class KeyboardView: UIView {
     }
 
     func relayout() {
+        if trackers.values.contains(where: { $0.glideEligible }) { cancelTouches() }
         builtWidth = -1
         let w = bounds.width > 0 ? bounds.width : UIScreen.main.bounds.width
         onHeightChange?(layoutFor(w))
@@ -122,6 +137,7 @@ final class KeyboardView: UIView {
     /// Places every key for this width and returns the keyboard height.
     @discardableResult
     private func layoutFor(_ width: CGFloat) -> CGFloat {
+        if builtWidth != width && trackers.values.contains(where: { $0.glideEligible }) { cancelTouches() }
         let accessibilityLayoutChanged = builtWidth != width
         let p = settings.profile(isLandscape)
         let screenH = UIScreen.main.bounds.height
@@ -348,6 +364,11 @@ final class KeyboardView: UIView {
         cursorRect = split && !editMode ? CGRect(x: innerLeft + half, y: stripH, width: gapPx, height: handleRect.minY - stripH) : .zero
         leftSpace = areaLeft >= 40 ? CGRect(x: 0, y: strip, width: areaLeft, height: y0 + hc - strip) : nil
         rightSpace = width - (areaLeft + areaW) >= 40 ? CGRect(x: areaLeft + areaW, y: strip, width: width - areaLeft - areaW, height: y0 + hc - strip) : nil
+        let letters = placed.filter { !$0.item.isStack && $0.item.keys[0].count == 1 && $0.item.keys[0].first!.isLetter }
+        letterCentres = [:]
+        for pk in letters { letterCentres[pk.item.keys[0].lowercased().first!] = CGPoint(x: pk.rect.midX, y: pk.rect.midY).applying(pk.t) }
+        let widths = letters.map { $0.rect.width }.sorted()
+        letterWidth = widths.isEmpty ? 1 : widths[widths.count / 2]
         builtWidth = width
         rebuildAccessibilityElements(layoutChanged: accessibilityLayoutChanged)
         return ceil(reserve ? reservedTotal : Swift.max(target, total(s)))
@@ -537,6 +558,23 @@ final class KeyboardView: UIView {
         if let l = leftSpace { drawArrow(l, pointsLeft: true) }
         if let r = rightSpace { drawArrow(r, pointsLeft: false) }
         if let d = drag { drawGhost(ctx, d, radius) }
+        drawGlide(ctx, now)
+    }
+
+    private func drawGlide(_ ctx: CGContext, _ now: TimeInterval) {
+        guard trail.count > 1 else { return }
+        ctx.saveGState()
+        ctx.setLineWidth(4)
+        ctx.setLineCap(.round)
+        ctx.setLineJoin(.round)
+        for i in 1..<trail.count {
+            let a = trail[i - 1], b = trail[i]
+            let alpha = max(0, min(1, 1 - (now - b.time) / 0.3))
+            if alpha <= 0 { continue }
+            ctx.setStrokeColor(palette.accent.withAlphaComponent(CGFloat(alpha * 0.86)).cgColor)
+            ctx.move(to: a.position); ctx.addLine(to: b.position); ctx.strokePath()
+        }
+        ctx.restoreGState()
     }
 
     private func wiggle(_ item: GridKey, _ now: CFTimeInterval) -> CGFloat {
@@ -765,6 +803,9 @@ final class KeyboardView: UIView {
         var x0: CGFloat = 0
         var y0: CGFloat = 0
         var lastX: CGFloat = 0
+        var glideEligible = false
+        var glideWidth: CGFloat = 1
+        var points: [GlidePoint] = []
         var wheel: Wheel?
         var longTimer: Timer?
         var repeatTimer: Timer?
@@ -776,10 +817,15 @@ final class KeyboardView: UIView {
 
     private var trackers: [ObjectIdentifier: Tracker] = [:]
     private var swipe: Swipe?
+    private var glideID: ObjectIdentifier?
+    private var trail: [GlidePoint] = []
 
     func cancelTouches() {
         trackers.values.forEach { $0.stop() }
         trackers = [:]
+        glideID = nil
+        trail = []
+        updateWiggle()
         swipe = nil
         drag = nil
         editTouch = nil
@@ -789,24 +835,37 @@ final class KeyboardView: UIView {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         for t in touches {
             let p = t.location(in: self)
-            if editMode { editBegan(t, p) } else { down(ObjectIdentifier(t), p) }
+            if editMode { editBegan(t, p) } else { down(ObjectIdentifier(t), p, t.timestamp) }
         }
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         for t in touches {
             let p = t.location(in: self)
-            if editMode { editMoved(t, p) } else { move(ObjectIdentifier(t), p) }
+            if editMode { editMoved(t, p) } else {
+                let id = ObjectIdentifier(t)
+                for sample in event?.coalescedTouches(for: t) ?? [] {
+                    if let tracker = trackers[id] { _ = recordGlide(id, tracker, sample.location(in: self), sample.timestamp) }
+                }
+                move(id, p, t.timestamp)
+            }
         }
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         for t in touches {
-            if editMode { editEnded(t) } else { up(ObjectIdentifier(t)) }
+            if editMode { editEnded(t) } else {
+                let id = ObjectIdentifier(t)
+                if let tracker = trackers[id] { _ = recordGlide(id, tracker, t.location(in: self), t.timestamp) }
+                up(id)
+            }
         }
     }
 
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { cancelTouches() }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if glideID != nil && !touches.contains(where: { trackers[ObjectIdentifier($0)] != nil }) { return }
+        cancelTouches()
+    }
 
     private func startLongPress(_ t: Tracker) {
         t.longTimer?.invalidate()
@@ -816,7 +875,8 @@ final class KeyboardView: UIView {
         }
     }
 
-    private func down(_ id: ObjectIdentifier, _ p: CGPoint) {
+    private func down(_ id: ObjectIdentifier, _ p: CGPoint, _ time: TimeInterval) {
+        if glideID != nil { return }
         // A new finger landing finishes keys other fingers are still holding, for fast rollover typing.
         for t in trackers.values where t.kind == .key && !t.consumed {
             t.stop(); t.consumed = true; commit(t)
@@ -846,6 +906,10 @@ final class KeyboardView: UIView {
             return
         }
         let t = Tracker(kind: .key, pk: pk)
+        t.x0 = p.x; t.y0 = p.y; t.glideWidth = pk.rect.width
+        t.glideEligible = glideAllowed && settings.swipeTyping && state.layer == .abc &&
+            pk.item.keys[0].count == 1 && pk.item.keys[0].first!.isLetter
+        if t.glideEligible { t.points.append(GlidePoint(position: p, time: time)) }
         trackers[id] = t
         if pk.item.keys[0] == Keys.backspace {
             t.consumed = true
@@ -861,8 +925,29 @@ final class KeyboardView: UIView {
         setNeedsDisplay()
     }
 
-    private func move(_ id: ObjectIdentifier, _ p: CGPoint) {
+    private func recordGlide(_ id: ObjectIdentifier, _ t: Tracker, _ p: CGPoint, _ time: TimeInterval) -> Bool {
+        guard t.glideEligible, !t.consumed || glideID == id else { return false }
+        if let active = glideID, active != id { return true }
+        t.points.append(GlidePoint(position: p, time: time))
+        if glideID == nil && hypot(p.x - t.x0, p.y - t.y0) > 0.6 * t.glideWidth {
+            glideID = id
+            t.stop(); t.consumed = true
+            for (otherID, other) in Array(trackers) where otherID != id { other.stop(); trackers.removeValue(forKey: otherID) }
+            swipe = nil
+            updateWiggle()
+        }
+        if glideID == id {
+            trail = t.points
+            updateWiggleIfNeeded()
+            setNeedsDisplay()
+            return true
+        }
+        return false
+    }
+
+    private func move(_ id: ObjectIdentifier, _ p: CGPoint, _ time: TimeInterval) {
         guard let t = trackers[id] else { return }
+        if recordGlide(id, t, p, time) { return }
         switch t.kind {
         case .wheel:
             let dx = p.x - t.x0
@@ -913,6 +998,12 @@ final class KeyboardView: UIView {
     private func up(_ id: ObjectIdentifier) {
         guard let t = trackers.removeValue(forKey: id) else { return }
         t.stop()
+        if glideID == id {
+            glideID = nil
+            delegate?.glideFinished(t.points, letterCentres, letterWidth)
+            setNeedsDisplay()
+            return
+        }
         switch t.kind {
         case .wheel:
             guard let wh = t.wheel else { break }
@@ -1058,17 +1149,25 @@ final class KeyboardView: UIView {
     private func updateWiggle() {
         displayLink?.invalidate()
         displayLink = nil
-        guard editMode else { return }
+        guard editMode || !trail.isEmpty else { return }
         let link = CADisplayLink(target: self, selector: #selector(tick))
         link.add(to: .main, forMode: .common)
         displayLink = link
     }
 
-    @objc private func tick() { setNeedsDisplay() }
+    private func updateWiggleIfNeeded() { if displayLink == nil { updateWiggle() } }
+
+    @objc private func tick() {
+        if glideID == nil, let last = trail.last, CACurrentMediaTime() - last.time > 0.3 {
+            trail = []
+            updateWiggle()
+        }
+        setNeedsDisplay()
+    }
 
     override func willMove(toWindow newWindow: UIWindow?) {
         super.willMove(toWindow: newWindow)
-        if newWindow == nil { displayLink?.invalidate(); displayLink = nil } else { updateWiggle() }
+        if newWindow == nil { cancelTouches(); displayLink?.invalidate(); displayLink = nil } else { updateWiggle() }
     }
 
     private func editBegan(_ t: UITouch, _ p: CGPoint) {
