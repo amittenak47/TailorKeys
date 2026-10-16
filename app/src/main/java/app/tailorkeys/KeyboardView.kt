@@ -150,6 +150,20 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     private fun ensureLayout() { if (builtWidth != width && width > 0) layoutFor(width) }
 
+    // Gesture navigation treats a strip along each screen edge as "back", which swallowed taps on the outer keys
+    // (q, a, z, p…). Keep that gesture off the key area so edge keys always type.
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        if (Build.VERSION.SDK_INT >= 29 && inKeyboard) {
+            val edge = (32 * density).toInt()
+            val keysTop = stripH.toInt()
+            systemGestureExclusionRects = listOf(Rect(0, keysTop, edge, height), Rect(width - edge, keysTop, width, height))
+        }
+    }
+
+    /** The last worst-case tilt solution and the inputs it was computed for (see [layoutFor]). */
+    private var reservedCache: Pair<List<Any>, FloatArray>? = null
+
     /** Places every key for this width and returns the keyboard height. */
     private fun layoutFor(width: Int): Int {
         val d = density
@@ -167,13 +181,23 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val handleH = 14 * d
         val pad = 4 * d
         val bottomPad = p.bottomPaddingDp * d
-        val target = min(screenH * p.heightPercent / 100f, screenH * 0.72f)
-        val areaW = width * p.widthPercent / 100f
+        // "Same size when rotated": landscape keeps portrait's physical key size instead of applying the same
+        // percentages to the shorter screen. Split halves keep their portrait width and sit at the edges.
+        val dm = resources.displayMetrics
+        val sameScale = landscape && settings.bool(Prefs.SAME_ORIENTATIONS)
+        val portraitW = min(dm.widthPixels, dm.heightPixels).toFloat()
+        val portraitH = max(dm.widthPixels, dm.heightPixels).toFloat()
+        val target = min((if (sameScale) portraitH else screenH) * p.heightPercent / 100f, screenH * 0.72f)
+        val areaW = if (sameScale && !split) min(width.toFloat(), portraitW * p.widthPercent / 100f) else width * p.widthPercent / 100f
         val areaLeft = when (p.align) { Align.LEFT -> 0f; Align.CENTER -> (width - areaW) / 2f; Align.RIGHT -> width - areaW }
         val innerW = areaW - 2 * pad
         val innerLeft = areaLeft + pad
-        val gapPx = if (split) innerW * p.gap / 100f else 0f
-        val half = if (split) (innerW - gapPx) / 2f else innerW
+        val half = when {
+            !split -> innerW
+            sameScale -> { val pInner = portraitW * p.widthPercent / 100f - 2 * pad; min((pInner - pInner * p.gap / 100f) / 2f, innerW / 2f) }
+            else -> (innerW - innerW * p.gap / 100f) / 2f
+        }
+        val gapPx = if (split) innerW - 2 * half else 0f
 
         class Sol(val un: Float, val hc: Float, val cw: Float, val pv: Float, val disp: Float, val padTop: Float,
                   val letterY: Float = 0f, val spaceY: Float = hc, val span: Float = cw) {
@@ -218,18 +242,30 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             }
             return s
         }
+        // Each letter key's fan angle depends only on its column and the curve, so work it out once per layout
+        // instead of in every trial below (this search runs hundreds of times while a slider moves).
+        val fanCache = HashMap<Float, Pair<FloatArray, FloatArray>>()
+        fun fans(bend: Float) = fanCache.getOrPut(bend) {
+            val keys = grid.items.filter { it.r < n - 1 && it.c != KeyGrid.CENTER }
+            val widths = FloatArray(keys.size)
+            val sines = FloatArray(keys.size)
+            keys.forEachIndexed { i, item ->
+                val side = if (item.c < KeyGrid.CENTER) 0 else 1
+                val lc = if (side == 0) item.c else item.c - 6
+                widths[i] = item.w.toFloat()
+                sines[i] = sin(Math.toRadians((abs(ANG[side][lc]) * bend).toDouble())).toFloat()
+            }
+            widths to sines
+        }
         // Bounds include every key's fan rotation, even wide keys, at any smaller curve.
         fun blocks(un: Float, cw: Float, angle: Double, spaceAngle: Double, bend: Float): Sol {
             val letterH = un * (n - 1)
             var fanX = 0f
             var fanY = 0f
-            for (item in grid.items) {
-                if (item.r >= n - 1 || item.c == KeyGrid.CENTER) continue
-                val side = if (item.c < KeyGrid.CENTER) 0 else 1
-                val lc = if (side == 0) item.c else item.c - 6
-                val a = Math.toRadians((abs(ANG[side][lc]) * bend).toDouble())
-                fanX = max(fanX, max(0f, un - gap) * sin(a).toFloat() / 2)
-                fanY = max(fanY, max(0f, item.w * cw / 5 - gap) * sin(a).toFloat() / 2)
+            val (widths, sines) = fans(bend)
+            for (i in widths.indices) {
+                fanX = max(fanX, max(0f, un - gap) * sines[i] / 2)
+                fanY = max(fanY, max(0f, widths[i] * cw / 5 - gap) * sines[i] / 2)
             }
             fun bounds(x0: Float, y0: Float, x1: Float, y1: Float, a: Double): RectF {
                 val rect = RectF(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY)
@@ -270,15 +306,22 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 }
                 return angles.flatMap { a -> spaceAngles.map { b -> blocks(un, lo, a, b, 1f) } }.maxBy { it.total }
             }
-            var lo = 14 * d
-            var hi = max(lo, (target - stripH - handleH - pad - bottomPad) / n)
-            repeat(20) {
-                val un = (lo + hi) / 2
-                if (worst(un).total <= target) lo = un else hi = un
+            // The worst case doesn't depend on the live tilt or curve, so moving those sliders reuses it.
+            val key = listOf(n, target, half, innerW, gap, stripH, bottomPad, range.min, range.max, spaceRange.min, spaceRange.max,
+                grid.items.filter { it.r < n - 1 }.joinToString { "${it.c}:${it.w}" })
+            // [row unit, half width, total height] of the worst case.
+            val reserved = reservedCache?.takeIf { it.first == key }?.second ?: run {
+                var lo = 14 * d
+                var hi = max(lo, (target - stripH - handleH - pad - bottomPad) / n)
+                repeat(20) {
+                    val un = (lo + hi) / 2
+                    if (worst(un).total <= target) lo = un else hi = un
+                }
+                val w = worst(lo)
+                floatArrayOf(w.un, w.cw, w.total).also { reservedCache = key to it }
             }
-            val reserved = worst(lo)
-            reservedTotal = max(target, reserved.total)
-            blocks(reserved.un, reserved.cw, th, Math.toRadians(spaceTilt.toDouble()), curve)
+            reservedTotal = max(target, reserved[2])
+            blocks(reserved[0], reserved[1], th, Math.toRadians(spaceTilt.toDouble()), curve)
         } else fit(th, curve)
         unit = s.un
         // Centre the active key area in the space reserved for the worst case.

@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - Guide text
 
-/// Original guide wording, kept as placeholders for the owner to replace.
+/// Every user-visible string of the guide, in one place.
 enum AppText {
     struct Slide {
         let title: String
@@ -13,12 +13,29 @@ enum AppText {
     }
 
     static let slides: [Slide] = [
-        Slide(title: "Slide 1 title", lines: ["Slide 1 text. Write this."], symbol: "keyboard"),
-        Slide(title: "Slide 2 title", lines: ["Slide 2 text. Write this."], symbol: "gearshape"),
-        Slide(title: "Slide 3 title", lines: ["Slide 3 text. Write this."], symbol: "globe"),
-        Slide(title: "Slide 4 title", lines: ["Slide 4 text. Write this."], symbol: "square.grid.3x3"),
-        Slide(title: "Slide 5 title", lines: ["Slide 5 text. Write this."], symbol: "hand.point.up.left"),
-        Slide(title: "Slide 6 title", lines: ["Slide 6 text. Write this."], symbol: "pencil.line"),
+        Slide(title: "A keyboard that fits you", lines: [
+            "Move any key anywhere. Make it bigger, smaller, or split it for two thumbs.",
+            "Suggestions wait above the keys. Nothing you type changes unless you pick a word.",
+        ], symbol: "keyboard"),
+        Slide(title: "Add TailorKeys", lines: [
+            "Open Settings, tap Keyboards, and turn on TailorKeys.",
+            "Full Access is optional. TailorKeys has no network code, so your typing stays on this device.",
+        ], symbol: "gearshape"),
+        Slide(title: "Switch to TailorKeys", lines: [
+            "In any text field, hold the globe key and choose TailorKeys.",
+            "To switch to your next keyboard, hold the spacebar.",
+        ], symbol: "globe"),
+        Slide(title: "Put keys where you want them", lines: [
+            "Tap the gear above the keys, then drag.",
+            "Drop a key on another key's edge to slide it in. Drop it in the middle to stack both into one swipe key.",
+        ], symbol: "square.grid.3x3"),
+        Slide(title: "Swipe keys and suggestions", lines: [
+            "Swipe a stacked key up or down to change it. Tap abc once for a capital, twice for caps lock.",
+            "Spin a suggestion wheel sideways, then tap a word. In split mode, slide along the center gap to move the cursor.",
+        ], symbol: "hand.point.up.left"),
+        Slide(title: "Try it", lines: [
+            "Type a few words below. Size, split and tilt are in this app.",
+        ], symbol: "pencil.line"),
     ]
 
     /// Index of the slide that shows the "open Settings" button.

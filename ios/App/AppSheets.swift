@@ -8,14 +8,15 @@ struct FullAccessSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     Image(systemName: "keyboard").font(.system(size: 44)).foregroundColor(AppStyle.accent)
-                    // COPY: owner to review
                     Text("Full Access is optional").font(.title2).bold()
-                    Text("Full Access lets you change keyboard settings here and allows vibration.")
-                    Text("TailorKeys sends nothing. It has no network code.")
-                    Text("In Settings, open Keyboards, then TailorKeys and turn on Allow Full Access. Then use the keyboard once and return here.")
+                    Text("Turn it on so the settings you change in this app reach the keyboard.")
+                    Text("What you type never leaves this device. TailorKeys has no network code, with or without Full Access.")
+                    Text("iOS shows the same warning for every keyboard that asks. It isn't about anything TailorKeys does.")
+                        .foregroundColor(.secondary)
+                    Text("In Settings, tap Keyboards and turn on Allow Full Access. Then open the keyboard once and come back.")
                     Button("Open Settings", action: AppStyle.openSettings)
                         .buttonStyle(.borderedProminent)
-                    Text("You can always change settings from the gear in the keyboard.")
+                    Text("Rather not? Change settings from the gear in the keyboard.")
                         .font(.footnote).foregroundColor(.secondary)
                 }
                 .padding(24)

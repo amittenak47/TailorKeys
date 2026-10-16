@@ -30,7 +30,9 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private var selectAnchor: Int? = null
     private var selectFocus = 0
     private var selectTotal = 0
-    /** False in password and no-suggestion fields: nothing is suggested or learned there. */
+    /** False only in password fields: suggestions show everywhere else, including fields that don't say what they hold. */
+    private var suggest = true
+    /** True only in ordinary text fields that allow suggestions: the only place words are learned. */
     private var learn = true
     private var deadEnd = false
 
@@ -86,6 +88,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
             variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
             (cls == InputType.TYPE_CLASS_NUMBER && variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD)
+        suggest = !password
         learn = cls == InputType.TYPE_CLASS_TEXT && !password && info.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS == 0
         lastSpaceAt = 0L
         deadEnd = false
@@ -287,12 +290,12 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val before = currentInputConnection?.getTextBeforeCursor(64, 0)
         val prefix = currentWord(before)
         val isDeadEnd = predictor.isDeadEnd(prefix)
-        if (letterCommitted && learn && settings.bool(Prefs.TYPO_BUZZ) && settings.bool(Prefs.HAPTICS) && isDeadEnd && !deadEnd) {
+        if (letterCommitted && suggest && settings.bool(Prefs.TYPO_BUZZ) && settings.bool(Prefs.HAPTICS) && isDeadEnd && !deadEnd) {
             keyboardView?.typoBuzz()
         }
         deadEnd = isDeadEnd
         val view = keyboardView ?: return
-        if (!learn) {
+        if (!suggest) {
             view.keyWeights = emptyMap()
             view.setSuggestions(emptyList(), emptyList(), "")
             return
