@@ -153,24 +153,24 @@ final class KeyboardView: UIView {
         func total(_ s: Sol) -> CGFloat { strip + s.padTop + s.hc + handleH + bottomPad }
 
         // Fit each tilted half inside its side: outer edge on the screen edge, never past the center line.
-        func solve(_ un: CGFloat) -> Sol {
+        func solve(_ un: CGFloat, angle: Double, bend: CGFloat, fixedWidth: CGFloat? = nil) -> Sol {
             let hc = un * CGFloat(n)
-            let raise = split ? 0.38 * curve * un : 0
+            let raise = split ? 0.38 * bend * un : 0
             let hf = Double(hc + raise)
-            var cw = half
+            var cw = fixedWidth ?? half
             var pv = half
             if split {
                 func rot(_ w: CGFloat) -> (CGFloat, CGFloat) {
                     var mn = 0.0
                     var mx = 0.0
                     for (px, py) in [(-Double(w), 0.0), (-Double(w), -hf), (0.0, -hf), (0.0, 0.0)] {
-                        let x = px * cos(th) - py * sin(th)
+                        let x = px * cos(angle) - py * sin(angle)
                         mn = Swift.min(mn, x); mx = Swift.max(mx, x)
                     }
                     return (CGFloat(-mn), CGFloat(mx))
                 }
                 var i = 0
-                while i < 2000 {
+                while fixedWidth == nil && i < 2000 {
                     let (a, b) = rot(cw)
                     if a <= half + 0.5 && a + b <= innerW / 2 - 3 { break }
                     cw -= 1
@@ -179,18 +179,34 @@ final class KeyboardView: UIView {
                 }
                 pv = rot(cw).0
             }
-            let disp = split ? ceil(cw * CGFloat(abs(sin(th)))) : 0
+            let disp = split ? ceil(cw * CGFloat(abs(sin(angle)))) : 0
             return Sol(un: un, hc: hc, cw: cw, pv: pv, disp: disp, padTop: pad + disp + raise)
         }
 
         // Fit tilt, curve and all rows within the selected height, keeping a point of room when shrinking.
-        var s = solve(Swift.max(14, (target - strip - handleH - pad - bottomPad) / CGFloat(n)))
-        for _ in 0..<24 {
-            if total(s) <= target { break }
-            s = solve(Swift.max(14, s.un - (total(s) - target + 1) / (CGFloat(n) + 0.5)))
+        func fit(_ angle: Double, _ bend: CGFloat) -> Sol {
+            var s = solve(Swift.max(14, (target - strip - handleH - pad - bottomPad) / CGFloat(n)), angle: angle, bend: bend)
+            for _ in 0..<24 {
+                if total(s) <= target { break }
+                s = solve(Swift.max(14, s.un - (total(s) - target + 1) / (CGFloat(n) + 0.5)), angle: angle, bend: bend)
+            }
+            return s
+        }
+        let reserve = split && !editMode
+        let s: Sol
+        if reserve {
+            // Reserve fixed key dimensions for both tilt limits at maximum curve.
+            let range = Prefs.tilt(isLandscape)
+            let positive = fit(Double(range.max) * Double.pi / 180, 1)
+            let negative = fit(Double(range.min) * Double.pi / 180, 1)
+            let worst = positive.un <= negative.un ? positive : negative
+            s = solve(worst.un, angle: th, bend: curve, fixedWidth: worst.cw)
+        } else {
+            s = fit(th, curve)
         }
         unit = s.un
-        let y0 = strip + s.padTop + Swift.max(0, target - total(s))
+        // Centre the active key area in the space reserved for the worst case.
+        let y0 = strip + s.padTop + Swift.max(0, target - total(s)) / (reserve ? 2 : 1)
         let hc = s.hc
 
         struct Cont { let c0: Int; let cols: Int; let u: CGFloat; let side: Int; let base: CGAffineTransform }
@@ -261,7 +277,7 @@ final class KeyboardView: UIView {
         rightSpace = width - (areaLeft + areaW) >= 40 ? CGRect(x: areaLeft + areaW, y: strip, width: width - areaLeft - areaW, height: y0 + hc - strip) : nil
         builtWidth = width
         rebuildAccessibilityElements(layoutChanged: accessibilityLayoutChanged)
-        return ceil(Swift.max(target, total(s)))
+        return ceil(reserve ? target : Swift.max(target, total(s)))
     }
 
     /// The face a swipe key shows: the one you swiped to, unless another key switched to a different layer.

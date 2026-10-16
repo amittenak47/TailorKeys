@@ -177,23 +177,23 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         }
 
         // Fit each tilted half inside its side: outer edge on the screen edge, never past the center line.
-        fun solve(un: Float): Sol {
+        fun solve(un: Float, angle: Double, bend: Float, fixedWidth: Float? = null): Sol {
             val hc = un * n
-            val raise = if (split) 0.38f * curve * un else 0f
+            val raise = if (split) 0.38f * bend * un else 0f
             val hf = hc + raise
-            var cw = half
+            var cw = fixedWidth ?: half
             var pv = half
             if (split) {
                 fun rot(w: Float): Pair<Float, Float> {
                     var mn = 0.0
                     var mx = 0.0
                     for ((px, py) in listOf(-w to 0f, -w to -hf, 0f to -hf, 0f to 0f)) {
-                        val x = px * cos(th) - py * sin(th)
+                        val x = px * cos(angle) - py * sin(angle)
                         mn = min(mn, x); mx = max(mx, x)
                     }
                     return (-mn).toFloat() to mx.toFloat()
                 }
-                for (i in 0 until 2000) {
+                if (fixedWidth == null) for (i in 0 until 2000) {
                     val (a, b) = rot(cw)
                     if (a <= half + 0.5f && a + b <= innerW / 2 - 3 * d) break
                     cw -= 1f
@@ -201,18 +201,31 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 }
                 pv = rot(cw).first
             }
-            val disp = if (split) ceil(cw * abs(sin(th))).toFloat() else 0f
+            val disp = if (split) ceil(cw * abs(sin(angle))).toFloat() else 0f
             return Sol(un, hc, cw, pv, disp, pad + disp + raise)
         }
 
         // Fit tilt, curve and all rows within the selected height, keeping a pixel of room when shrinking.
-        var s = solve(max(14 * d, (target - stripH - handleH - pad - bottomPad) / n))
-        for (i in 0 until 24) {
-            if (s.total <= target) break
-            s = solve(max(14 * d, s.un - (s.total - target + 1) / (n + 0.5f)))
+        fun fit(angle: Double, bend: Float): Sol {
+            var s = solve(max(14 * d, (target - stripH - handleH - pad - bottomPad) / n), angle, bend)
+            for (i in 0 until 24) {
+                if (s.total <= target) break
+                s = solve(max(14 * d, s.un - (s.total - target + 1) / (n + 0.5f)), angle, bend)
+            }
+            return s
         }
+        val reserve = split && !editMode
+        val s = if (reserve) {
+            // Reserve fixed key dimensions for both tilt limits at maximum curve.
+            val range = Prefs.tilt(landscape)
+            val positive = fit(Math.toRadians(range.max.toDouble()), 1f)
+            val negative = fit(Math.toRadians(range.min.toDouble()), 1f)
+            val worst = if (positive.un <= negative.un) positive else negative
+            solve(worst.un, th, curve, fixedWidth = worst.cw)
+        } else fit(th, curve)
         unit = s.un
-        val y0 = stripH + s.padTop + max(0f, target - s.total)
+        // Centre the active key area in the space reserved for the worst case.
+        val y0 = stripH + s.padTop + max(0f, target - s.total) / (if (reserve) 2 else 1)
         val hc = s.hc
 
         class Cont(val c0: Int, val cols: Int, val u: Float, val side: Int, val base: Matrix)
@@ -294,7 +307,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         rightSpace = if (width - (areaLeft + areaW) >= minSpace) RectF(areaLeft + areaW, stripH, width.toFloat(), y0 + hc) else null
         builtWidth = width
         accessibilityEvent(View.NO_ID, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE)
-        return ceil(max(target, s.total)).toInt()
+        return ceil(if (reserve) target else max(target, s.total)).toInt()
     }
 
     /** The face a swipe key shows: the one you swiped to, unless another key switched to a different layer. */
