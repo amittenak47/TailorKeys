@@ -159,6 +159,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val split = p.split
         val curve = if (editMode || !split) 0f else settings.int(Prefs.CURVE) / 100f
         val tilt = if (editMode || !split) 0f else p.tilt.toFloat()
+        val spaceTilt = if (editMode || !split) 0f else p.spaceTilt.toFloat()
         val th = Math.toRadians(tilt.toDouble())
         val n = grid.rows
         val gap = settings.int(Prefs.KEY_GAP) * d
@@ -174,7 +175,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val gapPx = if (split) innerW * p.gap / 100f else 0f
         val half = if (split) (innerW - gapPx) / 2f else innerW
 
-        class Sol(val un: Float, val hc: Float, val cw: Float, val pv: Float, val disp: Float, val padTop: Float) {
+        class Sol(val un: Float, val hc: Float, val cw: Float, val pv: Float, val disp: Float, val padTop: Float,
+                  val letterY: Float = 0f, val spaceY: Float = hc, val span: Float = cw) {
             val total get() = stripH + padTop + hc + handleH + bottomPad
         }
 
@@ -216,21 +218,74 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             }
             return s
         }
+        // Bounds include every key's fan rotation, even wide keys, at any smaller curve.
+        fun blocks(un: Float, cw: Float, angle: Double, spaceAngle: Double, bend: Float): Sol {
+            val letterH = un * (n - 1)
+            var fanX = 0f
+            var fanY = 0f
+            for (item in grid.items) {
+                if (item.r >= n - 1 || item.c == KeyGrid.CENTER) continue
+                val side = if (item.c < KeyGrid.CENTER) 0 else 1
+                val lc = if (side == 0) item.c else item.c - 6
+                val a = Math.toRadians((abs(ANG[side][lc]) * bend).toDouble())
+                fanX = max(fanX, max(0f, un - gap) * sin(a).toFloat() / 2)
+                fanY = max(fanY, max(0f, item.w * cw / 5 - gap) * sin(a).toFloat() / 2)
+            }
+            fun bounds(x0: Float, y0: Float, x1: Float, y1: Float, a: Double): RectF {
+                val rect = RectF(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, Float.NEGATIVE_INFINITY)
+                for ((x, y) in listOf(x0 to y0, x0 to y1, x1 to y0, x1 to y1)) {
+                    val rx = (x * cos(a) - y * sin(a)).toFloat()
+                    val ry = (x * sin(a) + y * cos(a)).toFloat()
+                    rect.left = min(rect.left, rx); rect.right = max(rect.right, rx)
+                    rect.top = min(rect.top, ry); rect.bottom = max(rect.bottom, ry)
+                }
+                return rect
+            }
+            val letters = bounds(-cw + gap / 2 - fanX, -letterH + gap / 2 - 0.38f * bend * un - fanY,
+                -gap / 2 + fanX, -gap / 2 + fanY, angle)
+            val space = bounds(-cw + gap / 2, gap / 2, -gap / 2, un - gap / 2, spaceAngle)
+            // Separate the complete rotated bounds by the normal gap, including opposing tilts.
+            val contentH = letters.height() + gap + space.height()
+            val hc = max(n * un, contentH)
+            val extra = (hc - contentH) / 2
+            val left = min(letters.left, space.left)
+            val right = max(letters.right, space.right)
+            return Sol(un, hc, cw, -left, 0f, pad, -letters.top - letterH + extra,
+                letters.height() + gap - space.top + extra, right - left)
+        }
         val reserve = split && !editMode
+        var reservedTotal = target
         val s = if (reserve) {
-            // Reserve fixed key dimensions for both tilt limits at maximum curve.
+            // Fit both ranges together at maximum curve; neither live angle changes key dimensions.
             val range = Prefs.tilt(landscape)
-            val positive = fit(Math.toRadians(range.max.toDouble()), 1f)
-            val negative = fit(Math.toRadians(range.min.toDouble()), 1f)
-            val worst = if (positive.un <= negative.un) positive else negative
-            solve(worst.un, th, curve, fixedWidth = worst.cw)
+            val spaceRange = Prefs.spaceTilt(landscape)
+            val angles = listOf(range.min, range.max).map { Math.toRadians(it.toDouble()) }
+            val spaceAngles = listOf(spaceRange.min, spaceRange.max).map { Math.toRadians(it.toDouble()) }
+            fun worst(un: Float): Sol {
+                var lo = gap
+                var hi = half
+                repeat(20) {
+                    val cw = (lo + hi) / 2
+                    if (angles.all { a -> spaceAngles.all { b -> blocks(un, cw, a, b, 1f).span <= half } }) lo = cw else hi = cw
+                }
+                return angles.flatMap { a -> spaceAngles.map { b -> blocks(un, lo, a, b, 1f) } }.maxBy { it.total }
+            }
+            var lo = 14 * d
+            var hi = max(lo, (target - stripH - handleH - pad - bottomPad) / n)
+            repeat(20) {
+                val un = (lo + hi) / 2
+                if (worst(un).total <= target) lo = un else hi = un
+            }
+            val reserved = worst(lo)
+            reservedTotal = max(target, reserved.total)
+            blocks(reserved.un, reserved.cw, th, Math.toRadians(spaceTilt.toDouble()), curve)
         } else fit(th, curve)
         unit = s.un
         // Centre the active key area in the space reserved for the worst case.
-        val y0 = stripH + s.padTop + max(0f, target - s.total) / (if (reserve) 2 else 1)
+        val y0 = stripH + s.padTop + max(0f, reservedTotal - s.total) / (if (reserve) 2 else 1)
         val hc = s.hc
 
-        class Cont(val c0: Int, val cols: Int, val u: Float, val side: Int, val base: Matrix)
+        class Cont(val c0: Int, val cols: Int, val u: Float, val side: Int, val base: Matrix, val spaceBase: Matrix? = null)
         val conts = ArrayList<Cont>()
         val showCenter = editMode || grid.items.any { it.c == KeyGrid.CENTER && it.r < n }
         if (!split) {
@@ -238,6 +293,23 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             conts += Cont(0, 5, u, -1, Matrix().apply { setTranslate(innerLeft, y0) })
             if (showCenter) conts += Cont(5, 1, u, -1, Matrix().apply { setTranslate(innerLeft + 5 * u, y0) })
             conts += Cont(6, 5, u, -1, Matrix().apply { setTranslate(innerLeft + (if (showCenter) 6 else 5) * u, y0) })
+        } else if (reserve) {
+            val letterH = unit * (n - 1)
+            val lx = innerLeft + s.pv - s.cw
+            val rx = innerLeft + half + gapPx + half - s.pv
+            fun base(x: Float, side: Int, space: Boolean): Matrix {
+                val top = y0 + if (space) s.spaceY - letterH else s.letterY
+                val pivotY = if (space) y0 + s.spaceY else top + letterH
+                val angle = (if (space) spaceTilt else tilt) * (if (side == 0) 1 else -1)
+                return Matrix().apply {
+                    setTranslate(x, top)
+                    postRotate(angle, x + (if (side == 0) s.cw else 0f), pivotY)
+                }
+            }
+            conts += Cont(0, 5, s.cw / 5, 0, base(lx, 0, false), base(lx, 0, true))
+            val cwc = max(10 * d, min(s.cw / 5, gapPx - 4 * d))
+            conts += Cont(5, 1, cwc, -1, Matrix().apply { setTranslate(innerLeft + half + (gapPx - cwc) / 2, y0 + (hc - n * unit) / 2) })
+            conts += Cont(6, 5, s.cw / 5, 1, base(rx, 1, false), base(rx, 1, true))
         } else {
             val lx = innerLeft + (s.pv - s.cw)
             conts += Cont(0, 5, s.cw / 5, 0, Matrix().apply {
@@ -267,7 +339,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     m.setRotate(ANG[ct.side][lc] * curve, rect.centerX(), rect.centerY())
                     m.postTranslate(0f, -RAISE[ct.side][lc] * curve * unit)
                 }
-                m.postConcat(ct.base)
+                m.postConcat(if (item.r == n - 1) ct.spaceBase ?: ct.base else ct.base)
                 placed += Placed(item, rect, m, Matrix().also { inv -> m.invert(inv) })
             }
         }
@@ -309,7 +381,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         rightSpace = if (width - (areaLeft + areaW) >= minSpace) RectF(areaLeft + areaW, stripH, width.toFloat(), y0 + hc) else null
         builtWidth = width
         accessibilityEvent(View.NO_ID, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE)
-        return ceil(if (reserve) target else max(target, s.total)).toInt()
+        return ceil(if (reserve) reservedTotal else max(target, s.total)).toInt()
     }
 
     /** The face a swipe key shows: the one you swiped to, unless another key switched to a different layer. */

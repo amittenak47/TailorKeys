@@ -434,6 +434,7 @@ class SettingsActivity : Activity() {
         val splitBody = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         splitBody.addView(slider("Gap", Prefs.splitGap(land), list, set = { settings.setFor(land, Prefs::splitGap, it) }) { "$it%" })
         splitBody.addView(slider("Tilt", Prefs.tilt(land), list, set = { settings.setFor(land, Prefs::tilt, it) }) { (if (it > 0) "+" else "") + "$it°" })
+        splitBody.addView(slider("Space row tilt", Prefs.spaceTilt(land), list, set = { settings.setFor(land, Prefs::spaceTilt, it) }) { (if (it > 0) "+" else "") + "$it°" })
         splitBody.addView(slider("Ergonomic curve", Prefs.CURVE, list) { "$it%" })
         val splitRefresh = { splitBody.visibility = if (settings.split(land)) View.VISIBLE else View.GONE }
         splitRefresh(); list += splitRefresh

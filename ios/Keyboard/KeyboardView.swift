@@ -128,6 +128,7 @@ final class KeyboardView: UIView {
         let split = p.split
         let curve: CGFloat = (editMode || !split) ? 0 : CGFloat(settings.int(Prefs.curve)) / 100
         let tilt: CGFloat = (editMode || !split) ? 0 : CGFloat(p.tilt)
+        let spaceTilt: CGFloat = (editMode || !split) ? 0 : CGFloat(p.spaceTilt)
         let th = Double(tilt) * Double.pi / 180
         let n = grid.rows
         let gap = CGFloat(settings.int(Prefs.keyGap))
@@ -149,7 +150,10 @@ final class KeyboardView: UIView {
         let half = split ? (innerW - gapPx) / 2 : innerW
         let strip = stripH
 
-        struct Sol { let un: CGFloat; let hc: CGFloat; let cw: CGFloat; let pv: CGFloat; let disp: CGFloat; let padTop: CGFloat }
+        struct Sol {
+            let un: CGFloat; let hc: CGFloat; let cw: CGFloat; let pv: CGFloat; let disp: CGFloat; let padTop: CGFloat
+            var letterY: CGFloat = 0; var spaceY: CGFloat = 0; var span: CGFloat = 0
+        }
         func total(_ s: Sol) -> CGFloat { strip + s.padTop + s.hc + handleH + bottomPad }
 
         // Fit each tilted half inside its side: outer edge on the screen edge, never past the center line.
@@ -192,24 +196,78 @@ final class KeyboardView: UIView {
             }
             return s
         }
+        // Bounds include every key's fan rotation, even wide keys, at any smaller curve.
+        func blocks(_ un: CGFloat, _ cw: CGFloat, _ angle: Double, _ spaceAngle: Double, _ bend: CGFloat) -> Sol {
+            let letterH = un * CGFloat(n - 1)
+            var fanX: CGFloat = 0
+            var fanY: CGFloat = 0
+            for item in grid.items where item.r < n - 1 && item.c != KeyGrid.center {
+                let side = item.c < KeyGrid.center ? 0 : 1
+                let lc = side == 0 ? item.c : item.c - 6
+                let a = Double(abs(KeyboardView.ang[side][lc]) * bend) * Double.pi / 180
+                fanX = Swift.max(fanX, Swift.max(0, un - gap) * CGFloat(sin(a)) / 2)
+                fanY = Swift.max(fanY, Swift.max(0, CGFloat(item.w) * cw / 5 - gap) * CGFloat(sin(a)) / 2)
+            }
+            func bounds(_ x0: CGFloat, _ y0: CGFloat, _ x1: CGFloat, _ y1: CGFloat, _ a: Double) -> CGRect {
+                var minX = CGFloat.infinity, minY = CGFloat.infinity
+                var maxX = -CGFloat.infinity, maxY = -CGFloat.infinity
+                for (x, y) in [(x0, y0), (x0, y1), (x1, y0), (x1, y1)] {
+                    let rx = x * CGFloat(cos(a)) - y * CGFloat(sin(a))
+                    let ry = x * CGFloat(sin(a)) + y * CGFloat(cos(a))
+                    minX = Swift.min(minX, rx); maxX = Swift.max(maxX, rx)
+                    minY = Swift.min(minY, ry); maxY = Swift.max(maxY, ry)
+                }
+                return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+            }
+            let letters = bounds(-cw + gap / 2 - fanX, -letterH + gap / 2 - 0.38 * bend * un - fanY,
+                                 -gap / 2 + fanX, -gap / 2 + fanY, angle)
+            let space = bounds(-cw + gap / 2, gap / 2, -gap / 2, un - gap / 2, spaceAngle)
+            // Separate the complete rotated bounds by the normal gap, including opposing tilts.
+            let contentH = letters.height + gap + space.height
+            let hc = Swift.max(CGFloat(n) * un, contentH)
+            let extra = (hc - contentH) / 2
+            let left = Swift.min(letters.minX, space.minX)
+            let right = Swift.max(letters.maxX, space.maxX)
+            return Sol(un: un, hc: hc, cw: cw, pv: -left, disp: 0, padTop: pad,
+                       letterY: -letters.minY - letterH + extra,
+                       spaceY: letters.height + gap - space.minY + extra, span: right - left)
+        }
         let reserve = split && !editMode
+        var reservedTotal = target
         let s: Sol
         if reserve {
-            // Reserve fixed key dimensions for both tilt limits at maximum curve.
+            // Fit both ranges together at maximum curve; neither live angle changes key dimensions.
             let range = Prefs.tilt(isLandscape)
-            let positive = fit(Double(range.max) * Double.pi / 180, 1)
-            let negative = fit(Double(range.min) * Double.pi / 180, 1)
-            let worst = positive.un <= negative.un ? positive : negative
-            s = solve(worst.un, angle: th, bend: curve, fixedWidth: worst.cw)
+            let spaceRange = Prefs.spaceTilt(isLandscape)
+            let angles = [range.min, range.max].map { Double($0) * Double.pi / 180 }
+            let spaceAngles = [spaceRange.min, spaceRange.max].map { Double($0) * Double.pi / 180 }
+            func worst(_ un: CGFloat) -> Sol {
+                var lo = gap
+                var hi = half
+                for _ in 0..<20 {
+                    let cw = (lo + hi) / 2
+                    if angles.allSatisfy({ a in spaceAngles.allSatisfy { b in blocks(un, cw, a, b, 1).span <= half } }) { lo = cw } else { hi = cw }
+                }
+                return angles.flatMap { a in spaceAngles.map { b in blocks(un, lo, a, b, 1) } }.max { total($0) < total($1) }!
+            }
+            var lo: CGFloat = 14
+            var hi = Swift.max(lo, (target - strip - handleH - pad - bottomPad) / CGFloat(n))
+            for _ in 0..<20 {
+                let un = (lo + hi) / 2
+                if total(worst(un)) <= target { lo = un } else { hi = un }
+            }
+            let reserved = worst(lo)
+            reservedTotal = Swift.max(target, total(reserved))
+            s = blocks(reserved.un, reserved.cw, th, Double(spaceTilt) * Double.pi / 180, curve)
         } else {
             s = fit(th, curve)
         }
         unit = s.un
         // Centre the active key area in the space reserved for the worst case.
-        let y0 = strip + s.padTop + Swift.max(0, target - total(s)) / (reserve ? 2 : 1)
+        let y0 = strip + s.padTop + Swift.max(0, reservedTotal - total(s)) / (reserve ? 2 : 1)
         let hc = s.hc
 
-        struct Cont { let c0: Int; let cols: Int; let u: CGFloat; let side: Int; let base: CGAffineTransform }
+        struct Cont { let c0: Int; let cols: Int; let u: CGFloat; let side: Int; let base: CGAffineTransform; var spaceBase: CGAffineTransform? = nil }
         var conts: [Cont] = []
         let showCenter = editMode || grid.items.contains { $0.c == KeyGrid.center && $0.r < n }
         if !split {
@@ -217,6 +275,20 @@ final class KeyboardView: UIView {
             conts.append(Cont(c0: 0, cols: 5, u: u, side: -1, base: CGAffineTransform(translationX: innerLeft, y: y0)))
             if showCenter { conts.append(Cont(c0: 5, cols: 1, u: u, side: -1, base: CGAffineTransform(translationX: innerLeft + 5 * u, y: y0))) }
             conts.append(Cont(c0: 6, cols: 5, u: u, side: -1, base: CGAffineTransform(translationX: innerLeft + (showCenter ? 6 : 5) * u, y: y0)))
+        } else if reserve {
+            let letterH = unit * CGFloat(n - 1)
+            let lx = innerLeft + s.pv - s.cw
+            let rx = innerLeft + half + gapPx + half - s.pv
+            func base(_ x: CGFloat, _ side: Int, _ space: Bool) -> CGAffineTransform {
+                let top = y0 + (space ? s.spaceY - letterH : s.letterY)
+                let pivotY = space ? y0 + s.spaceY : top + letterH
+                let angle = (space ? spaceTilt : tilt) * (side == 0 ? 1 : -1) * CGFloat.pi / 180
+                return CGAffineTransform(translationX: x, y: top).concatenating(rotateAbout(angle, x + (side == 0 ? s.cw : 0), pivotY))
+            }
+            conts.append(Cont(c0: 0, cols: 5, u: s.cw / 5, side: 0, base: base(lx, 0, false), spaceBase: base(lx, 0, true)))
+            let cwc = Swift.max(10, Swift.min(s.cw / 5, gapPx - 4))
+            conts.append(Cont(c0: 5, cols: 1, u: cwc, side: -1, base: CGAffineTransform(translationX: innerLeft + half + (gapPx - cwc) / 2, y: y0 + (hc - CGFloat(n) * unit) / 2)))
+            conts.append(Cont(c0: 6, cols: 5, u: s.cw / 5, side: 1, base: base(rx, 1, false), spaceBase: base(rx, 1, true)))
         } else {
             let a = tilt * CGFloat.pi / 180
             let lx = innerLeft + (s.pv - s.cw)
@@ -246,7 +318,8 @@ final class KeyboardView: UIView {
                     let angle = KeyboardView.ang[ct.side][lc] * curve * CGFloat.pi / 180
                     t = rotateAbout(angle, rect.midX, rect.midY).concatenating(CGAffineTransform(translationX: 0, y: -KeyboardView.raise[ct.side][lc] * curve * unit))
                 }
-                placed.append(Placed(item: item, rect: rect, t: t.concatenating(ct.base)))
+                let base = item.r == n - 1 ? (ct.spaceBase ?? ct.base) : ct.base
+                placed.append(Placed(item: item, rect: rect, t: t.concatenating(base)))
             }
         }
         if editMode {
@@ -277,7 +350,7 @@ final class KeyboardView: UIView {
         rightSpace = width - (areaLeft + areaW) >= 40 ? CGRect(x: areaLeft + areaW, y: strip, width: width - areaLeft - areaW, height: y0 + hc - strip) : nil
         builtWidth = width
         rebuildAccessibilityElements(layoutChanged: accessibilityLayoutChanged)
-        return ceil(reserve ? target : Swift.max(target, total(s)))
+        return ceil(reserve ? reservedTotal : Swift.max(target, total(s)))
     }
 
     /// The face a swipe key shows: the one you swiped to, unless another key switched to a different layer.

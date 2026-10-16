@@ -23,12 +23,15 @@ object Prefs {
     // Tilt is capped at ±10°: the layout reserves room for both ends, so a wider range would make every key narrower.
     private val TILT_P = IntPref("tilt_p", 0, -10, 10)
     private val TILT_L = IntPref("tilt_l", 0, -10, 10)
+    private val SPACE_TILT_P = IntPref("space_tilt_p", 0, -10, 10)
+    private val SPACE_TILT_L = IntPref("space_tilt_l", 0, -10, 10)
 
     fun height(landscape: Boolean) = if (landscape) HEIGHT_L else HEIGHT_P
     fun width(landscape: Boolean) = if (landscape) WIDTH_L else WIDTH_P
     fun bottomPadding(landscape: Boolean) = if (landscape) BOTTOM_L else BOTTOM_P
     fun splitGap(landscape: Boolean) = if (landscape) GAP_L else GAP_P
     fun tilt(landscape: Boolean) = if (landscape) TILT_L else TILT_P
+    fun spaceTilt(landscape: Boolean) = if (landscape) SPACE_TILT_L else SPACE_TILT_P
     fun alignKey(landscape: Boolean) = if (landscape) "align_l" else "align_p"
     fun splitKey(landscape: Boolean) = if (landscape) "split_l" else "split_p"
 
@@ -65,6 +68,7 @@ data class SizeProfile(
     val split: Boolean,
     val gap: Int,
     val tilt: Int,
+    val spaceTilt: Int,
 )
 
 class KeyboardSettings(context: Context) {
@@ -96,6 +100,7 @@ class KeyboardSettings(context: Context) {
         split = split(landscape),
         gap = int(Prefs.splitGap(landscape)),
         tilt = int(Prefs.tilt(landscape)),
+        spaceTilt = int(Prefs.spaceTilt(landscape)),
     )
 
     // Setters for per-orientation settings: they write both orientations while SAME_ORIENTATIONS is on.
@@ -124,7 +129,7 @@ class KeyboardSettings(context: Context) {
     fun linkOrientations(from: Boolean) {
         val to = !from
         val e = prefs.edit()
-        for (pref in listOf(Prefs::height, Prefs::width, Prefs::bottomPadding, Prefs::splitGap, Prefs::tilt)) e.putInt(pref(to).key, int(pref(from)))
+        for (pref in listOf(Prefs::height, Prefs::width, Prefs::bottomPadding, Prefs::splitGap, Prefs::tilt, Prefs::spaceTilt)) e.putInt(pref(to).key, int(pref(from)))
         e.putString(Prefs.alignKey(to), align(from).name)
         e.putBoolean(Prefs.splitKey(to), split(from))
         e.putBoolean(Prefs.SAME_ORIENTATIONS.key, true)

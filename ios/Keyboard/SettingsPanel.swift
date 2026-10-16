@@ -206,6 +206,7 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
         if settings.split(l) {
             stack.addArrangedSubview(sliderRow("Gap", Prefs.splitGap(l), format: { "\($0)%" }) { [weak self] v in self?.settings.setFor(l, Prefs.splitGap, v) })
             stack.addArrangedSubview(sliderRow("Tilt", Prefs.tilt(l), format: { ($0 > 0 ? "+" : "") + "\($0)°" }) { [weak self] v in self?.settings.setFor(l, Prefs.tilt, v) })
+            stack.addArrangedSubview(sliderRow("Space row tilt", Prefs.spaceTilt(l), format: { ($0 > 0 ? "+" : "") + "\($0)°" }) { [weak self] v in self?.settings.setFor(l, Prefs.spaceTilt, v) })
             stack.addArrangedSubview(sliderRow("Ergonomic curve", Prefs.curve, format: { "\($0)%" }))
         }
 
