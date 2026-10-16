@@ -234,6 +234,27 @@ private fun ThemeSwatch(theme: ThemeName, modifier: Modifier) {
 }
 
 internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Unit, onReset: () -> Unit) {
+    item("languages") {
+        var open by remember { mutableStateOf(false) }
+        val enabled = state.languages()
+        OptionGroup {
+            ActionRow("Languages · " + enabled.joinToString(", ") { Prefs.LANGUAGE_NAMES.getValue(it) }) { open = true }
+        }
+        if (open) AlertDialog(onDismissRequest = { open = false }, title = { Text("Languages") },
+            text = {
+                Column {
+                    Prefs.LANGUAGE_NAMES.forEach { (code, name) ->
+                        val checked = code in enabled
+                        Row(Modifier.fillMaxWidth().selectable(checked, enabled = !checked || enabled.size > 1,
+                            role = Role.Checkbox, onClick = { state.setLanguages(if (checked) enabled.toSet() - code else enabled.toSet() + code) }),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked, onCheckedChange = null, enabled = !checked || enabled.size > 1)
+                            Text(name, Modifier.padding(start = 12.dp, top = 12.dp, bottom = 12.dp))
+                        }
+                    }
+                }
+            }, confirmButton = { TextButton(onClick = { open = false }) { Text("Done") } })
+    }
     item("typing") {
         OptionGroup {
             for ((label, pref) in listOf("Auto-capitalize" to Prefs.AUTO_CAP, "Double-space period" to Prefs.DOUBLE_SPACE_PERIOD, "Vibrate on tap" to Prefs.HAPTICS)) {

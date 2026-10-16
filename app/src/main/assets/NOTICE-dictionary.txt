@@ -221,3 +221,81 @@ counted adjacent vocabulary-only pairs/triples within sentences; retained
 counts >= 3, limited each asset to the highest-count 150,000 entries.
 Existing TailorKeys pair weights merged using the maximum.
 This attribution covers bigrams.txt and trigrams.txt.
+
+Additional AOSP dictionary: es
+Source URL: https://android.googlesource.com/platform/packages/inputmethods/LatinIME/+/127336e9f29d69607eab55982324b210279ae8c5/dictionaries/es_wordlist.combined.gz?format=TEXT
+Source commit: 127336e9f29d69607eab55982324b210279ae8c5
+License/attribution source: https://android.googlesource.com/platform/packages/inputmethods/LatinIME/+/127336e9f29d69607eab55982324b210279ae8c5/NOTICE?format=TEXT
+License: Apache License 2.0 (full license and upstream NOTICE above).
+Includes Dictionaries © Lexiteria LLC. Used by permission.
+Modified by TailorKeys: Unicode letters and apostrophes retained, NFC
+normalized, lowercased, filtered, deduplicated, frequency sorted;
+limited to 60,000 words. Covers words_es.txt and AOSP seed pairs.
+
+Additional AOSP dictionary: de
+Source URL: https://android.googlesource.com/platform/packages/inputmethods/LatinIME/+/127336e9f29d69607eab55982324b210279ae8c5/dictionaries/de_wordlist.combined.gz?format=TEXT
+Source commit: 127336e9f29d69607eab55982324b210279ae8c5
+License/attribution source: https://android.googlesource.com/platform/packages/inputmethods/LatinIME/+/127336e9f29d69607eab55982324b210279ae8c5/NOTICE?format=TEXT
+License: Apache License 2.0 (full license and upstream NOTICE above).
+Includes Dictionaries © Lexiteria LLC. Used by permission.
+Modified by TailorKeys: Unicode letters and apostrophes retained, NFC
+normalized, lowercased, filtered, deduplicated, frequency sorted;
+limited to 60,000 words. Covers words_de.txt and AOSP seed pairs.
+
+Additional AOSP dictionary: fr
+Source URL: https://android.googlesource.com/platform/packages/inputmethods/LatinIME/+/127336e9f29d69607eab55982324b210279ae8c5/dictionaries/fr_wordlist.combined.gz?format=TEXT
+Source commit: 127336e9f29d69607eab55982324b210279ae8c5
+License/attribution source: https://android.googlesource.com/platform/packages/inputmethods/LatinIME/+/127336e9f29d69607eab55982324b210279ae8c5/NOTICE?format=TEXT
+License: Apache License 2.0 (full license and upstream NOTICE above).
+Includes Dictionaries © Lexiteria LLC. Used by permission.
+Modified by TailorKeys: Unicode letters and apostrophes retained, NFC
+normalized, lowercased, filtered, deduplicated, frequency sorted;
+limited to 60,000 words. Covers words_fr.txt and AOSP seed pairs.
+
+Tatoeba sentence n-gram attribution: spa
+
+Project: Tatoeba contributors, spa sentences
+Project URL: https://tatoeba.org/
+Source URL: https://downloads.tatoeba.org/exports/per_language/spa/spa_sentences.tsv.bz2
+Download date (UTC): 2026-10-16
+Source SHA-256: d1f7aa997368571e8bbba341ab60f9145fefe14970f21065bd97be8e03c8e6fb
+License: Creative Commons Attribution 2.0 France (CC BY 2.0 FR)
+License URL: https://creativecommons.org/licenses/by/2.0/fr/
+Export documentation: https://tatoeba.org/en/downloads
+
+Modified by TailorKeys: lowercased and tokenized into letters/apostrophes;
+counted adjacent vocabulary-only pairs/triples within sentences; retained
+counts >= 3, limited each asset to the highest-count 100,000 entries.
+This attribution covers bigrams_es.txt and trigrams_es.txt.
+
+Tatoeba sentence n-gram attribution: deu
+
+Project: Tatoeba contributors, deu sentences
+Project URL: https://tatoeba.org/
+Source URL: https://downloads.tatoeba.org/exports/per_language/deu/deu_sentences.tsv.bz2
+Download date (UTC): 2026-10-16
+Source SHA-256: 7fb0b466dfaf4610cc3841b9e7f0f352b7fa3e3665bf8fd0558945d32e5ecbfa
+License: Creative Commons Attribution 2.0 France (CC BY 2.0 FR)
+License URL: https://creativecommons.org/licenses/by/2.0/fr/
+Export documentation: https://tatoeba.org/en/downloads
+
+Modified by TailorKeys: lowercased and tokenized into letters/apostrophes;
+counted adjacent vocabulary-only pairs/triples within sentences; retained
+counts >= 3, limited each asset to the highest-count 100,000 entries.
+This attribution covers bigrams_de.txt and trigrams_de.txt.
+
+Tatoeba sentence n-gram attribution: fra
+
+Project: Tatoeba contributors, fra sentences
+Project URL: https://tatoeba.org/
+Source URL: https://downloads.tatoeba.org/exports/per_language/fra/fra_sentences.tsv.bz2
+Download date (UTC): 2026-10-16
+Source SHA-256: fac31d82b216c95affee7dffcee6c0ae59c45f254ebbfbbf8abb9e66da86ee8f
+License: Creative Commons Attribution 2.0 France (CC BY 2.0 FR)
+License URL: https://creativecommons.org/licenses/by/2.0/fr/
+Export documentation: https://tatoeba.org/en/downloads
+
+Modified by TailorKeys: lowercased and tokenized into letters/apostrophes;
+counted adjacent vocabulary-only pairs/triples within sentences; retained
+counts >= 3, limited each asset to the highest-count 100,000 entries.
+This attribution covers bigrams_fr.txt and trigrams_fr.txt.

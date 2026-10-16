@@ -3,13 +3,16 @@
 
 Usage: python tools/build_dictionary.py [en_US] [--source wordlist.combined.gz]
 Use --notice-source NOTICE with --source for a fully offline build. Downloads
-stay in memory; only the generated words, bigrams and attribution are written.
+are streamed to temporary files; only generated assets and attribution are written.
 """
 
 import argparse
 import base64
 import gzip
 import re
+import shutil
+import tempfile
+import unicodedata
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import urlopen
@@ -22,8 +25,15 @@ EXCLUDED_FLAGS = {"offensive", "possibly_offensive", "not_a_word", "nonword", "n
 
 
 def download(url):
-    with urlopen(url, timeout=60) as response:
-        return base64.b64decode(response.read(), validate=True)
+    with tempfile.TemporaryFile() as encoded, tempfile.TemporaryFile() as decoded:
+        with urlopen(url, timeout=60) as response:
+            shutil.copyfileobj(response, encoded, 1024 * 1024)
+        encoded.seek(0)
+        # Gitiles returns one unbroken base64 line; decode bounded chunks.
+        while chunk := encoded.read(1024 * 1024):
+            decoded.write(base64.b64decode(chunk, validate=True))
+        decoded.seek(0)
+        return decoded.read()
 
 
 def source_url(commit, language):
@@ -75,7 +85,7 @@ def convert(text):
         line = line.strip()
         if line.startswith("word="):
             attributes = fields(line)
-            word = attributes["word"].lower()
+            word = unicodedata.normalize("NFC", attributes["word"].lower())
             frequency = int(attributes["f"])
             if not 0 <= frequency <= 255:
                 raise ValueError(f"Invalid unigram frequency: {line}")
@@ -145,7 +155,9 @@ def main():
         missing = {"a", "i", "am", "i'm", "don't", "it's"} - set(words)
         if missing:
             raise ValueError(f"Required English words missing: {sorted(missing)}")
-    pairs = merge_bigrams(args.output_dir / "bigrams.txt", words, source_pairs)
+    lang = args.language.split("_")[0]
+    suffix = "" if lang == "en" else f"_{lang}"
+    pairs = merge_bigrams(args.output_dir / f"bigrams{suffix}.txt", words, source_pairs)
     notice_url = f"{REPOSITORY}/+/{args.commit}/NOTICE?format=TEXT"
     upstream_notice = (args.notice_source.read_bytes() if args.notice_source
                        else download(notice_url)).decode("utf-8")
@@ -167,10 +179,30 @@ def main():
         + upstream_notice.strip() + "\n"
     )
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    write_preserving_newlines(args.output_dir / "words.txt", "\n".join(words) + "\n")
-    write_preserving_newlines(args.output_dir / "bigrams.txt", "".join(
+    write_preserving_newlines(args.output_dir / f"words{suffix}.txt", "\n".join(words) + "\n")
+    write_preserving_newlines(args.output_dir / f"bigrams{suffix}.txt", "".join(
         f"{previous} {word} {weight}\n" for (previous, word), weight in pairs.items()))
-    write_preserving_newlines(args.output_dir / "NOTICE-dictionary.txt", notice)
+    notice_path = args.output_dir / "NOTICE-dictionary.txt"
+    old = notice_path.read_text(encoding="utf-8") if notice_path.exists() else ""
+    if suffix:
+        marker = f"Additional AOSP dictionary: {lang}"
+        block = (f"{marker}\nSource URL: {url}\nSource commit: {args.commit}\n"
+                 f"License/attribution source: {notice_url}\n"
+                 "License: Apache License 2.0 (full license and upstream NOTICE above).\n"
+                 "Includes Dictionaries © Lexiteria LLC. Used by permission.\n"
+                 "Modified by TailorKeys: Unicode letters and apostrophes retained, NFC\n"
+                 "normalized, lowercased, filtered, deduplicated, frequency sorted;\n"
+                 f"limited to 60,000 words. Covers words{suffix}.txt and AOSP seed pairs.\n")
+        old = re.sub(re.escape(marker) + r"\n.*?(?=\n\n|\Z)", "", old, flags=re.S).rstrip()
+        # A standalone output directory must still include the full upstream license.
+        if not old:
+            old = notice.rstrip()
+        notice = old + "\n\n" + block
+    else:
+        extra = re.search(r"\n(?:Additional AOSP dictionary:|Tatoeba sentence n-gram attribution)", old)
+        if extra:
+            notice = notice.rstrip() + "\n\n" + old[extra.start():].lstrip()
+    write_preserving_newlines(notice_path, notice)
     print(f"Source: {url}\nCommit: {args.commit}")
     print(f"Words: {len(words)}; source bigram pairs: {len(source_pairs)}; merged bigrams: {len(pairs)}")
 

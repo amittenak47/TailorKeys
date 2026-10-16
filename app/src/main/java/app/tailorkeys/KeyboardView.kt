@@ -58,6 +58,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         fun onStackFace(code: String)
         fun onSuggestion(text: String)
         fun onGlide(points: List<GestureDecoder.Point>, keys: Map<Char, GestureDecoder.Point>, keyWidth: Float) {}
+        fun onSwitchLanguage(direction: Int) {}
         fun onPickIme()
         fun onCursor(steps: Int, select: Boolean) {}
         fun onSelectMode(on: Boolean) {}
@@ -134,6 +135,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val isLandscape get() = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     fun reloadSettings() {
+        state.language = settings.currentLanguage()
+        dismissPopup()
         palette = Palette.of(context, settings.theme())
         relayout()
     }
@@ -482,10 +485,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             if (gearRect.width() >= 20 * density) ids += A_GEAR
             if (!cursorRect.isEmpty) ids += A_CURSOR
         }
+        popup?.choices?.indices?.forEach { ids += A_POPUP + it }
         return ids
     }
 
-    private fun accessibilityRect(id: Int): RectF = when (id) {
+    private fun accessibilityRect(id: Int): RectF = when {
+        id >= A_POPUP -> popup!!.rects[id - A_POPUP]
+        else -> when (id) {
         A_WHEEL_LEFT -> wheels[0].rect
         A_WHEEL_RIGHT -> wheels[1].rect
         A_GEAR -> gearRect
@@ -494,16 +500,20 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         A_SETTINGS -> moreRect
         A_DONE -> doneRect
         else -> RectF(placed[id].rect).also { placed[id].matrix.mapRect(it) }
+        }
     }
 
     private fun accessibilityValue(id: Int): String? {
+        if (id >= A_POPUP) return popup?.choices?.getOrNull(id - A_POPUP)
         placed.getOrNull(id)?.item?.let { return KeyText.spoken(it.keys[shownIdx(it)], state, enterLabel) }
         val wheel = when (id) { A_WHEEL_LEFT -> wheels[0]; A_WHEEL_RIGHT -> wheels[1]; else -> return null }
         val list = words(wheel)
         return if (list.isEmpty()) null else wordAt(list, wheel.index)
     }
 
-    private fun accessibilityLabel(id: Int): String = when (id) {
+    private fun accessibilityLabel(id: Int): String = when {
+        id >= A_POPUP -> accessibilityValue(id).orEmpty()
+        else -> when (id) {
         A_WHEEL_LEFT -> "More suggestions"
         A_WHEEL_RIGHT -> "Suggestions"
         A_GEAR -> "Rearrange keys"
@@ -514,14 +524,15 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         else -> {
             val item = placed[id].item
             val face = accessibilityValue(id)!!
-            if (item.isStack) "$face, swipe key, ${item.keys.size} options" else face
+            if (item.isStack) "$face, swipe key, ${item.keys.size} options" else if (item.isSpace && settings.languages().size > 1) "$face, ${state.language.uppercase()}, swipe to change language" else face
+        }
         }
     }
 
     // Older TalkBack versions identify keyboard keys by their class name.
     private fun accessibilityClassName(id: Int): String = when {
         id == View.NO_ID -> javaClass.name
-        id in placed.indices -> "android.inputmethodservice.Keyboard\$Key"
+        id in placed.indices || id >= A_POPUP -> "android.inputmethodservice.Keyboard\$Key"
         else -> "android.widget.Button"
     }
 
@@ -577,7 +588,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         when (event.actionMasked) {
             MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> {
                 val x = event.x; val y = event.y
-                val id = if (y < stripH) {
+                val id = popup?.rects?.indexOfFirst { it.contains(x, y) }?.takeIf { it >= 0 }?.let { A_POPUP + it } ?: if (y < stripH) {
                     accessibilityIds().firstOrNull { it >= A_WHEEL_LEFT && accessibilityRect(it).contains(x, y) } ?: A_NONE
                 } else {
                     findKey(x, y, strict = true)?.let { placed.indexOf(it) }
@@ -592,6 +603,12 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun activateAccessibleView(id: Int): Boolean {
+        if (id >= A_POPUP) {
+            val choice = accessibilityValue(id) ?: return false
+            dismissPopup()
+            listener?.onLongPressText(choice)
+            return true
+        }
         if (id == A_CURSOR || id == A_UNDO && history.isEmpty()) return false
         if ((id == A_WHEEL_LEFT || id == A_WHEEL_RIGHT) && accessibilityValue(id) == null) return false
         accessibilityEvent(id, AccessibilityEvent.TYPE_VIEW_CLICKED)
@@ -625,6 +642,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             A_CURSOR -> { listener?.onCursor(step, select = false); return true }
             else -> {
                 val item = placed.getOrNull(id)?.item ?: return false
+                if (item.isSpace && settings.languages().size > 1) {
+                    listener?.onSwitchLanguage(step)
+                    haptic(HapticFeedbackConstants.CLOCK_TICK)
+                    return true
+                }
                 if (!item.isStack) return false
                 item.idx = (shownIdx(item) + step + item.keys.size) % item.keys.size
                 listener?.onStackFace(item.keys[item.idx])
@@ -666,14 +688,19 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 val wheel = id == A_WHEEL_LEFT || id == A_WHEEL_RIGHT
                 val value = accessibilityValue(id)
                 if (wheel) it.text = value
-                if (Build.VERSION.SDK_INT >= 29) it.isTextEntryKey = item != null
+                if (Build.VERSION.SDK_INT >= 29) it.isTextEntryKey = item != null || id >= A_POPUP
                 if (Build.VERSION.SDK_INT >= 30 && (item?.isStack == true || wheel)) it.stateDescription = value
                 it.isClickable = id != A_CURSOR && (!wheel || value != null)
                 if (it.isClickable) it.addAction(AccessibilityNodeInfo.ACTION_CLICK)
-                if (item?.isStack == true || wheel && value != null || id == A_CURSOR) {
+                if (item?.isStack == true || item?.isSpace == true && settings.languages().size > 1 || wheel && value != null || id == A_CURSOR) {
                     it.isScrollable = true
                     it.addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
                     it.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+                }
+                if (id >= A_POPUP) it.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_DISMISS)
+                if (item != null && (item.isSpace || KeyText.alternatives(item.keys[shownIdx(item)], state, settings.bool(Prefs.SHOW_HINTS)).isNotEmpty())) {
+                    it.isLongClickable = true
+                    it.addAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
                 }
                 it.addAction(if (accessibilityFocus == id) AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS else AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
             }
@@ -702,6 +729,12 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             }
             if (!isEnabled) return false
             return when (action) {
+                AccessibilityNodeInfo.ACTION_DISMISS -> { dismissPopup(); true }
+                AccessibilityNodeInfo.ACTION_LONG_CLICK -> {
+                    val pk = placed.getOrNull(virtualViewId) ?: return false
+                    if (pk.item.isSpace) { listener?.onPickIme(); true }
+                    else openPopup(pk, null)
+                }
                 AccessibilityNodeInfo.ACTION_CLICK -> activateAccessibleView(virtualViewId)
                 AccessibilityNodeInfo.ACTION_SCROLL_FORWARD -> adjustAccessibleView(virtualViewId, 1)
                 AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> adjustAccessibleView(virtualViewId, -1)
@@ -742,6 +775,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         rightSpace?.let { drawMoveArrow(canvas, it, pointsLeft = false) }
         drag?.let { drawGhost(canvas, it, radius) }
         drawGlide(canvas, now)
+        drawPopup(canvas)
         if (editMode) postInvalidateOnAnimation()
     }
 
@@ -838,7 +872,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         when (code) {
             Keys.BACKSPACE -> drawDelete(canvas, r, icon, color, a)
             Keys.ENTER -> enterLabel?.let { drawLabel(canvas, r, it, r.height() * 0.3f * scale, color, a) } ?: drawReturn(canvas, r, icon, color, a)
-            Keys.SPACE -> Unit
+            Keys.SPACE -> if (settings.languages().size > 1 && !editMode) {
+                drawLabel(canvas, r, state.language.uppercase(), min(12 * density, r.height() * 0.25f), palette.hint, a)
+            }
             else -> {
                 val label = KeyText.label(code, state)
                 val size = min(r.height() * 0.42f, 22 * density) * scale
@@ -1022,7 +1058,56 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     // ---- Touch ----
 
+    private class AccentPopup(val choices: List<String>, val rects: List<RectF>, val owner: Tracker?) {
+        var selected = -1
+    }
+    private var popup: AccentPopup? = null
+
+    private fun openPopup(pk: Placed, owner: Tracker?): Boolean {
+        val choices = KeyText.alternatives(pk.item.keys[shownIdx(pk.item)], state, settings.bool(Prefs.SHOW_HINTS))
+        if (choices.isEmpty()) return false
+        dismissPopup()
+        val anchor = RectF(pk.rect).also { pk.matrix.mapRect(it) }
+        val cell = min(max(36 * density, pk.rect.width()), (width - 8 * density) / choices.size)
+        val h = min(min(unit, 48 * density), max(24 * density, anchor.top - 4 * density))
+        val left = (anchor.centerX() - cell * choices.size / 2).coerceIn(4 * density, max(4 * density, width - 4 * density - cell * choices.size))
+        val top = max(0f, anchor.top - h - 4 * density)
+        clearAccessibilityFocus()
+        popup = AccentPopup(choices, choices.indices.map { RectF(left + it * cell, top, left + (it + 1) * cell, top + h) }, owner)
+        if (accessibilityManager.isEnabled) {
+            accessibilityFocus = A_POPUP
+            accessibilityEvent(A_POPUP, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED)
+        }
+        owner?.let { it.consumed = true; it.glideEligible = false; stopTimers(it) }
+        accessibilityEvent(View.NO_ID, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE)
+        invalidate()
+        return true
+    }
+
+    private fun dismissPopup() {
+        if (popup == null) return
+        if (popup?.owner?.kind == K_STACK) swipe = null
+        if (accessibilityFocus >= A_POPUP) clearAccessibilityFocus()
+        if (hoveredView >= A_POPUP) updateHoveredView(A_NONE)
+        popup = null
+        accessibilityEvent(View.NO_ID, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE)
+        invalidate()
+    }
+
+    private fun drawPopup(canvas: Canvas) {
+        val p = popup ?: return
+        p.rects.forEachIndexed { i, r ->
+            fill.color = if (i == p.selected) palette.accent else palette.functionKey
+            canvas.drawRoundRect(r, 6 * density, 6 * density, fill)
+            stroke.color = palette.text
+            stroke.strokeWidth = density
+            canvas.drawRoundRect(r, 6 * density, 6 * density, stroke)
+            drawLabel(canvas, r, p.choices[i], min(22 * density, r.height() * 0.5f), if (i == p.selected) palette.onAccent else palette.text, 255)
+        }
+    }
+
     private inner class Tracker(val kind: Int, var pk: Placed?) {
+        var languageDirection = 0
         var consumed = false
         var moved = false
         var x0 = 0f
@@ -1056,6 +1141,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private var trail: List<GestureDecoder.Point> = emptyList()
 
     fun cancelTouches() {
+        dismissPopup()
         trackers.values.forEach { stopTimers(it); if (it.select) listener?.onSelectMode(false) }
         trackers.clear()
         glideId = null
@@ -1082,6 +1168,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 val i = e.actionIndex
                 trackers[e.getPointerId(i)]?.let { recordGlide(e.getPointerId(i), it, e.getX(i), e.getY(i), e.eventTime) }
+                trackers[e.getPointerId(i)]?.let { t ->
+                    if (popup?.owner === t || t.pk?.item?.isSpace == true && settings.languages().size > 1)
+                        pointerMove(e.getPointerId(i), e.getX(i), e.getY(i), e.eventTime)
+                }
                 pointerUp(e.getPointerId(i))
             }
             MotionEvent.ACTION_CANCEL -> cancelTouches()
@@ -1126,7 +1216,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val pk = findKey(x, y) ?: return
         haptic(HapticFeedbackConstants.KEYBOARD_TAP)
         if (pk.item.isStack) {
-            trackers[id] = Tracker(K_STACK, pk).also { it.y0 = y }
+            trackers[id] = Tracker(K_STACK, pk).also { it.x0 = x; it.y0 = y; timers.postDelayed(it.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong()) }
             swipe = Swipe(pk.item)
             invalidate()
             return
@@ -1169,6 +1259,20 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     private fun pointerMove(id: Int, x: Float, y: Float, time: Long) {
         val t = trackers[id] ?: return
+        popup?.takeIf { it.owner === t }?.let {
+            it.selected = it.rects.indexOfFirst { r -> r.contains(x, y) }
+            invalidate()
+            return
+        }
+        if (t.pk?.item?.isSpace == true && !t.consumed && settings.languages().size > 1) {
+            val dx = x - t.x0
+            if (abs(dx) > 8 * density) timers.removeCallbacks(t.longPress)
+            if (abs(dx) > t.pk!!.rect.width() / t.pk!!.item.w && abs(y - t.y0) < unit) {
+                t.languageDirection = if (dx > 0) 1 else -1
+                t.consumed = true
+            }
+            return
+        }
         if (recordGlide(id, t, x, y, time)) return
         when (t.kind) {
             K_WHEEL -> {
@@ -1197,10 +1301,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             K_STACK -> {
                 // One swipe moves exactly one face; the rest of the gesture is ignored.
                 val sw = swipe ?: return
-                if (sw.stepped) return
+                if (t.consumed || sw.stepped) return
                 val dy = y - t.y0
                 if (abs(dy) > 5 * density) t.moved = true
                 if (!t.moved) return
+                timers.removeCallbacks(t.longPress)
                 val h = t.pk!!.rect.height()
                 sw.dy = dy.coerceIn(-h, h)
                 if (abs(dy) > h * 0.5f) {
@@ -1232,6 +1337,17 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private fun pointerUp(id: Int) {
         val t = trackers.remove(id) ?: return
         stopTimers(t)
+        popup?.takeIf { it.owner === t }?.let {
+            val choice = it.choices.getOrNull(it.selected)
+            dismissPopup()
+            choice?.let { value -> listener?.onLongPressText(value) }
+            return
+        }
+        if (t.languageDirection != 0) {
+            listener?.onSwitchLanguage(t.languageDirection)
+            haptic(HapticFeedbackConstants.CLOCK_TICK)
+            return
+        }
         if (glideId == id) {
             glideId = null
             listener?.onGlide(t.points.toList(), letterCentres, letterWidth)
@@ -1260,7 +1376,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             K_HANDLE -> if (t.moved && abs(t.lastX - t.x0) > 36 * density) slideKeyboard(t.lastX < t.x0)
             K_STACK -> {
                 swipe = null
-                if (!t.moved) listener?.onKey(t.pk!!.item.keys[shownIdx(t.pk!!.item)])
+                if (!t.moved && !t.consumed) listener?.onKey(t.pk!!.item.keys[shownIdx(t.pk!!.item)])
             }
             K_KEY -> if (!t.consumed) commit(t)
             K_GEAR -> editMode = true
@@ -1282,12 +1398,12 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             invalidate()
             return
         }
-        val code = t.pk?.item?.keys?.get(0) ?: return
+        val item = t.pk?.item ?: return
+        val code = item.keys[shownIdx(item)]
         if (code == Keys.SPACE) {
             listener?.onPickIme()
         } else {
-            val alt = KeyText.longPress(code, state) ?: return
-            listener?.onLongPressText(alt)
+            if (!openPopup(t.pk ?: return, t)) return
         }
         t.consumed = true
         haptic(HapticFeedbackConstants.LONG_PRESS)
@@ -1545,6 +1661,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private companion object {
+        const val A_POPUP = 20000
         const val A_NONE = Int.MIN_VALUE
         const val A_WHEEL_LEFT = 10000
         const val A_WHEEL_RIGHT = 10001

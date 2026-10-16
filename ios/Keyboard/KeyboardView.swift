@@ -11,6 +11,7 @@ protocol KeyboardViewDelegate: AnyObject {
     func longPressText(_ text: String)
     func stackFace(_ code: String)
     func suggestionPicked(_ text: String)
+    func switchLanguage(_ direction: Int)
     func spaceLongPressed()
     func openSettings()
     func moveCursor(_ steps: Int)
@@ -19,6 +20,7 @@ protocol KeyboardViewDelegate: AnyObject {
 }
 
 extension KeyboardViewDelegate {
+    func switchLanguage(_ direction: Int) {}
     func glideFinished(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat) {}
 }
 
@@ -103,6 +105,8 @@ final class KeyboardView: UIView {
     private var isLandscape: Bool { let b = UIScreen.main.bounds; return b.width > b.height }
 
     func reloadSettings() {
+        state.language = settings.currentLanguage
+        dismissPopup()
         palette = Palette.of(settings.theme, dark: traitCollection.userInterfaceStyle == .dark)
         relayout()
     }
@@ -411,9 +415,10 @@ final class KeyboardView: UIView {
             UIAccessibility.post(notification: .announcement, argument: name)
         }
         if capsChanged { UIAccessibility.post(notification: .announcement, argument: state.capsLock ? "Caps lock on" : "Caps lock off") }
-        var signature = ["\(state.layer)", "\(state.capsLock)", "\(state.shift)", enterLabel ?? "", "\(editMode)", "\(history.isEmpty)"]
+        var signature = [state.language, "\(settings.languages.count)", "\(state.layer)", "\(state.capsLock)", "\(state.shift)", enterLabel ?? "", "\(editMode)", "\(history.isEmpty)"]
         signature.append(contentsOf: placed.map { "\(KeyText.spoken($0.item.keys[shownIdx($0.item)], state, enterLabel)):\($0.item.keys.count)" })
         signature.append(contentsOf: wheels.map { words($0).isEmpty ? "" : wordAt(words($0), $0.index) })
+        signature.append(contentsOf: popup?.choices ?? [])
         guard layoutChanged || signature != accessibilitySignature else { return }
         accessibilitySignature = signature
         var items: [String: AccessibleElement] = [:]
@@ -425,6 +430,7 @@ final class KeyboardView: UIView {
             e.accessibilityLabel = label
             e.accessibilityTraits = traits
             e.accessibilityValue = nil
+            e.accessibilityCustomActions = nil
             e.activate = nil; e.increment = nil; e.decrement = nil
             items[id] = e
             ordered.append(e)
@@ -432,10 +438,26 @@ final class KeyboardView: UIView {
         }
         for (index, pk) in placed.enumerated() {
             let face = KeyText.spoken(pk.item.keys[shownIdx(pk.item)], state, enterLabel)
-            let label = pk.item.isStack ? "\(face), swipe key, \(pk.item.keys.count) options" : face
+            let label = pk.item.isStack ? "\(face), swipe key, \(pk.item.keys.count) options" : (pk.item.isSpace && settings.languages.count > 1 ? "Space, " + state.language.uppercased() + ", swipe to change language" : face)
             let traits: UIAccessibilityTraits = pk.item.isStack ? [.keyboardKey, .adjustable] : .keyboardKey
             let e = element("key\(index)", pk.rect.applying(pk.t), label, traits)
             e.activate = { [weak self] in self?.activateAccessibleKey(index) ?? false }
+            if !KeyText.alternatives(pk.item.keys[shownIdx(pk.item)], state, settings.showHints).isEmpty {
+                e.accessibilityCustomActions = [UIAccessibilityCustomAction(name: "Show alternatives") { [weak self] _ in
+                    self?.openPopup(pk, nil) ?? false
+                }]
+            }
+            if pk.item.isSpace {
+                e.accessibilityCustomActions = [UIAccessibilityCustomAction(name: "Switch keyboards") { [weak self] _ in
+                    self?.delegate?.spaceLongPressed()
+                    return true
+                }]
+                if settings.languages.count > 1 {
+                    e.accessibilityTraits.insert(.adjustable)
+                    e.increment = { [weak self] in self?.delegate?.switchLanguage(1) }
+                    e.decrement = { [weak self] in self?.delegate?.switchLanguage(-1) }
+                }
+            }
             if pk.item.isStack {
                 e.accessibilityValue = face
                 e.increment = { [weak self] in self?.adjustAccessibleKey(index, 1) }
@@ -475,6 +497,18 @@ final class KeyboardView: UIView {
                 guard let self = self else { return false }
                 self.editMode = true
                 return true
+            }
+        }
+        if let p = popup {
+            for i in p.choices.indices {
+                let e = element("accent\(i)", p.rects[i], p.choices[i], .keyboardKey)
+                e.activate = { [weak self] in
+                    guard let self = self, let popup = self.popup, popup.choices.indices.contains(i) else { return false }
+                    let choice = popup.choices[i]
+                    self.dismissPopup()
+                    self.delegate?.longPressText(choice)
+                    return true
+                }
             }
         }
         accessibleItems = items
@@ -558,6 +592,7 @@ final class KeyboardView: UIView {
         if let r = rightSpace { drawArrow(r, pointsLeft: false) }
         if let d = drag { drawGhost(ctx, d, radius) }
         drawGlide(ctx, now)
+        drawPopup()
     }
 
     private func drawGlide(_ ctx: CGContext, _ now: TimeInterval) {
@@ -647,7 +682,10 @@ final class KeyboardView: UIView {
         case Keys.enter:
             if let l = enterLabel { drawText(l, center: center, size: r.height * 0.3 * scale, color: color, maxWidth: r.width * 0.85) }
             else { drawReturn(center, icon, color) }
-        case Keys.space: break
+        case Keys.space:
+            if settings.languages.count > 1 && !editMode {
+                drawText(state.language.uppercased(), center: center, size: Swift.min(12, r.height * 0.25), color: palette.hint)
+            }
         default:
             let label = KeyText.label(code, state)
             let size = Swift.min(r.height * 0.42, 22) * scale
@@ -794,9 +832,70 @@ final class KeyboardView: UIView {
 
     private enum Kind { case key, stack, wheel, handle, gear, cursor }
 
+    private final class AccentPopup {
+        let choices: [String]
+        let rects: [CGRect]
+        let owner: Tracker?
+        var selected: Int?
+        init(_ choices: [String], _ rects: [CGRect], _ owner: Tracker?) {
+            self.choices = choices; self.rects = rects; self.owner = owner
+        }
+    }
+    private var popup: AccentPopup?
+
+    @discardableResult private func openPopup(_ pk: Placed, _ owner: Tracker?) -> Bool {
+        let choices = KeyText.alternatives(pk.item.keys[shownIdx(pk.item)], state, settings.showHints)
+        guard !choices.isEmpty else { return false }
+        dismissPopup()
+        let anchor = pk.rect.applying(pk.t)
+        let cell = Swift.min(Swift.max(36, pk.rect.width), (bounds.width - 8) / CGFloat(choices.count))
+        let h = Swift.min(Swift.min(unit, 48), Swift.max(24, anchor.minY - 4))
+        let left = Swift.max(4, Swift.min(anchor.midX - cell * CGFloat(choices.count) / 2, bounds.width - 4 - cell * CGFloat(choices.count)))
+        let top = Swift.max(0, anchor.minY - h - 4)
+        let rects = choices.indices.map { CGRect(x: left + CGFloat($0) * cell, y: top, width: cell, height: h) }
+        popup = AccentPopup(choices, rects, owner)
+        owner?.consumed = true
+        owner?.glideEligible = false
+        owner?.stop()
+        rebuildAccessibilityElements(layoutChanged: true)
+        UIAccessibility.post(notification: .layoutChanged, argument: accessibleItems["accent0"])
+        setNeedsDisplay()
+        return true
+    }
+
+    override func accessibilityPerformEscape() -> Bool {
+        guard popup != nil else { return super.accessibilityPerformEscape() }
+        dismissPopup()
+        return true
+    }
+
+    private func dismissPopup() {
+        guard popup != nil else { return }
+        if popup?.owner?.kind == .stack { swipe = nil }
+        popup = nil
+        rebuildAccessibilityElements(layoutChanged: true)
+        setNeedsDisplay()
+    }
+
+    private func drawPopup() {
+        guard let p = popup else { return }
+        for i in p.choices.indices {
+            let r = p.rects[i]
+            (p.selected == i ? palette.accent : palette.functionKey).setFill()
+            let shape = UIBezierPath(roundedRect: r, cornerRadius: 6)
+            shape.fill()
+            palette.text.setStroke()
+            shape.lineWidth = 1
+            shape.stroke()
+            drawText(p.choices[i], center: CGPoint(x: r.midX, y: r.midY), size: Swift.min(22, r.height * 0.5),
+                     color: p.selected == i ? palette.onAccent : palette.text, maxWidth: r.width * 0.85)
+        }
+    }
+
     private final class Tracker {
         let kind: Kind
         var pk: Placed?
+        var languageDirection = 0
         var consumed = false
         var moved = false
         var x0: CGFloat = 0
@@ -820,6 +919,7 @@ final class KeyboardView: UIView {
     private var trail: [GlidePoint] = []
 
     func cancelTouches() {
+        dismissPopup()
         trackers.values.forEach { $0.stop() }
         trackers = [:]
         glideID = nil
@@ -856,6 +956,9 @@ final class KeyboardView: UIView {
             if editMode { editEnded(t) } else {
                 let id = ObjectIdentifier(t)
                 if let tracker = trackers[id] { _ = recordGlide(id, tracker, t.location(in: self), t.timestamp) }
+                if let tracker = trackers[id], popup?.owner === tracker || (tracker.pk?.item.isSpace == true && settings.languages.count > 1) {
+                    move(id, t.location(in: self), t.timestamp)
+                }
                 up(id)
             }
         }
@@ -899,7 +1002,8 @@ final class KeyboardView: UIView {
         guard let pk = findKey(p) else { return }
         click()
         if pk.item.isStack {
-            let t = Tracker(kind: .stack, pk: pk); t.y0 = p.y; trackers[id] = t
+            let t = Tracker(kind: .stack, pk: pk); t.x0 = p.x; t.y0 = p.y; trackers[id] = t
+            startLongPress(t)
             swipe = Swipe(item: pk.item)
             setNeedsDisplay()
             return
@@ -946,6 +1050,20 @@ final class KeyboardView: UIView {
 
     private func move(_ id: ObjectIdentifier, _ p: CGPoint, _ time: TimeInterval) {
         guard let t = trackers[id] else { return }
+        if let popup = popup, popup.owner === t {
+            popup.selected = popup.rects.firstIndex(where: { $0.contains(p) })
+            setNeedsDisplay()
+            return
+        }
+        if let pk = t.pk, pk.item.isSpace, !t.consumed, settings.languages.count > 1 {
+            let dx = p.x - t.x0
+            if abs(dx) > 8 { t.longTimer?.invalidate() }
+            if abs(dx) > pk.rect.width / CGFloat(pk.item.w) && abs(p.y - t.y0) < unit {
+                t.languageDirection = dx > 0 ? 1 : -1
+                t.consumed = true
+            }
+            return
+        }
         if recordGlide(id, t, p, time) { return }
         switch t.kind {
         case .wheel:
@@ -965,10 +1083,11 @@ final class KeyboardView: UIView {
             }
         case .stack:
             // One swipe moves exactly one face; the rest of the gesture is ignored.
-            guard let sw = swipe, !sw.stepped, let pk = t.pk else { return }
+            guard let sw = swipe, !t.consumed, !sw.stepped, let pk = t.pk else { return }
             let dy = p.y - t.y0
             if abs(dy) > 5 { t.moved = true }
             if !t.moved { return }
+            t.longTimer?.invalidate()
             let h = pk.rect.height
             sw.dy = Swift.min(Swift.max(dy, -h), h)
             if abs(dy) > h * 0.5 {
@@ -997,6 +1116,17 @@ final class KeyboardView: UIView {
     private func up(_ id: ObjectIdentifier) {
         guard let t = trackers.removeValue(forKey: id) else { return }
         t.stop()
+        if let popup = popup, popup.owner === t {
+            let choice = popup.selected.map { popup.choices[$0] }
+            dismissPopup()
+            if let choice = choice { delegate?.longPressText(choice) }
+            return
+        }
+        if t.languageDirection != 0 {
+            delegate?.switchLanguage(t.languageDirection)
+            click()
+            return
+        }
         if glideID == id {
             glideID = nil
             delegate?.glideFinished(t.points, letterCentres, letterWidth)
@@ -1024,7 +1154,7 @@ final class KeyboardView: UIView {
             if t.moved && abs(t.lastX - t.x0) > 36 { slide(left: t.lastX < t.x0) }
         case .stack:
             swipe = nil
-            if !t.moved, let pk = t.pk { delegate?.keyTapped(pk.item.keys[shownIdx(pk.item)]) }
+            if !t.moved, !t.consumed, let pk = t.pk { delegate?.keyTapped(pk.item.keys[shownIdx(pk.item)]) }
         case .key:
             if !t.consumed { commit(t) }
         case .gear:
@@ -1041,12 +1171,12 @@ final class KeyboardView: UIView {
     }
 
     private func longPress(_ t: Tracker) {
-        guard let code = t.pk?.item.keys.first else { return }
+        guard let item = t.pk?.item else { return }
+        let code = item.keys[shownIdx(item)]
         if code == Keys.space {
             delegate?.spaceLongPressed()
         } else {
-            guard let alt = KeyText.longPress(code, state) else { return }
-            delegate?.longPressText(alt)
+            guard let pk = t.pk, openPopup(pk, t) else { return }
         }
         t.consumed = true
     }

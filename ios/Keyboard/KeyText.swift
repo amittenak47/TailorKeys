@@ -4,6 +4,7 @@ enum Layer { case abc, num, sym }
 
 /// Which layer is showing and how letters are cased. Shared by the controller and the view.
 final class InputState {
+    var language = "en"
     var layer: Layer = .abc
     var capsLock = false
     /// One-shot capital for the next letter, from auto-cap or a tap on ABC.
@@ -34,19 +35,49 @@ enum KeyText {
     static func output(_ k: String, _ s: InputState) -> String? {
         if isDigit(k) { return String(k.dropFirst()) }
         if k.count != 1 { return nil }
-        if s.layer != .abc, let a = alt[k] { return s.layer == .num ? a.0 : a.1 }
+        if s.layer != .abc, let a = alt[baseKey(k, s.language)] { return s.layer == .num ? a.0 : a.1 }
         return s.upper ? k.uppercased() : k
     }
 
     /// The character offered on long-press: the key's number-layer character.
     static func longPress(_ k: String, _ s: InputState) -> String? {
-        k.count == 1 && s.layer == .abc ? alt[k]?.0 : nil
+        k.count == 1 && s.layer == .abc ? alt[baseKey(k, s.language)]?.0 : nil
     }
 
     /// Small corner hint, shown only for long-press digits.
     static func hint(_ k: String, _ s: InputState) -> String? {
         guard let lp = longPress(k, s), let ch = lp.first, ch.isNumber else { return nil }
         return lp
+    }
+
+    private static func baseKey(_ k: String, _ lang: String) -> String {
+        let variant: String
+        switch lang {
+        case "es": variant = "qwertyuiopasdfghjklñzxcvbnm"
+        case "de": variant = "qwertzuiopasdfghjklßyxcvbnm"
+        case "fr": variant = "azertyuiopqsdfghjklmwxcvbn'"
+        default: return k
+        }
+        guard k.count == 1, let i = Array(variant).firstIndex(of: k.first!) else { return k }
+        return String(Array("qwertyuiopasdfghjkl'zxcvbnm")[i])
+    }
+
+    static func alternatives(_ k: String, _ s: InputState, _ hints: Bool) -> [String] {
+        guard s.layer == .abc, k.count == 1 else { return [] }
+        let accents: [String: String]
+        switch s.language {
+        case "es": accents = ["a": "á", "e": "é", "i": "í", "o": "ó", "u": "úü", "n": "ñ", "ñ": "n", "?": "¿", "!": "¡"]
+        case "de": accents = ["a": "ä", "o": "ö", "u": "ü", "s": "ß", "ß": "s"]
+        case "fr": accents = ["a": "àâæ", "e": "éèêë", "i": "îï", "o": "ôœ", "u": "ùûü", "c": "ç", "y": "ÿ"]
+        default: accents = [:]
+        }
+        var result: [String] = []
+        if let old = longPress(k, s), let ch = old.first, (ch.isNumber && hints) || (!ch.isNumber && (s.language == "en" || accents[k] == nil)) { result.append(old) }
+        for ch in accents[k] ?? "" {
+            let value = s.upper ? String(ch).uppercased() : String(ch)
+            if !result.contains(value) { result.append(value) }
+        }
+        return result
     }
 
     /// A spoken name for the face the key types right now.

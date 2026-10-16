@@ -17,6 +17,7 @@ from pathlib import Path
 import re
 import sqlite3
 import tempfile
+import unicodedata
 from urllib.request import urlopen
 
 ASSETS = Path(__file__).resolve().parents[1] / "app/src/main/assets"
@@ -445,7 +446,7 @@ def write_preserving_newlines(path, text):
 def tokens(sentence):
     """Letters and straight apostrophes only; None marks a sentence boundary."""
     word = []
-    for ch in sentence.lower():
+    for ch in unicodedata.normalize("NFC", sentence.lower().replace("’", "'")):
         if ch.isalpha() or ch == "'":
             word.append(ch)
         else:
@@ -499,8 +500,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("language", nargs="?", default="eng")
     parser.add_argument("--source", type=Path)
-    parser.add_argument("--words", type=Path, default=ASSETS / "words.txt")
+    parser.add_argument("--words", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=ASSETS)
+    parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--download-date", default=datetime.now(timezone.utc).date().isoformat())
     args = parser.parse_args()
     if not re.fullmatch(r"[a-z]{3}", args.language):
@@ -508,6 +510,12 @@ def main():
     datetime.strptime(args.download_date, "%Y-%m-%d")
     url = (f"https://downloads.tatoeba.org/exports/per_language/{args.language}/"
            f"{args.language}_sentences.tsv.bz2")
+    lang = {"eng": "en", "spa": "es", "deu": "de", "fra": "fr"}.get(args.language, args.language)
+    suffix = "" if lang == "en" else f"_{lang}"
+    limit = args.limit if args.limit is not None else (LIMIT if lang == "en" else 100_000)
+    if limit < 1:
+        parser.error("--limit must be positive")
+    args.words = args.words or ASSETS / f"words{suffix}.txt"
     vocabulary = set(args.words.read_text(encoding="utf-8").splitlines())
     args.output_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="tailorkeys-counts-") as work:
@@ -530,7 +538,7 @@ def main():
             stats = count_ngrams(source, args.language, vocabulary, db)
             eligible = [db.execute("SELECT count(*) FROM counts WHERE n=? AND count>=?",
                                    (n, MIN_COUNT)).fetchone()[0] for n in (2, 3)]
-            for line in LEGACY_PAIRS.splitlines():
+            for line in (LEGACY_PAIRS.splitlines() if lang == "en" else []):
                 prev, word, count = line.split()
                 if prev in vocabulary and word in vocabulary:
                     db.execute("INSERT INTO counts VALUES (2, ?, ?) "
@@ -539,7 +547,8 @@ def main():
             db.commit()
             for n, name in ((2, "bigrams.txt"), (3, "trigrams.txt")):
                 rows = db.execute("SELECT words, count FROM counts WHERE n=? AND count>=? "
-                                  "ORDER BY count DESC, words ASC LIMIT ?", (n, MIN_COUNT, LIMIT))
+                                  "ORDER BY count DESC, words ASC LIMIT ?", (n, MIN_COUNT, limit))
+                name = name.replace(".txt", f"{suffix}.txt")
                 path = args.output_dir / name
                 newline = "\r\n" if path.exists() and b"\r\n" in path.read_bytes() else "\n"
                 lines = 0
@@ -549,9 +558,9 @@ def main():
                         lines += 1
                 print(f"{name}: {lines:,} lines; {path.stat().st_size:,} bytes")
     notice_path = args.output_dir / "NOTICE-dictionary.txt"
-    marker = "Tatoeba sentence n-gram attribution"
+    marker = "Tatoeba sentence n-gram attribution" + (f": {args.language}" if suffix else "")
     notice = notice_path.read_text(encoding="utf-8") if notice_path.exists() else ""
-    notice = notice.split(marker)[0].rstrip() + "\n\n"
+    notice = re.sub(re.escape(marker) + r"\n.*?(?=\n(?:Additional AOSP|Tatoeba sentence)|\Z)", "", notice, flags=re.S).rstrip() + "\n\n"
     notice += (f"{marker}\n\nProject: Tatoeba contributors, {args.language} sentences\n"
                "Project URL: https://tatoeba.org/\n"
                f"Source URL: {url}\nDownload date (UTC): {args.download_date}\n"
@@ -561,9 +570,9 @@ def main():
                "Export documentation: https://tatoeba.org/en/downloads\n\n"
                "Modified by TailorKeys: lowercased and tokenized into letters/apostrophes;\n"
                "counted adjacent vocabulary-only pairs/triples within sentences; retained\n"
-               "counts >= 3, limited each asset to the highest-count 150,000 entries.\n"
-               "Existing TailorKeys pair weights merged using the maximum.\n"
-               "This attribution covers bigrams.txt and trigrams.txt.\n")
+               f"counts >= 3, limited each asset to the highest-count {limit:,} entries.\n"
+               + ("Existing TailorKeys pair weights merged using the maximum.\n" if lang == "en" else "")
+               + f"This attribution covers bigrams{suffix}.txt and trigrams{suffix}.txt.\n")
     write_preserving_newlines(notice_path, notice)
     print(f"Sentences: {stats[0]:,}; vocabulary pair/triple occurrences: {stats[1]:,}/{stats[2]:,}")
     print(f"Corpus pairs/triples with count >= {MIN_COUNT}: {eligible[0]:,}/{eligible[1]:,}")

@@ -22,6 +22,7 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
     private var revision by mutableIntStateOf(0)
     val preview = KeyboardView(context, settings).apply {
         grid = settings.loadGrid()
+        state.language = settings.currentLanguage()
         setSuggestions(listOf("helpful", "helicopter", "helmet"), listOf("hello", "help", "held"), "hel")
         listener = object : KeyboardView.Listener {
             override fun onKey(code: String) = Unit
@@ -33,10 +34,11 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         }
     }
     private val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == null || key == Prefs.LAYOUT) {
+        if (key == null || key == Prefs.LAYOUT || key == Prefs.CURRENT_LANGUAGE || key == Prefs.LANGUAGES) {
             val saved = settings.loadGrid()
             if (saved.toJson() != preview.grid.toJson()) preview.grid = saved
         }
+        preview.state.language = settings.currentLanguage()
         preview.reloadSettings()
         revision++
     }
@@ -51,18 +53,21 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
     fun set(pref: BoolPref, value: Boolean) = settings.set(pref, value)
     fun setFor(page: Boolean, pref: (Boolean) -> IntPref, value: Int) = settings.setFor(page, pref, value)
 
+    fun languages(): List<String> { revision; return settings.languages() }
+    fun setLanguages(enabled: Set<String>) = settings.setLanguages(enabled)
+
     fun templateName(): String {
         revision
         val current = withoutSwipeIndex(preview.grid)
         return Template.entries.firstOrNull { template ->
-            val candidate = KeyGrid.template(template)
+            val candidate = KeyGrid.template(template, settings.currentLanguage())
             if (settings.bool(Prefs.NUMBER_ROW)) candidate.setNumberRow(true)
             withoutSwipeIndex(candidate) == current
         }?.title ?: "Custom"
     }
 
     fun applyTemplate(template: Template, landscape: Boolean) {
-        val grid = KeyGrid.template(template)
+        val grid = KeyGrid.template(template, settings.currentLanguage())
         if (settings.bool(Prefs.NUMBER_ROW)) grid.setNumberRow(true)
         preview.replaceGrid(grid)
         if (template.split) settings.setSplitFor(landscape, true)
@@ -80,6 +85,7 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         preview.editMode = false
         settings.resetAll()
         preview.grid = settings.loadGrid()
+        preview.state.language = settings.currentLanguage()
         preview.reloadSettings()
         revision++
     }

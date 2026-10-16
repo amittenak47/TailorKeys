@@ -25,9 +25,13 @@ final class Predictor {
     private final class SeedTables {
         let pairs: [UInt64: [UInt64]]
         let triples: [UInt64: [UInt64]]
-        init(_ pairs: [UInt64: [UInt64]], _ triples: [UInt64: [UInt64]]) {
+        let frequencies: [Double]
+        let common: [String]
+        init(_ pairs: [UInt64: [UInt64]], _ triples: [UInt64: [UInt64]], _ frequencies: [Double] = [], _ common: [String] = []) {
             self.pairs = pairs
             self.triples = triples
+            self.frequencies = frequencies
+            self.common = common
         }
     }
     private let tableLock = NSLock()
@@ -38,16 +42,22 @@ final class Predictor {
     private var userTriples: [String: [String: Int]] = [:]
     private var neighbours: [Character: Set<Character>] = [:]
     private let defaults = UserDefaults.standard
-    private let userKey = "user_words"
-    private let pairKey = "user_bigrams"
-    private let tripleKey = "user_trigrams"
+    let language: String
+    private let userKey: String
+    private let pairKey: String
+    private let tripleKey: String
     private var cachedPrefix: String?
     private var cachedPrev: String?
     private var cachedPrev2: String?
     private var cachedCandidates: [Candidate]?
 
-    init() {
-        if let url = Bundle.main.url(forResource: "words", withExtension: "txt"), let text = try? String(contentsOf: url, encoding: .utf8) {
+    init(_ language: String = "en", onReady: @escaping () -> Void = {}) {
+        self.language = language
+        let suffix = language == "en" ? "" : "_" + language
+        userKey = "user_words" + suffix
+        pairKey = "user_bigrams" + suffix
+        tripleKey = "user_trigrams" + suffix
+        if let url = Bundle.main.url(forResource: "words" + suffix, withExtension: "txt"), let text = try? String(contentsOf: url, encoding: .utf8) {
             base = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
                 .filter { !$0.isEmpty }.map { Word(text: $0, letters: Array($0)) }
         } else {
@@ -64,13 +74,29 @@ final class Predictor {
             return a == b ? $0 < $1 : a > b
         }.prefix(300).map { $0 }
         let wordRanks = rank
+        let wordTexts = base.map { $0.text }
         DispatchQueue(label: "app.tailorkeys.ngrams", qos: .utility).async { [weak self] in
-            let tables = SeedTables(Self.loadCounts("bigrams", 2, wordRanks), Self.loadCounts("trigrams", 3, wordRanks))
+            let pairs = Self.loadCounts("bigrams" + suffix, 2, wordRanks)
+            let triples = Self.loadCounts("trigrams" + suffix, 3, wordRanks)
+            // Conversation counts complement AOSP ranks only in the new languages.
+            var frequencies: [Double] = []
+            if language != "en" {
+                frequencies = [Double](repeating: 0, count: wordTexts.count)
+                for (context, row) in pairs { for entry in row {
+                    let count = Double(entry & 0xFFFF_FFFF)
+                    frequencies[Int(context)] += count
+                    frequencies[Int(entry >> 32)] += count
+                } }
+                if let max = frequencies.max(), max > 0 { frequencies = frequencies.map { $0 / max } }
+            }
+            let common = frequencies.indices.sorted { frequencies[$0] == frequencies[$1] ? $0 < $1 : frequencies[$0] > frequencies[$1] }.prefix(300).map { wordTexts[$0] }
+            let tables = SeedTables(pairs, triples, frequencies, common)
             guard let self = self else { return }
             // Publish both immutable tables together; all cache mutation stays on the caller thread.
             self.tableLock.lock()
             self.seedTables = tables
             self.tableLock.unlock()
+            onReady()
         }
     }
 
@@ -91,7 +117,12 @@ final class Predictor {
         } }
     }
 
-    private func frequency(_ w: String) -> Double { 1.0 / Double((rank[w] ?? 5000) + 10) + Double(user[w] ?? 0) * 0.05 }
+    private func frequency(_ w: String, _ tables: SeedTables? = nil) -> Double {
+        let corpus: Double
+        if let id = rank[w], let values = tables?.frequencies, values.indices.contains(id) { corpus = values[id] }
+        else { corpus = 0 }
+        return 1.0 / Double((rank[w] ?? 5000) + 10) + 0.2 * corpus + Double(user[w] ?? 0) * 0.05
+    }
     private static func contextId(_ first: Int, _ second: Int) -> UInt64 {
         (UInt64(first) << 32) | UInt64(second)
     }
@@ -201,7 +232,7 @@ final class Predictor {
             // User triples receive the same logarithmic personal weighting as pairs.
             let context = log(1 + Double(seedPair)) + 1.5 * log(1 + Double(userPair)) +
                 1.2 * (log(1 + Double(seedTriple)) + 1.5 * log(1 + Double(userTriple)))
-            let score = log(frequency(w)) + 1.5 * context - 2.5 * Double(distance) / 10.0
+            let score = log(frequency(w, tables)) + 1.5 * context - 2.5 * Double(distance) / 10.0
             all.append(Candidate(word: w, score: score, correction: !completion,
                                  pairCount: seedPair + userPair, tripleCount: seedTriple + userTriple))
         }
@@ -213,6 +244,7 @@ final class Predictor {
             pool.formUnion(learnedTriples.keys)
             pool.formUnion(learnedPairs.keys)
             pool.formUnion(topWords)
+            pool.formUnion(tables?.common ?? [])
             for w in pool { add(w, []) }
         } else {
             for (w, chars) in userLetters { add(w, chars) }
@@ -321,7 +353,12 @@ final class Predictor {
     // Read-only gesture inputs; tap ranking and its caches remain unchanged.
     func gestureWords() -> [String] { base.map { $0.text } }
     func gestureUserWords() -> [String] { Array(user.keys) }
-    func gestureFrequency(_ word: String) -> Double { frequency(word) }
+    func gestureFrequency(_ word: String) -> Double {
+        tableLock.lock()
+        let tables = seedTables
+        tableLock.unlock()
+        return frequency(word, tables)
+    }
     /// The previous-word part of the suggestion score, for ranking swiped words the same way.
     func contextScore(_ prev: String?, _ word: String) -> Double {
         tableLock.lock()
