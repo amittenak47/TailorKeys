@@ -12,8 +12,8 @@ class BoolPref(val key: String, val default: Boolean)
 /** Every user setting with its default and allowed range, shared by the keyboard and the settings screen. */
 object Prefs {
     // Size and split are stored separately for portrait (_p) and landscape (_l).
-    private val HEIGHT_P = IntPref("height_p", 38, 24, 70)
-    private val HEIGHT_L = IntPref("height_l", 52, 24, 70)
+    private val HEIGHT_P = IntPref("height_p", 44, 24, 70)
+    private val HEIGHT_L = IntPref("height_l", 58, 24, 70)
     private val WIDTH_P = IntPref("width_p", 100, 50, 100)
     private val WIDTH_L = IntPref("width_l", 100, 50, 100)
     private val BOTTOM_P = IntPref("bottom_pad_p", 0, 0, 48)
@@ -38,7 +38,7 @@ object Prefs {
     val TEXT_SCALE = IntPref("text_scale", 100, 60, 160)
     val LONG_PRESS_MS = IntPref("long_press_ms", 350, 150, 800)
 
-    val NUMBER_ROW = BoolPref("number_row", false)
+    val NUMBER_ROW = BoolPref("number_row", true)
     val SHOW_HINTS = BoolPref("show_hints", true)
     val AUTO_CAP = BoolPref("auto_cap", true)
     val DOUBLE_SPACE_PERIOD = BoolPref("double_space_period", true)

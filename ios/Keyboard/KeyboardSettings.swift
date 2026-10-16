@@ -12,7 +12,7 @@ struct IntPref {
 /// Every setting with its default and range. Same keys and defaults as the Android app.
 /// Stored in the keyboard's own UserDefaults, so no App Group (and no paid developer account) is needed.
 enum Prefs {
-    static func height(_ l: Bool) -> IntPref { l ? IntPref(key: "height_l", def: 52, min: 24, max: 70) : IntPref(key: "height_p", def: 38, min: 24, max: 70) }
+    static func height(_ l: Bool) -> IntPref { l ? IntPref(key: "height_l", def: 58, min: 24, max: 70) : IntPref(key: "height_p", def: 44, min: 24, max: 70) }
     static func width(_ l: Bool) -> IntPref { IntPref(key: l ? "width_l" : "width_p", def: 100, min: 50, max: 100) }
     static func bottomPadding(_ l: Bool) -> IntPref { IntPref(key: l ? "bottom_pad_l" : "bottom_pad_p", def: 0, min: 0, max: 48) }
     static func splitGap(_ l: Bool) -> IntPref { l ? IntPref(key: "split_gap_l", def: 22, min: 8, max: 40) : IntPref(key: "split_gap_p", def: 16, min: 8, max: 40) }
@@ -61,7 +61,7 @@ final class KeyboardSettings {
     func bool(_ key: String, _ def: Bool) -> Bool { d.object(forKey: key) as? Bool ?? def }
     func set(_ key: String, _ v: Bool) { d.set(v, forKey: key) }
 
-    var numberRow: Bool { bool(Prefs.numberRow, false) }
+    var numberRow: Bool { bool(Prefs.numberRow, true) }
     var showHints: Bool { bool(Prefs.showHints, true) }
     var autoCap: Bool { bool(Prefs.autoCap, true) }
     var doubleSpace: Bool { bool(Prefs.doubleSpace, true) }

@@ -443,13 +443,13 @@ class SettingsActivity : Activity() {
     private class Preset(val name: String, val h: Int, val w: Int, val align: Align, val split: Boolean, val gap: Int = 0)
 
     private fun presets(landscape: Boolean) = if (landscape) listOf(
-        Preset("Small", 44, 85, Align.CENTER, false), Preset("Default", 52, 100, Align.CENTER, false),
-        Preset("Large", 62, 100, Align.CENTER, false), Preset("Left hand", 52, 55, Align.LEFT, false),
-        Preset("Right hand", 52, 55, Align.RIGHT, false), Preset("Split", 52, 100, Align.CENTER, true, 22),
+        Preset("Small", 49, 85, Align.CENTER, false), Preset("Default", 58, 100, Align.CENTER, false),
+        Preset("Large", 69, 100, Align.CENTER, false), Preset("Left hand", 58, 55, Align.LEFT, false),
+        Preset("Right hand", 58, 55, Align.RIGHT, false), Preset("Split", 58, 100, Align.CENTER, true, 22),
     ) else listOf(
-        Preset("Small", 32, 90, Align.CENTER, false), Preset("Default", 38, 100, Align.CENTER, false),
-        Preset("Large", 46, 100, Align.CENTER, false), Preset("Left hand", 40, 78, Align.LEFT, false),
-        Preset("Right hand", 40, 78, Align.RIGHT, false), Preset("Split", 38, 100, Align.CENTER, true, 16),
+        Preset("Small", 37, 90, Align.CENTER, false), Preset("Default", 44, 100, Align.CENTER, false),
+        Preset("Large", 53, 100, Align.CENTER, false), Preset("Left hand", 46, 78, Align.LEFT, false),
+        Preset("Right hand", 46, 78, Align.RIGHT, false), Preset("Split", 44, 100, Align.CENTER, true, 16),
     )
 
     private fun presetDropdown(land: Boolean): View {

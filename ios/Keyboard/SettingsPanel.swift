@@ -251,12 +251,12 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
     private struct Preset { let name: String; let h: Int; let w: Int; let align: Align; let split: Bool; let gap: Int }
 
     private func presets(_ l: Bool) -> [Preset] {
-        l ? [Preset(name: "Small", h: 44, w: 85, align: .center, split: false, gap: 0), Preset(name: "Default", h: 52, w: 100, align: .center, split: false, gap: 0),
-             Preset(name: "Large", h: 62, w: 100, align: .center, split: false, gap: 0), Preset(name: "Left hand", h: 52, w: 55, align: .left, split: false, gap: 0),
-             Preset(name: "Right hand", h: 52, w: 55, align: .right, split: false, gap: 0), Preset(name: "Split", h: 52, w: 100, align: .center, split: true, gap: 22)]
-          : [Preset(name: "Small", h: 32, w: 90, align: .center, split: false, gap: 0), Preset(name: "Default", h: 38, w: 100, align: .center, split: false, gap: 0),
-             Preset(name: "Large", h: 46, w: 100, align: .center, split: false, gap: 0), Preset(name: "Left hand", h: 40, w: 78, align: .left, split: false, gap: 0),
-             Preset(name: "Right hand", h: 40, w: 78, align: .right, split: false, gap: 0), Preset(name: "Split", h: 38, w: 100, align: .center, split: true, gap: 16)]
+        l ? [Preset(name: "Small", h: 49, w: 85, align: .center, split: false, gap: 0), Preset(name: "Default", h: 58, w: 100, align: .center, split: false, gap: 0),
+             Preset(name: "Large", h: 69, w: 100, align: .center, split: false, gap: 0), Preset(name: "Left hand", h: 58, w: 55, align: .left, split: false, gap: 0),
+             Preset(name: "Right hand", h: 58, w: 55, align: .right, split: false, gap: 0), Preset(name: "Split", h: 58, w: 100, align: .center, split: true, gap: 22)]
+          : [Preset(name: "Small", h: 37, w: 90, align: .center, split: false, gap: 0), Preset(name: "Default", h: 44, w: 100, align: .center, split: false, gap: 0),
+             Preset(name: "Large", h: 53, w: 100, align: .center, split: false, gap: 0), Preset(name: "Left hand", h: 46, w: 78, align: .left, split: false, gap: 0),
+             Preset(name: "Right hand", h: 46, w: 78, align: .right, split: false, gap: 0), Preset(name: "Split", h: 44, w: 100, align: .center, split: true, gap: 16)]
     }
 
     private func currentPreset(_ l: Bool) -> String {
