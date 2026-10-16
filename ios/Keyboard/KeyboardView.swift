@@ -9,6 +9,7 @@ struct GlidePoint {
 protocol KeyboardViewDelegate: AnyObject {
     func chordTyped(_ word: String)
     func keyTapped(_ code: String)
+    func replacePressText(_ original: String, following: String, replacement: String)
     func longPressText(_ text: String)
     func stackFace(_ code: String)
     func suggestionPicked(_ text: String)
@@ -22,6 +23,7 @@ protocol KeyboardViewDelegate: AnyObject {
 
 extension KeyboardViewDelegate {
     func chordTyped(_ word: String) {}
+    func replacePressText(_ original: String, following: String, replacement: String) {}
     func switchLanguage(_ direction: Int) {}
     func glideFinished(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat) {}
 }
@@ -107,9 +109,25 @@ final class KeyboardView: UIView {
 
     private var isLandscape: Bool { let b = UIScreen.main.bounds; return b.width > b.height }
 
+    private var reducedMotion = UIAccessibility.isReduceMotionEnabled
+    private var highContrast: Bool { settings.theme == .highContrast }
+    private var systemTextScale: CGFloat {
+        guard settings.followSystemText else { return 1 }
+        let scaled = UIFontMetrics(forTextStyle: .body).scaledValue(for: 15, compatibleWith: traitCollection) / 15
+        return min(1.6, max(0.85, scaled))
+    }
+    private var labelScale: CGFloat { CGFloat(settings.int(Prefs.textScale)) / 100 * systemTextScale }
+
+    private func refreshMotion() {
+        reducedMotion = UIAccessibility.isReduceMotionEnabled
+        if reducedMotion && glideID == nil { trail = [] }
+        layer.removeAllAnimations()
+        updateWiggle()
+    }
+
     func reloadSettings() {
-        if chordingEnabled != settings.chording { cancelTouches() }
-        chordingEnabled = settings.chording
+        cancelTouches()
+        refreshMotion()
         state.language = settings.currentLanguage
         dismissPopup()
         palette = Palette.of(settings.theme, dark: traitCollection.userInterfaceStyle == .dark)
@@ -160,7 +178,7 @@ final class KeyboardView: UIView {
         let th = Double(tilt) * Double.pi / 180
         let n = grid.rows
         let gap = CGFloat(settings.int(Prefs.keyGap))
-        stripH = screenH < 500 ? 34 : 40
+        stripH = max(screenH < 500 ? 34 : 40, 22 * labelScale + 8)
         let handleH: CGFloat = 14
         let pad: CGFloat = 4
         let bottomPad = CGFloat(p.bottomPadding)
@@ -550,8 +568,9 @@ final class KeyboardView: UIView {
                 e.activate = { [weak self] in
                     guard let self = self, let popup = self.popup, popup.choices.indices.contains(i) else { return false }
                     let choice = popup.choices[i]
+                    let owner = popup.owner
                     self.dismissPopup()
-                    self.delegate?.longPressText(choice)
+                    self.commitPopup(owner, choice)
                     return true
                 }
             }
@@ -562,10 +581,11 @@ final class KeyboardView: UIView {
     }
 
     private func activateAccessibleKey(_ index: Int) -> Bool {
-        guard placed.indices.contains(index), let delegate = delegate else { return false }
+        guard placed.indices.contains(index), delegate != nil else { return false }
         let item = placed[index].item
+        if !acceptKeyTap(item, CACurrentMediaTime()) { return true }
         click()
-        delegate.keyTapped(item.keys[shownIdx(item)])
+        emitKey(item.keys[shownIdx(item)])
         rebuildAccessibilityElements()
         setNeedsDisplay()
         return true
@@ -623,7 +643,7 @@ final class KeyboardView: UIView {
         for pk in placed {
             ctx.saveGState()
             ctx.concatenate(pk.t)
-            if editMode {
+            if editMode && !reducedMotion {
                 ctx.translateBy(x: pk.rect.midX, y: pk.rect.midY)
                 ctx.rotate(by: wiggle(pk.item, now))
                 ctx.translateBy(x: -pk.rect.midX, y: -pk.rect.midY)
@@ -648,7 +668,7 @@ final class KeyboardView: UIView {
         ctx.setLineJoin(.round)
         for i in 1..<trail.count {
             let a = trail[i - 1], b = trail[i]
-            let alpha = max(0, min(1, 1 - (now - b.time) / 0.3))
+            let alpha = reducedMotion ? 1 : max(0, min(1, 1 - (now - b.time) / 0.3))
             if alpha <= 0 { continue }
             ctx.setStrokeColor(palette.accent.withAlphaComponent(CGFloat(alpha * 0.86)).cgColor)
             ctx.move(to: a.position); ctx.addLine(to: b.position); ctx.strokePath()
@@ -661,29 +681,45 @@ final class KeyboardView: UIView {
     }
 
     private func drawKey(_ ctx: CGContext, _ item: GridKey, _ rect: CGRect, _ radius: CGFloat, _ pressed: Bool, _ alpha: CGFloat) {
+        let keyAlpha: CGFloat = highContrast ? 1 : alpha
         let face = shownIdx(item)
         let code = item.keys[face]
         let lock = code == Keys.abc && state.layer == .abc && state.capsLock
         let oneShot = code == Keys.abc && state.layer == .abc && state.shift && !state.capsLock
         let accentBg = code == Keys.enter || lock
         let bg: UIColor
-        if pressed { bg = palette.pressed }
+        if highContrast { bg = palette.key }
+        else if pressed { bg = palette.pressed }
         else if accentBg { bg = palette.accent }
         else if KeyText.isLayerKey(code) || code == Keys.backspace { bg = palette.functionKey }
         else { bg = palette.key }
-        bg.withAlphaComponent(alpha).setFill()
+        bg.withAlphaComponent(keyAlpha).setFill()
         UIBezierPath(roundedRect: rect, cornerRadius: radius).fill()
-        if !editMode, let key = code.lowercased().first, code.count == 1, chordHighlight.contains(key) {
+        if !highContrast, !editMode, let key = code.lowercased().first, code.count == 1, chordHighlight.contains(key) {
             palette.accent.withAlphaComponent(0.43).setFill()
             UIBezierPath(roundedRect: rect, cornerRadius: radius).fill()
         }
-        if settings.keyTint && state.layer == .abc && !editMode && !pressed && !item.isStack &&
+        if !highContrast && settings.keyTint && state.layer == .abc && !editMode && !pressed && !item.isStack &&
            code.count == 1 && code.first!.isLetter && !keyWeights.isEmpty {
             let weight = keyWeights[code.lowercased().first!] ?? 0
             palette.accent.withAlphaComponent(CGFloat(0.22 * weight)).setFill()
             UIBezierPath(roundedRect: rect, cornerRadius: radius).fill()
         }
-        let fg = (accentBg && !pressed ? palette.onAccent : (oneShot ? palette.accent : palette.text)).withAlphaComponent(alpha)
+        if highContrast {
+            palette.text.setStroke()
+            let outline = UIBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), cornerRadius: radius)
+            outline.lineWidth = 2; outline.stroke()
+        }
+        let key = code.lowercased().first
+        let highlighted = accentBg || oneShot || pressed || (key.map { chordHighlight.contains($0) } ?? false) ||
+            (settings.keyTint && !editMode && (key.flatMap { keyWeights[$0] } ?? 0) > 0.1)
+        if (editMode && reducedMotion) || (highContrast && highlighted) {
+            palette.accent.setStroke()
+            let pad: CGFloat = highContrast ? 4 : 1
+            let outline = UIBezierPath(roundedRect: rect.insetBy(dx: pad, dy: pad), cornerRadius: radius)
+            outline.lineWidth = 2; outline.stroke()
+        }
+        let fg = (highContrast ? palette.text : (accentBg && !pressed ? palette.onAccent : (oneShot ? palette.accent : palette.text))).withAlphaComponent(keyAlpha)
 
         ctx.saveGState()
         ctx.clip(to: rect)
@@ -701,12 +737,12 @@ final class KeyboardView: UIView {
             let step: CGFloat = 5
             let top = rect.midY - CGFloat(n - 1) * step / 2
             for i in 0..<n {
-                fg.withAlphaComponent(alpha * (i == face ? 0.9 : 0.3)).setFill()
+                fg.withAlphaComponent(keyAlpha * (i == face ? 0.9 : 0.3)).setFill()
                 UIBezierPath(ovalIn: CGRect(x: rect.minX + 3.5, y: top + CGFloat(i) * step - 1.5, width: 3, height: 3)).fill()
             }
         }
         if !item.isStack && grid.rows == 4 && settings.showHints, let h = KeyText.hint(code, state) {
-            drawText(h, center: CGPoint(x: rect.maxX - rect.height * 0.14, y: rect.minY + rect.height * 0.16), size: rect.height * 0.2, color: palette.hint.withAlphaComponent(alpha))
+            drawText(h, center: CGPoint(x: rect.maxX - rect.height * 0.14, y: rect.minY + rect.height * 0.16), size: min(rect.height * 0.2 * labelScale, min(rect.width * 0.35, rect.height * 0.32)), color: palette.hint.withAlphaComponent(keyAlpha))
         }
         if editMode && item.isStack {
             palette.accent.setFill()
@@ -723,32 +759,37 @@ final class KeyboardView: UIView {
 
     private func drawFace(_ code: String, _ rect: CGRect, _ offset: CGFloat, _ color: UIColor) {
         let r = rect.offsetBy(dx: 0, dy: offset)
-        let scale = CGFloat(settings.int(Prefs.textScale)) / 100
-        let icon = Swift.min(r.width, r.height) * 0.42 * scale
+        let scale = labelScale
+        let icon = Swift.min(r.width, r.height) * 0.42 * CGFloat(settings.int(Prefs.textScale)) / 100
         let center = CGPoint(x: r.midX, y: r.midY)
         switch code {
         case Keys.backspace: drawDelete(center, icon, color)
         case Keys.enter:
-            if let l = enterLabel { drawText(l, center: center, size: r.height * 0.3 * scale, color: color, maxWidth: r.width * 0.85) }
+            if let l = enterLabel { drawText(l, center: center, size: r.height * 0.3 * scale, color: color, maxWidth: r.width * 0.85, maxHeight: r.height * 0.85) }
             else { drawReturn(center, icon, color) }
         case Keys.space:
             if settings.languages.count > 1 && !editMode {
-                drawText(state.language.uppercased(), center: center, size: Swift.min(12, r.height * 0.25), color: palette.hint)
+                drawText(state.language.uppercased(), center: center, size: Swift.min(12, r.height * 0.25) * scale, color: palette.hint, maxWidth: r.width * 0.85, maxHeight: r.height * 0.85)
             }
         default:
             let label = KeyText.label(code, state)
             let size = Swift.min(r.height * 0.42, 22) * scale
-            drawText(label, center: center, size: label.count > 1 ? size * 0.72 : size, color: color, maxWidth: r.width * 0.85)
+            drawText(label, center: center, size: label.count > 1 ? size * 0.72 : size, color: color, maxWidth: r.width * 0.85, maxHeight: r.height * 0.85)
         }
     }
 
-    private func drawText(_ s: String, center: CGPoint, size: CGFloat, color: UIColor, maxWidth: CGFloat? = nil) {
+    private func drawText(_ s: String, center: CGPoint, size: CGFloat, color: UIColor, maxWidth: CGFloat? = nil, maxHeight: CGFloat? = nil) {
         guard size > 0 else { return }
-        var font = UIFont.systemFont(ofSize: size)
+        var font = UIFont.systemFont(ofSize: size, weight: highContrast ? .bold : .regular)
         var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
         var sz = (s as NSString).size(withAttributes: attrs)
         if let mw = maxWidth, sz.width > mw, sz.width > 0 {
             font = font.withSize(size * mw / sz.width)
+            attrs[.font] = font
+            sz = (s as NSString).size(withAttributes: attrs)
+        }
+        if let mh = maxHeight, sz.height > mh, sz.height > 0 {
+            font = font.withSize(font.pointSize * mh / sz.height)
             attrs[.font] = font
             sz = (s as NSString).size(withAttributes: attrs)
         }
@@ -830,7 +871,7 @@ final class KeyboardView: UIView {
 
     // MARK: - Suggestion wheels
 
-    private let wheelFont = UIFont.systemFont(ofSize: 15)
+    private var wheelFont: UIFont { .systemFont(ofSize: 15 * labelScale, weight: highContrast ? .bold : .regular) }
     private func words(_ w: Wheel) -> [String] { w.side == 0 ? sugLeft : sugRight }
     private func wordAt(_ list: [String], _ i: Int) -> String { list[((i % list.count) + list.count) % list.count] }
     private func textWidth(_ s: String) -> CGFloat { (s as NSString).size(withAttributes: [.font: wheelFont]).width }
@@ -861,7 +902,7 @@ final class KeyboardView: UIView {
             for k in wheelRange(list.count) {
                 let word = wordAt(list, wh.index + k)
                 let cx = wh.rect.midX + offsetOf(list, wh.index, k) + wh.dragDx
-                let alpha: CGFloat = k == 0 ? 1 : 0.4
+                let alpha: CGFloat = highContrast || k == 0 ? 1 : 0.4
                 let x = cx - textWidth(word) / 2
                 // The part you've already typed is highlighted.
                 if !prefix.isEmpty && word.count >= prefix.count && word.lowercased().hasPrefix(prefix.lowercased()) {
@@ -893,7 +934,7 @@ final class KeyboardView: UIView {
     private var popup: AccentPopup?
 
     @discardableResult private func openPopup(_ pk: Placed, _ owner: Tracker?) -> Bool {
-        let choices = KeyText.alternatives(pk.item.keys[shownIdx(pk.item)], state, settings.showHints)
+        let choices = owner?.pressChoices ?? KeyText.alternatives(pk.item.keys[shownIdx(pk.item)], state, settings.showHints)
         guard !choices.isEmpty else { return false }
         dismissPopup()
         let anchor = pk.rect.applying(pk.t)
@@ -934,16 +975,19 @@ final class KeyboardView: UIView {
             let shape = UIBezierPath(roundedRect: r, cornerRadius: 6)
             shape.fill()
             palette.text.setStroke()
-            shape.lineWidth = 1
+            shape.lineWidth = highContrast ? 2 : 1
             shape.stroke()
-            drawText(p.choices[i], center: CGPoint(x: r.midX, y: r.midY), size: Swift.min(22, r.height * 0.5),
-                     color: p.selected == i ? palette.onAccent : palette.text, maxWidth: r.width * 0.85)
+            drawText(p.choices[i], center: CGPoint(x: r.midX, y: r.midY), size: Swift.min(22 * labelScale, r.height * 0.5),
+                     color: p.selected == i ? palette.onAccent : palette.text, maxWidth: r.width * 0.85, maxHeight: r.height * 0.85)
         }
     }
 
     private final class Tracker {
         let kind: Kind
         var pk: Placed?
+        var pressedText: String?
+        var followingText = ""
+        var pressChoices: [String]?
         var languageDirection = 0
         var consumed = false
         var moved = false
@@ -965,7 +1009,7 @@ final class KeyboardView: UIView {
 
     private var trackers: [ObjectIdentifier: Tracker] = [:]
     private var swipe: Swipe?
-    private var chordingEnabled = false
+    private var lastKeyTaps: [Int: TimeInterval] = [:]
     private let chordTouches = ChordTouches<ObjectIdentifier>()
     private var chordHighlight = Set<Character>()
     private var chordHighlightWork: DispatchWorkItem?
@@ -989,7 +1033,7 @@ final class KeyboardView: UIView {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for t in (settings.chording ? touches.sorted { $0.timestamp < $1.timestamp } : Array(touches)) {
+        for t in touches.sorted(by: { $0.timestamp < $1.timestamp }) {
             let p = t.location(in: self)
             if editMode { editBegan(t, p) } else { down(ObjectIdentifier(t), p, t.timestamp) }
         }
@@ -1036,6 +1080,9 @@ final class KeyboardView: UIView {
 
     private func down(_ id: ObjectIdentifier, _ p: CGPoint, _ time: TimeInterval) {
         if glideID != nil { return }
+        let onControl = gearRect.contains(p) || handleRect.contains(p) || wheels.contains { $0.rect.contains(p) } ||
+            leftSpace?.contains(p) == true || rightSpace?.contains(p) == true
+        if !onControl, let pk = findKey(p), !acceptKeyTap(pk.item, time) { return }
         let chordKey: Placed?
         if settings.chording, state.layer == .abc, !editMode, popup == nil,
            !gearRect.contains(p), !handleRect.contains(p), !wheels.contains(where: { $0.rect.contains(p) }),
@@ -1074,6 +1121,7 @@ final class KeyboardView: UIView {
         if chordKey == nil { click() }
         if pk.item.isStack {
             let t = Tracker(kind: .stack, pk: pk); t.x0 = p.x; t.y0 = p.y; trackers[id] = t
+            pressLetter(t)
             startLongPress(t)
             swipe = Swipe(item: pk.item)
             setNeedsDisplay()
@@ -1094,13 +1142,14 @@ final class KeyboardView: UIView {
         }
         if pk.item.keys[0] == Keys.backspace {
             t.consumed = true
-            delegate?.keyTapped(Keys.backspace)
+            emitKey(Keys.backspace)
             t.repeatTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self, weak t] _ in
                 guard let t = t else { return }
-                t.repeatTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.delegate?.keyTapped(Keys.backspace) }
+                t.repeatTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.emitKey(Keys.backspace) }
                 _ = self
             }
         } else if !chordTouches.isCandidate(id) {
+            pressLetter(t)
             startLongPress(t)
         }
         setNeedsDisplay()
@@ -1157,6 +1206,7 @@ final class KeyboardView: UIView {
             // UITextDocumentProxy has no API to select text.
             let steps = Int((p.x - t.x0) / 9)
             if steps != 0 {
+                invalidatePressAccents()
                 delegate?.moveCursor(steps)
                 t.x0 += CGFloat(steps) * 9
                 for _ in 0..<abs(steps) { click() }
@@ -1201,7 +1251,7 @@ final class KeyboardView: UIView {
             finishChords(chordTouches.release(id).completions)
             let choice = popup.selected.map { popup.choices[$0] }
             dismissPopup()
-            if let choice = choice { delegate?.longPressText(choice) }
+            if let choice = choice { commitPopup(t, choice) }
             return
         }
         if t.languageDirection != 0 {
@@ -1211,6 +1261,7 @@ final class KeyboardView: UIView {
         }
         if glideID == id {
             glideID = nil
+            if reducedMotion { trail = []; updateWiggle() }
             delegate?.glideFinished(t.points, letterCentres, letterWidth)
             setNeedsDisplay()
             return
@@ -1237,6 +1288,7 @@ final class KeyboardView: UIView {
                 }
                 wh.index = ((wh.index + best) % list.count + list.count) % list.count
             } else if !list.isEmpty {
+                invalidatePressAccents()
                 delegate?.suggestionPicked(wordAt(list, wh.index))
             }
             wh.dragDx = 0
@@ -1244,7 +1296,7 @@ final class KeyboardView: UIView {
             if t.moved && abs(t.lastX - t.x0) > 36 { slide(left: t.lastX < t.x0) }
         case .stack:
             swipe = nil
-            if !t.moved, !t.consumed, let pk = t.pk { delegate?.keyTapped(pk.item.keys[shownIdx(pk.item)]) }
+            if !t.moved, !t.consumed, let pk = t.pk { emitKey(pk.item.keys[shownIdx(pk.item)]) }
         case .key:
             if !t.consumed { commit(t) }
         case .gear:
@@ -1258,7 +1310,7 @@ final class KeyboardView: UIView {
     private func finishChords(_ completions: [ChordTouches<ObjectIdentifier>.Completion]) {
         for completion in completions {
             if completion.candidate { finishChord(completion.entries) }
-            else { for entry in completion.entries { click(); delegate?.keyTapped(String(entry.letter)) } }
+            else { for entry in completion.entries { click(); emitKey(String(entry.letter)) } }
         }
     }
 
@@ -1278,14 +1330,49 @@ final class KeyboardView: UIView {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
             UIAccessibility.post(notification: .announcement, argument: chord.word)
         } else {
-            for entry in entries { click(); delegate?.keyTapped(String(entry.letter)) }
+            for entry in entries { click(); emitKey(String(entry.letter)) }
         }
+    }
+
+    private func acceptKeyTap(_ item: GridKey, _ time: TimeInterval) -> Bool {
+        if let previous = lastKeyTaps[item.id], time >= previous,
+           time - previous < Double(settings.int(Prefs.keyRepeatGuard)) / 1000 { return false }
+        lastKeyTaps[item.id] = time
+        return true
+    }
+
+    private func invalidatePressAccents() {
+        for t in trackers.values where t.pressedText != nil { t.pressedText = nil; t.stop() }
+    }
+
+    private func emitKey(_ code: String) {
+        if let output = KeyText.output(code, state) {
+            for t in trackers.values where t.pressedText != nil { t.followingText += output }
+        } else { invalidatePressAccents() }
+        delegate?.keyTapped(code)
+    }
+
+    private func pressLetter(_ t: Tracker) {
+        guard let item = t.pk?.item else { return }
+        let code = item.keys[shownIdx(item)]
+        guard settings.typeOnPress, state.layer == .abc, code.count == 1, code.first!.isLetter,
+              let output = KeyText.output(code, state) else { return }
+        t.pressChoices = KeyText.alternatives(code, state, settings.showHints)
+        emitKey(code)
+        t.pressedText = output
+        t.consumed = true
+    }
+
+    private func commitPopup(_ t: Tracker?, _ choice: String) {
+        if let t = t, let original = t.pressedText {
+            delegate?.replacePressText(original, following: t.followingText, replacement: choice)
+        } else { delegate?.longPressText(choice) }
     }
 
     private func commit(_ t: Tracker) {
         if t.deferredClick { t.deferredClick = false; click() }
         guard let item = t.pk?.item else { return }
-        delegate?.keyTapped(item.keys[0])
+        emitKey(item.keys[0])
     }
 
     private func longPress(_ t: Tracker) {
@@ -1301,8 +1388,11 @@ final class KeyboardView: UIView {
 
     /// The key under a point. Gaps and edges belong to the nearest key, so taps never fall through.
     private func findKey(_ p: CGPoint, strict: Bool = false, skip: GridKey? = nil) -> Placed? {
-        let slack = CGFloat(settings.int(Prefs.keyGap)) / 2 + 1
-        let hit = placed.reversed().first { $0.item !== skip && $0.rect.insetBy(dx: -slack, dy: -slack).contains(p.applying($0.inv)) }
+        let baseSlack = CGFloat(settings.int(Prefs.keyGap)) / 2 + 1
+        let slack = baseSlack + CGFloat(settings.int(Prefs.touchSlack))
+        // Existing targets win before extra slack, including on narrow, rotated split layouts.
+        let hit = placed.reversed().first { $0.item !== skip && $0.rect.insetBy(dx: -baseSlack, dy: -baseSlack).contains(p.applying($0.inv)) }
+            ?? placed.reversed().first { $0.item !== skip && $0.rect.insetBy(dx: -slack, dy: -slack).contains(p.applying($0.inv)) }
         func isLetter(_ pk: Placed) -> Bool {
             let code = pk.item.keys[0]
             return !pk.item.isStack && code.count == 1 && code.first!.isLetter
@@ -1396,7 +1486,7 @@ final class KeyboardView: UIView {
     private func updateWiggle() {
         displayLink?.invalidate()
         displayLink = nil
-        guard editMode || !trail.isEmpty else { return }
+        guard !reducedMotion && (editMode || !trail.isEmpty) else { return }
         let link = CADisplayLink(target: self, selector: #selector(tick))
         link.add(to: .main, forMode: .common)
         displayLink = link
@@ -1414,7 +1504,7 @@ final class KeyboardView: UIView {
 
     override func willMove(toWindow newWindow: UIWindow?) {
         super.willMove(toWindow: newWindow)
-        if newWindow == nil { cancelTouches(); displayLink?.invalidate(); displayLink = nil } else { updateWiggle() }
+        if newWindow == nil { cancelTouches(); displayLink?.invalidate(); displayLink = nil } else { refreshMotion(); setNeedsDisplay() }
     }
 
     private func editBegan(_ t: UITouch, _ p: CGPoint) {

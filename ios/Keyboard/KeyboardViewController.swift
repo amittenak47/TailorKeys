@@ -207,6 +207,18 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         updateSuggestions()
     }
 
+    func replacePressText(_ original: String, following: String, replacement: String) {
+        let proxy = textDocumentProxy
+        guard proxy.documentContextBeforeInput?.hasSuffix(original + following) == true else { return }
+        if !following.isEmpty { proxy.adjustTextPosition(byCharacterOffset: -following.count) }
+        for _ in original { proxy.deleteBackward() }
+        proxy.insertText(replacement)
+        if !following.isEmpty { proxy.adjustTextPosition(byCharacterOffset: following.count) }
+        updateAutoCap()
+        updateSuggestions()
+        keyboard.setNeedsDisplay()
+    }
+
     func longPressText(_ text: String) {
         insert(text)
         updateSuggestions()

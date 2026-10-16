@@ -126,6 +126,7 @@ struct SettingSlider: View {
     @Binding var value: Double
     var suffix = ""
     var signed = false
+    var offAtZero = false
     var onEditingChanged: (Bool) -> Void = { _ in }
 
     var body: some View {
@@ -133,12 +134,13 @@ struct SettingSlider: View {
             HStack {
                 Text(title)
                 Spacer()
-                Text((signed && value > 0 ? "+" : "") + "\(Int(value))" + suffix)
+                Text(offAtZero && value == 0 ? "Off" : (signed && value > 0 ? "+" : "") + "\(Int(value))" + suffix)
                     .font(.system(size: 15)).foregroundColor(.secondary).monospacedDigit()
             }
             Slider(value: $value, in: Double(pref.min)...Double(pref.max), step: 1,
                    onEditingChanged: onEditingChanged)
                 .accessibilityLabel(title)
+                .accessibilityValue(offAtZero && value == 0 ? "Off" : "\(Int(value))" + suffix)
         }
         .padding(.top, 8)
     }

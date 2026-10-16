@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SettingsScreen: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var model: AppSettingsModel
     let tab: SettingsTab
     @State private var ratio = 1.0
@@ -47,6 +48,7 @@ struct SettingsScreen: View {
         } message: {
             Text("Move other keys out of the top row before removing the number row.")
         }
+        .transaction { if reduceMotion { $0.disablesAnimations = true; $0.animation = nil } }
     }
 
     private func pinsPreview(in height: CGFloat) -> Bool {
@@ -259,6 +261,7 @@ struct SettingsScreen: View {
                 SettingSlider(title: "Key spacing", pref: Prefs.keyGap, value: model.integer(Prefs.keyGap))
                 SettingSlider(title: "Corner radius", pref: Prefs.cornerRadius, value: model.integer(Prefs.cornerRadius))
                 SettingSlider(title: "Text size", pref: Prefs.textScale, value: model.integer(Prefs.textScale), suffix: "%")
+                Toggle("Use system text size", isOn: model.bool(Prefs.followSystemText, default: true))
                 Toggle("Number row", isOn: Binding(get: { prefs.numberRow }, set: { on in
                     if !model.setNumberRow(on) { numberRowBlocked = true }
                 }))
@@ -295,11 +298,19 @@ struct SettingsScreen: View {
                               value: model.integer(Prefs.longPressMs), suffix: " ms")
             }
             .disabled(!model.fullAccessConfirmed)
+            Section(header: Text("Accessibility").textCase(nil).font(.system(size: 15, weight: .semibold))) {
+                Toggle("Type on press", isOn: model.bool(Prefs.typeOnPress, default: false))
+                SettingSlider(title: "Ignore repeated taps", pref: Prefs.keyRepeatGuard,
+                              value: model.integer(Prefs.keyRepeatGuard), suffix: " ms", offAtZero: true)
+                SettingSlider(title: "Extra tap area", pref: Prefs.touchSlack,
+                              value: model.integer(Prefs.touchSlack), suffix: " pt")
+            }
+            .disabled(!model.fullAccessConfirmed)
             Section(header: Text("Assist").textCase(nil).font(.system(size: 15, weight: .semibold))) {
-                Toggle("Swipe typing", isOn: model.bool(Prefs.swipeTyping, default: true))
+                assistedToggle("Swipe typing", Prefs.swipeTyping, default: true)
                 Toggle("Highlight likely keys", isOn: model.bool(Prefs.keyTint, default: true))
                 Toggle("Smart tap areas", isOn: model.bool(Prefs.smartTargets, default: true))
-                Toggle("Chords", isOn: model.bool(Prefs.chording, default: false))
+                assistedToggle("Chords", Prefs.chording, default: false)
                 Button("Chord list") { chordsOpen = true }
             }
             .disabled(!model.fullAccessConfirmed)
@@ -310,6 +321,18 @@ struct SettingsScreen: View {
             Section {
                 Button("Reset settings", role: .destructive) { confirmReset = true }
                     .disabled(!model.fullAccessConfirmed)
+            }
+        }
+    }
+
+    private func assistedToggle(_ title: String, _ key: String, default value: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(title, isOn: Binding(get: { !prefs.typeOnPress && prefs.bool(key, value) }, set: { on in
+                prefs.set(key, on); model.changed()
+            }))
+            .disabled(prefs.typeOnPress)
+            if prefs.typeOnPress {
+                Text("Off while Type on press is on").font(.footnote).foregroundColor(.secondary)
             }
         }
     }
@@ -340,11 +363,14 @@ private struct ThemeSwatch: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 10).fill(Color(palette.background))
                     RoundedRectangle(cornerRadius: 5).fill(Color(palette.key)).padding(8)
-                    Text("A").font(.system(size: 15)).foregroundColor(Color(palette.text))
+                    if theme == .highContrast {
+                        RoundedRectangle(cornerRadius: 5).stroke(Color.white, lineWidth: 2).padding(8)
+                    }
+                    Text("A").font(.system(size: 15, weight: theme == .highContrast ? .bold : .regular)).foregroundColor(Color(palette.text))
                 }
                 .frame(width: 44, height: 44)
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? AppStyle.accent : .clear, lineWidth: 2))
-                Text(themeTitle(theme)).font(.system(size: 11)).foregroundColor(selected ? AppStyle.accent : .secondary)
+                Text(themeTitle(theme)).font(.system(size: 11)).multilineTextAlignment(.center).foregroundColor(selected ? AppStyle.accent : .secondary)
             }
             .frame(maxWidth: .infinity)
         }

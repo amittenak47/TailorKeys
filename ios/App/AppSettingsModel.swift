@@ -74,7 +74,7 @@ final class AppSettingsModel: ObservableObject {
             showReady = true
             readyWork?.cancel()
             let work = DispatchWorkItem { [weak self] in
-                withAnimation(.easeOut(duration: 0.2)) { self?.showReady = false }
+                withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .easeOut(duration: 0.2)) { self?.showReady = false }
             }
             readyWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)

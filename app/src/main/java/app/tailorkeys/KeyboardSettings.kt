@@ -39,9 +39,13 @@ object Prefs {
     val CURVE = IntPref("curve", 70, 0, 100)
     val KEY_GAP = IntPref("key_gap", 5, 0, 14)
     val CORNER_RADIUS = IntPref("corner_radius", 8, 0, 20)
+    val KEY_REPEAT_GUARD = IntPref("key_repeat_guard", 0, 0, 300)
+    val TOUCH_SLACK = IntPref("touch_slack", 0, 0, 12)
     val TEXT_SCALE = IntPref("text_scale", 100, 60, 160)
     val LONG_PRESS_MS = IntPref("long_press_ms", 350, 150, 800)
 
+    val FOLLOW_SYSTEM_TEXT = BoolPref("follow_system_text", true)
+    val TYPE_ON_PRESS = BoolPref("type_on_press", false)
     val NUMBER_ROW = BoolPref("number_row", true)
     val SHOW_HINTS = BoolPref("show_hints", true)
     val AUTO_CAP = BoolPref("auto_cap", true)

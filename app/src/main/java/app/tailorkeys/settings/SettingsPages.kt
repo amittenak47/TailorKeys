@@ -22,6 +22,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -166,6 +167,7 @@ internal fun LazyListScope.lookOptions(state: SettingsState) {
                 val value = state.int(pref)
                 SettingSlider(label, value, pref, if (pref == Prefs.TEXT_SCALE) "$value%" else "$value") { state.set(pref, it) }
             }
+            ToggleRow("Use system text size", state.bool(Prefs.FOLLOW_SYSTEM_TEXT)) { state.set(Prefs.FOLLOW_SYSTEM_TEXT, it) }
         }
     }
     item("labels") {
@@ -221,10 +223,11 @@ private fun ThemeControl(state: SettingsState) {
 private fun ThemeSwatch(theme: ThemeName, modifier: Modifier) {
     val background = when (theme) {
         ThemeName.SYSTEM -> Color(0xFFF7F4EC); ThemeName.LIGHT -> Color(0xFFCFCABD)
-        ThemeName.DARK -> Color(0xFF2B2B2E); ThemeName.MIDNIGHT -> Color(0xFF0B1230); ThemeName.WARM -> Color(0xFFDDD2BC)
+        ThemeName.DARK -> Color(0xFF2B2B2E); ThemeName.MIDNIGHT -> Color(0xFF0B1230); ThemeName.WARM -> Color(0xFFDDD2BC); ThemeName.HIGH_CONTRAST -> Color.Black
     }
     val key = when (theme) {
         ThemeName.DARK -> Color(0xFF4A4A4F); ThemeName.MIDNIGHT -> Color(0xFF26367A)
+        ThemeName.HIGH_CONTRAST -> Color.Black
         ThemeName.WARM -> Color(0xFFFFFCF5); else -> Color.White
     }
     Canvas(modifier.clip(RoundedCornerShape(14.dp)).background(background)) {
@@ -232,8 +235,12 @@ private fun ThemeSwatch(theme: ThemeName, modifier: Modifier) {
             drawPath(Path().apply { moveTo(size.width, 0f); lineTo(size.width, size.height); lineTo(0f, size.height); close() }, Color(0xFF2B2B2E))
         } else {
             val w = size.width * 14 / 44; val h = size.height * 16 / 44
-            for (i in 0..1) drawRoundRect(key, Offset(size.width * (6 + i * 18) / 44, (size.height - h) / 2),
-                Size(w, h), CornerRadius(3.dp.toPx()))
+            for (i in 0..1) {
+                val offset = Offset(size.width * (6 + i * 18) / 44, (size.height - h) / 2)
+                drawRoundRect(key, offset, Size(w, h), CornerRadius(3.dp.toPx()))
+                if (theme == ThemeName.HIGH_CONTRAST) drawRoundRect(if (i == 0) Color.White else Color(0xFFFFD400),
+                    offset, Size(w, h), CornerRadius(3.dp.toPx()), style = Stroke(2.dp.toPx()))
+            }
         }
     }
 }
@@ -273,6 +280,18 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
             SettingSlider("Long-press time", time, Prefs.LONG_PRESS_MS, "$time ms") { state.set(Prefs.LONG_PRESS_MS, it) }
         }
     }
+    item("accessibility") {
+        Column {
+            GroupTitle("Accessibility")
+            OptionGroup {
+                ToggleRow("Type on press", state.bool(Prefs.TYPE_ON_PRESS)) { state.set(Prefs.TYPE_ON_PRESS, it) }
+                val guard = state.int(Prefs.KEY_REPEAT_GUARD)
+                SettingSlider("Ignore repeated taps", guard, Prefs.KEY_REPEAT_GUARD, if (guard == 0) "Off" else "$guard ms") { state.set(Prefs.KEY_REPEAT_GUARD, it) }
+                val slack = state.int(Prefs.TOUCH_SLACK)
+                SettingSlider("Extra tap area", slack, Prefs.TOUCH_SLACK, "$slack dp") { state.set(Prefs.TOUCH_SLACK, it) }
+            }
+        }
+    }
     item("assist") {
         var open by remember { mutableStateOf(false) }
         val language = state.chordLanguage()
@@ -295,7 +314,9 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
             GroupTitle("Assist")
             OptionGroup {
                 for ((label, pref) in listOf("Swipe typing" to Prefs.SWIPE_TYPING, "Highlight likely keys" to Prefs.KEY_TINT, "Smart tap areas" to Prefs.SMART_TARGETS, "Vibrate on typos" to Prefs.TYPO_BUZZ, "Chords" to Prefs.CHORDING)) {
-                    ToggleRow(label, state.bool(pref)) { state.set(pref, it) }
+                    val blocked = state.bool(Prefs.TYPE_ON_PRESS) && (pref == Prefs.SWIPE_TYPING || pref == Prefs.CHORDING)
+                    ToggleRow(label, !blocked && state.bool(pref), enabled = !blocked,
+                        note = if (blocked) "Off while Type on press is on" else null) { state.set(pref, it) }
                 }
                 ActionRow("Chord list") { open = true }
             }

@@ -253,6 +253,19 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         repeat(abs(steps)) { sendDownUpKeyEvents(code) }
     }
 
+    override fun onReplacePressText(original: String, following: String, replacement: String) {
+        val ic = currentInputConnection ?: return
+        val expected = original + following
+        if (ic.getTextBeforeCursor(expected.length, 0)?.toString() != expected) return
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(expected.length, 0)
+        ic.commitText(replacement + following, 1)
+        ic.endBatchEdit()
+        updateAutoCap()
+        updateSuggestions(true)
+        keyboardView?.invalidate()
+    }
+
     override fun onLongPressText(text: String) {
         commit(text)
         updateSuggestions(text.any { it.isLetter() })

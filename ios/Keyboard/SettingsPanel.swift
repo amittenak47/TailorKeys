@@ -218,9 +218,32 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
             self.settings.theme = t
             self.changed(rebuild: true)
         })
+        let swatches = UIStackView()
+        swatches.distribution = .fillEqually
+        swatches.spacing = 6
+        for theme in ThemeName.allCases {
+            let palette = Palette.of(theme, dark: traitCollection.userInterfaceStyle == .dark)
+            let button = UIButton(type: .system)
+            button.setTitle("A", for: .normal)
+            button.titleLabel?.font = .systemFont(ofSize: 17, weight: theme == .highContrast ? .bold : .regular)
+            button.backgroundColor = palette.background
+            button.setTitleColor(palette.text, for: .normal)
+            button.layer.cornerRadius = 6
+            button.layer.borderWidth = 2
+            button.layer.borderColor = (theme == .highContrast ? UIColor.white : palette.accent).cgColor
+            button.accessibilityLabel = theme.title
+            button.accessibilityTraits = settings.theme == theme ? [.button, .selected] : [.button]
+            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+            button.addAction(UIAction { [weak self] _ in
+                self?.settings.theme = theme; self?.changed(rebuild: true)
+            }, for: .touchUpInside)
+            swatches.addArrangedSubview(button)
+        }
+        stack.addArrangedSubview(swatches)
         stack.addArrangedSubview(sliderRow("Space between keys", Prefs.keyGap, format: { "\($0) pt" }))
         stack.addArrangedSubview(sliderRow("Corner roundness", Prefs.cornerRadius, format: { "\($0) pt" }))
-        stack.addArrangedSubview(sliderRow("Label size", Prefs.textScale, format: { "\($0)%" }))
+        stack.addArrangedSubview(sliderRow("Text size", Prefs.textScale, format: { "\($0)%" }))
+        stack.addArrangedSubview(switchRow("Use system text size", settings.followSystemText) { [weak self] on in self?.settings.set(Prefs.followSystemText, on); self?.changed() })
         stack.addArrangedSubview(switchRow("Number row", settings.numberRow) { [weak self] on in
             guard let self = self else { return }
             if self.onNumberRow?(on) == false { self.build() }
@@ -234,6 +257,33 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
         stack.addArrangedSubview(switchRow("Double space types a period", settings.doubleSpace) { [weak self] on in self?.settings.set(Prefs.doubleSpace, on) })
         stack.addArrangedSubview(switchRow("Key click sound", settings.clicks) { [weak self] on in self?.settings.set(Prefs.clicks, on) })
         stack.addArrangedSubview(sliderRow("Long-press delay", Prefs.longPressMs, format: { "\($0) ms" }))
+
+        let accessibility = label("Accessibility")
+        accessibility.font = .boldSystemFont(ofSize: 15)
+        stack.addArrangedSubview(accessibility)
+        stack.addArrangedSubview(switchRow("Type on press", settings.typeOnPress) { [weak self] on in
+            self?.settings.set(Prefs.typeOnPress, on); self?.changed(rebuild: true)
+        })
+        stack.addArrangedSubview(sliderRow("Ignore repeated taps", Prefs.keyRepeatGuard, format: { $0 == 0 ? "Off" : "\($0) ms" }))
+        stack.addArrangedSubview(sliderRow("Extra tap area", Prefs.touchSlack, format: { "\($0) pt" }))
+        let assist = label("Assist")
+        assist.font = .boldSystemFont(ofSize: 15)
+        stack.addArrangedSubview(assist)
+        for (title, key, def) in [("Swipe typing", Prefs.swipeTyping, true), ("Chords", Prefs.chording, false)] {
+            let row = switchRow(title, !settings.typeOnPress && settings.bool(key, def)) { [weak self] on in
+                self?.settings.set(key, on); self?.changed()
+            }
+            row.isUserInteractionEnabled = !settings.typeOnPress
+            row.alpha = settings.typeOnPress ? 0.38 : 1
+            (row as? UIStackView)?.arrangedSubviews.compactMap { $0 as? UISwitch }.forEach { $0.isEnabled = !settings.typeOnPress }
+            stack.addArrangedSubview(row)
+            if settings.typeOnPress {
+                let note = label("Off while Type on press is on")
+                note.font = .systemFont(ofSize: 12); note.textColor = .secondaryLabel
+                note.numberOfLines = 0
+                stack.addArrangedSubview(note)
+            }
+        }
 
         stack.addArrangedSubview(linkButton("Reset all settings") { [weak self] in
             guard let self = self else { return }

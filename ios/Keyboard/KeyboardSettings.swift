@@ -24,9 +24,13 @@ enum Prefs {
     static let curve = IntPref(key: "curve", def: 70, min: 0, max: 100)
     static let keyGap = IntPref(key: "key_gap", def: 5, min: 0, max: 14)
     static let cornerRadius = IntPref(key: "corner_radius", def: 8, min: 0, max: 20)
+    static let keyRepeatGuard = IntPref(key: "key_repeat_guard", def: 0, min: 0, max: 300)
+    static let touchSlack = IntPref(key: "touch_slack", def: 0, min: 0, max: 12)
     static let textScale = IntPref(key: "text_scale", def: 100, min: 60, max: 160)
     static let longPressMs = IntPref(key: "long_press_ms", def: 350, min: 150, max: 800)
 
+    static let followSystemText = "follow_system_text"
+    static let typeOnPress = "type_on_press"
     static let numberRow = "number_row"
     static let showHints = "show_hints"
     static let autoCap = "auto_cap"
@@ -122,14 +126,16 @@ final class KeyboardSettings {
     func bool(_ key: String, _ def: Bool) -> Bool { d.object(forKey: key) as? Bool ?? def }
     func set(_ key: String, _ v: Bool) { d.set(v, forKey: key) }
 
+    var followSystemText: Bool { bool(Prefs.followSystemText, true) }
+    var typeOnPress: Bool { bool(Prefs.typeOnPress, false) }
     var numberRow: Bool { bool(Prefs.numberRow, true) }
     var showHints: Bool { bool(Prefs.showHints, true) }
     var autoCap: Bool { bool(Prefs.autoCap, true) }
     var doubleSpace: Bool { bool(Prefs.doubleSpace, true) }
     var clicks: Bool { bool(Prefs.clicks, true) }
     var keyTint: Bool { bool(Prefs.keyTint, true) }
-    var swipeTyping: Bool { bool(Prefs.swipeTyping, true) }
-    var chording: Bool { bool(Prefs.chording, false) }
+    var swipeTyping: Bool { !typeOnPress && bool(Prefs.swipeTyping, true) }
+    var chording: Bool { !typeOnPress && bool(Prefs.chording, false) }
     var smartTargets: Bool { bool(Prefs.smartTargets, true) }
     var lockSize: Bool { bool(Prefs.lockSize, false) }
     var sameOrientations: Bool { bool(Prefs.sameOrientations, false) }

@@ -1,7 +1,7 @@
 import UIKit
 
 enum ThemeName: String, CaseIterable {
-    case system, light, dark, midnight, warm
+    case system, light, dark, midnight, warm, highContrast
 
     var title: String {
         switch self {
@@ -10,6 +10,7 @@ enum ThemeName: String, CaseIterable {
         case .dark: return "Dark"
         case .midnight: return "Midnight"
         case .warm: return "Warm"
+        case .highContrast: return "High contrast"
         }
     }
 }
@@ -27,6 +28,7 @@ struct Palette {
     static func of(_ name: ThemeName, dark: Bool) -> Palette {
         let resolved: ThemeName = name == .system ? (dark ? .dark : .light) : name
         switch resolved {
+        case .highContrast: return Palette(hex(0x000000), hex(0x000000), hex(0x000000), hex(0x000000), hex(0xFFFFFF), hex(0xFFFFFF), hex(0xFFD400), hex(0x000000))
         case .dark: return Palette(hex(0x1B1C1F), hex(0x3A3B40), hex(0x2A2B30), hex(0x5A5C63), hex(0xF1F1F3), hex(0x9A9BA2), hex(0x5B8DEF), hex(0xFFFFFF))
         case .midnight: return Palette(hex(0x000000), hex(0x17181B), hex(0x0E0F11), hex(0x34363C), hex(0xEDEDEF), hex(0x7C7E86), hex(0x7AA2FF), hex(0x000000))
         case .warm: return Palette(hex(0xE9E2D6), hex(0xFBF8F2), hex(0xD3C9B8), hex(0xC7BBA6), hex(0x2B2620), hex(0x7A6F5F), hex(0xC2562B), hex(0xFFFFFF))

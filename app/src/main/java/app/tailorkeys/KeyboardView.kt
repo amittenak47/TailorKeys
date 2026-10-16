@@ -1,5 +1,7 @@
 package app.tailorkeys
 
+import android.animation.ValueAnimator
+import android.provider.Settings
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.res.Configuration
@@ -55,6 +57,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     interface Listener {
         fun onChord(word: String) {}
         fun onKey(code: String)
+        fun onReplacePressText(original: String, following: String, replacement: String) {}
         fun onLongPressText(text: String)
         fun onStackFace(code: String)
         fun onSuggestion(text: String)
@@ -136,9 +139,32 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     private val isLandscape get() = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
+    private var reducedMotion = false
+    private val highContrast get() = settings.theme() == ThemeName.HIGH_CONTRAST
+    private val systemTextScale get() = if (settings.bool(Prefs.FOLLOW_SYSTEM_TEXT)) resources.configuration.fontScale.coerceIn(0.85f, 1.6f) else 1f
+    private val labelScale get() = settings.int(Prefs.TEXT_SCALE) / 100f * systemTextScale
+    private val chordsAllowed get() = settings.bool(Prefs.CHORDING) && !settings.bool(Prefs.TYPE_ON_PRESS)
+
+    private fun refreshMotion() {
+        reducedMotion = Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f ||
+            !ValueAnimator.areAnimatorsEnabled()
+        if (reducedMotion && glideId == null) trail = emptyList()
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        refreshMotion()
+        invalidate()
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        if (visibility == VISIBLE) { refreshMotion(); invalidate() }
+    }
+
     fun reloadSettings() {
-        if (settings.bool(Prefs.CHORDING) != chordingEnabled) cancelTouches()
-        chordingEnabled = settings.bool(Prefs.CHORDING)
+        cancelTouches()
+        refreshMotion()
         state.language = settings.currentLanguage()
         dismissPopup()
         palette = Palette.of(context, settings.theme())
@@ -194,7 +220,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val th = Math.toRadians(tilt.toDouble())
         val n = grid.rows
         val gap = settings.int(Prefs.KEY_GAP) * d
-        stripH = (if (screenH / d < 500) 34 else 40) * d
+        stripH = max((if (screenH / d < 500) 34 else 40) * d, 22 * d * labelScale + 8 * d)
         val handleH = 14 * d
         val pad = 4 * d
         val bottomPad = p.bottomPaddingDp * d
@@ -609,8 +635,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private fun activateAccessibleView(id: Int): Boolean {
         if (id >= A_POPUP) {
             val choice = accessibilityValue(id) ?: return false
+            val owner = popup?.owner
             dismissPopup()
-            listener?.onLongPressText(choice)
+            commitPopup(owner, choice)
             return true
         }
         if (id == A_CURSOR || id == A_UNDO && history.isEmpty()) return false
@@ -625,8 +652,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             A_CURSOR -> return false
             else -> {
                 val item = placed[id].item
+                if (!acceptKeyTap(item, SystemClock.uptimeMillis())) return true
                 haptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                listener?.onKey(item.keys[shownIdx(item)])
+                emitKey(item.keys[shownIdx(item)])
             }
         }
         refreshAccessibilityState()
@@ -769,7 +797,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         for (pk in placed) {
             canvas.save()
             canvas.concat(pk.matrix)
-            if (editMode) canvas.rotate(wiggle(pk.item, now), pk.rect.centerX(), pk.rect.centerY())
+            if (editMode && !reducedMotion) canvas.rotate(wiggle(pk.item, now), pk.rect.centerX(), pk.rect.centerY())
             drawKey(canvas, pk.item, pk.rect, radius, pk.item in pressed, if (drag?.item === pk.item) 0.3f else 1f)
             drawDropMark(canvas, pk)
             canvas.restore()
@@ -780,7 +808,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         drag?.let { drawGhost(canvas, it, radius) }
         drawGlide(canvas, now)
         drawPopup(canvas)
-        if (editMode) postInvalidateOnAnimation()
+        if (editMode && !reducedMotion) postInvalidateOnAnimation()
     }
 
     private fun drawGlide(canvas: Canvas, now: Long) {
@@ -791,55 +819,67 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         var visible = false
         for (i in 1 until points.size) {
             val a = points[i - 1]; val b = points[i]
-            val alpha = (1f - (now - b.time) / 300f).coerceIn(0f, 1f)
+            val alpha = if (reducedMotion) 1f else (1f - (now - b.time) / 300f).coerceIn(0f, 1f)
             if (alpha <= 0f) continue
             stroke.alpha = (alpha * 220).toInt()
             canvas.drawLine(a.x, a.y, b.x, b.y, stroke)
             visible = true
         }
         stroke.alpha = 255
-        if (visible) postInvalidateOnAnimation() else if (glideId == null) trail = emptyList()
+        if (visible && !reducedMotion) postInvalidateOnAnimation() else if (!visible && glideId == null) trail = emptyList()
     }
 
     private fun wiggle(item: GridKey, now: Long) = (1.6 * sin(2 * PI * (now % 320) / 320.0 + item.id * 0.9)).toFloat()
 
     private fun drawKey(canvas: Canvas, item: GridKey, rect: RectF, radius: Float, pressed: Boolean, alpha: Float) {
+        val keyAlpha = if (highContrast) 1f else alpha
         val face = shownIdx(item)
         val code = item.keys[face]
         val lock = code == Keys.ABC && state.layer == Layer.ABC && state.capsLock
         val oneShot = code == Keys.ABC && state.layer == Layer.ABC && state.shift && !state.capsLock
         val accentBg = code == Keys.ENTER || lock
         fill.color = when {
+            highContrast -> palette.key
             pressed -> palette.pressed
             accentBg -> palette.accent
             KeyText.isLayerKey(code) || code == Keys.BACKSPACE -> palette.functionKey
             else -> palette.key
         }
-        fill.alpha = (255 * alpha).toInt()
+        fill.alpha = (255 * keyAlpha).toInt()
         canvas.drawRoundRect(rect, radius, radius, fill)
-        if (!editMode && code.singleOrNull()?.lowercaseChar() in chordHighlight) {
+        if (!highContrast && !editMode && code.singleOrNull()?.lowercaseChar() in chordHighlight) {
             fill.color = palette.accent
             fill.alpha = 110
             canvas.drawRoundRect(rect, radius, radius, fill)
         }
-        if (settings.bool(Prefs.KEY_TINT) && state.layer == Layer.ABC && !editMode && !pressed &&
+        if (!highContrast && settings.bool(Prefs.KEY_TINT) && state.layer == Layer.ABC && !editMode && !pressed &&
             !item.isStack && code.length == 1 && code[0].isLetter() && keyWeights.isNotEmpty()) {
             fill.color = palette.accent
             fill.alpha = (56 * (keyWeights[code[0].lowercaseChar()] ?: 0.0)).roundToInt()
             canvas.drawRoundRect(rect, radius, radius, fill)
         }
         fill.alpha = 255
-        val fg = when { accentBg && !pressed -> palette.onAccent; oneShot -> palette.accent; else -> palette.text }
+        if (highContrast) {
+            stroke.color = palette.text; stroke.alpha = 255; stroke.strokeWidth = 2 * density
+            canvas.drawRoundRect(RectF(rect).apply { inset(density, density) }, radius, radius, stroke)
+        }
+        val highlighted = accentBg || oneShot || pressed || code.singleOrNull()?.lowercaseChar() in chordHighlight ||
+            (settings.bool(Prefs.KEY_TINT) && !editMode && (keyWeights[code.singleOrNull()?.lowercaseChar()] ?: 0.0) > 0.1)
+        if (editMode && reducedMotion || highContrast && highlighted) {
+            stroke.color = palette.accent; stroke.alpha = 255; stroke.strokeWidth = 2 * density
+            canvas.drawRoundRect(RectF(rect).apply { val pad = if (highContrast) 4 * density else density; inset(pad, pad) }, radius, radius, stroke)
+        }
+        val fg = when { highContrast -> palette.text; accentBg && !pressed -> palette.onAccent; oneShot -> palette.accent; else -> palette.text }
 
         canvas.save()
         canvas.clipRect(rect)
         val sw = swipe?.takeIf { it.item === item }
         val dy = sw?.dy ?: 0f
-        drawFace(canvas, code, rect, dy, fg, alpha)
+        drawFace(canvas, code, rect, dy, fg, keyAlpha)
         if (item.isStack && dy != 0f) {
             val n = item.keys.size
-            drawFace(canvas, item.keys[(face + 1) % n], rect, rect.height() + dy, fg, alpha)
-            drawFace(canvas, item.keys[(face + n - 1) % n], rect, -rect.height() + dy, fg, alpha)
+            drawFace(canvas, item.keys[(face + 1) % n], rect, rect.height() + dy, fg, keyAlpha)
+            drawFace(canvas, item.keys[(face + n - 1) % n], rect, -rect.height() + dy, fg, keyAlpha)
         }
         canvas.restore()
 
@@ -857,7 +897,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         }
         if (!item.isStack && grid.rows == 4 && settings.bool(Prefs.SHOW_HINTS)) KeyText.hint(code, state)?.let {
             text.color = palette.hint
-            text.textSize = rect.height() * 0.2f
+            text.isFakeBoldText = highContrast
+            text.textSize = min(rect.height() * 0.2f * labelScale, min(rect.width() * 0.35f, rect.height() * 0.32f))
             canvas.drawText(it, rect.right - text.textSize * 0.7f, rect.top + text.textSize * 1.1f, text)
         }
         if (editMode && item.isStack) {
@@ -875,14 +916,14 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     private fun drawFace(canvas: Canvas, code: String, rect: RectF, offsetY: Float, color: Int, alpha: Float) {
         val r = RectF(rect).apply { offset(0f, offsetY) }
-        val scale = settings.int(Prefs.TEXT_SCALE) / 100f
-        val icon = min(r.width(), r.height()) * 0.42f * scale
+        val scale = labelScale
+        val icon = min(r.width(), r.height()) * 0.42f * settings.int(Prefs.TEXT_SCALE) / 100f
         val a = (255 * alpha).toInt()
         when (code) {
             Keys.BACKSPACE -> drawDelete(canvas, r, icon, color, a)
             Keys.ENTER -> enterLabel?.let { drawLabel(canvas, r, it, r.height() * 0.3f * scale, color, a) } ?: drawReturn(canvas, r, icon, color, a)
             Keys.SPACE -> if (settings.languages().size > 1 && !editMode) {
-                drawLabel(canvas, r, state.language.uppercase(), min(12 * density, r.height() * 0.25f), palette.hint, a)
+                drawLabel(canvas, r, state.language.uppercase(), min(12 * density, r.height() * 0.25f) * scale, palette.hint, a)
             }
             else -> {
                 val label = KeyText.label(code, state)
@@ -895,10 +936,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private fun drawLabel(canvas: Canvas, r: RectF, label: String, size: Float, color: Int, alpha: Int) {
         text.color = color
         text.alpha = alpha
+        text.isFakeBoldText = highContrast
         text.textSize = size
         val maxWidth = r.width() * 0.85f
         val measured = text.measureText(label)
         if (measured > maxWidth) text.textSize = size * maxWidth / measured
+        val height = text.descent() - text.ascent()
+        if (height > r.height() * 0.85f) text.textSize *= r.height() * 0.85f / height
         canvas.drawText(label, r.centerX(), r.centerY() - (text.descent() + text.ascent()) / 2f, text)
     }
 
@@ -1031,7 +1075,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun drawWheels(canvas: Canvas) {
-        wheelText.textSize = 15 * resources.displayMetrics.scaledDensity
+        wheelText.textSize = 15 * density * labelScale
+        wheelText.isFakeBoldText = highContrast
         if (!wheels[0].rect.isEmpty && wheels[1].rect.left == wheels[0].rect.right) {
             fill.color = palette.functionKey
             canvas.drawRect(wheels[0].rect.right - density / 2, stripH * 0.25f, wheels[0].rect.right + density / 2, stripH * 0.75f, fill)
@@ -1045,7 +1090,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             for (k in wheelRange(list.size)) {
                 val word = wordAt(list, wh.index + k)
                 val cx = wh.rect.centerX() + offsetOf(list, wh.index, k) + wh.dragDx
-                val alpha = if (k == 0) 255 else 100
+                val alpha = if (highContrast || k == 0) 255 else 100
                 var x = cx - wheelText.measureText(word) / 2
                 // The part you've already typed is highlighted.
                 if (prefix.isNotEmpty() && word.startsWith(prefix, ignoreCase = true)) {
@@ -1053,7 +1098,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     wheelText.color = palette.accent; wheelText.alpha = alpha; wheelText.isFakeBoldText = true
                     canvas.drawText(pre, x, baseline, wheelText)
                     x += wheelText.measureText(pre)
-                    wheelText.isFakeBoldText = false
+                    wheelText.isFakeBoldText = highContrast
                     wheelText.color = palette.text; wheelText.alpha = alpha
                     canvas.drawText(word.substring(prefix.length), x, baseline, wheelText)
                 } else {
@@ -1073,7 +1118,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private var popup: AccentPopup? = null
 
     private fun openPopup(pk: Placed, owner: Tracker?): Boolean {
-        val choices = KeyText.alternatives(pk.item.keys[shownIdx(pk.item)], state, settings.bool(Prefs.SHOW_HINTS))
+        val choices = owner?.pressChoices ?: KeyText.alternatives(pk.item.keys[shownIdx(pk.item)], state, settings.bool(Prefs.SHOW_HINTS))
         if (choices.isEmpty()) return false
         dismissPopup()
         val anchor = RectF(pk.rect).also { pk.matrix.mapRect(it) }
@@ -1109,13 +1154,16 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             fill.color = if (i == p.selected) palette.accent else palette.functionKey
             canvas.drawRoundRect(r, 6 * density, 6 * density, fill)
             stroke.color = palette.text
-            stroke.strokeWidth = density
+            stroke.strokeWidth = (if (highContrast) 2 else 1) * density
             canvas.drawRoundRect(r, 6 * density, 6 * density, stroke)
-            drawLabel(canvas, r, p.choices[i], min(22 * density, r.height() * 0.5f), if (i == p.selected) palette.onAccent else palette.text, 255)
+            drawLabel(canvas, r, p.choices[i], min(22 * density * labelScale, r.height() * 0.5f), if (i == p.selected) palette.onAccent else palette.text, 255)
         }
     }
 
     private inner class Tracker(val kind: Int, var pk: Placed?) {
+        var pressedText: String? = null
+        var followingText = ""
+        var pressChoices: List<String>? = null
         var languageDirection = 0
         var consumed = false
         var moved = false
@@ -1136,7 +1184,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val longPress = Runnable { onLongPress(this) }
         val repeat: Runnable = object : Runnable {
             override fun run() {
-                listener?.onKey(Keys.BACKSPACE)
+                emitKey(Keys.BACKSPACE)
                 timers.postDelayed(this, REPEAT_INTERVAL_MS)
             }
         }
@@ -1147,7 +1195,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val timers = Handler(Looper.getMainLooper())
     private val trackers = LinkedHashMap<Int, Tracker>()
     private var swipe: Swipe? = null
-    private var chordingEnabled = settings.bool(Prefs.CHORDING)
+    private val lastKeyTaps = HashMap<Int, Long>()
     private val chordTouches = ChordTouches<Int>()
     private var chordHighlight = emptySet<Char>()
     private val clearChordHighlight = Runnable { chordHighlight = emptySet(); invalidate() }
@@ -1198,7 +1246,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     private fun pointerDown(id: Int, x: Float, y: Float, time: Long) {
         if (glideId != null) return
-        val chordKey = if (settings.bool(Prefs.CHORDING) && state.layer == Layer.ABC && !editMode && popup == null &&
+        val onControl = gearRect.contains(x, y) || handleRect.contains(x, y) || wheels.any { it.rect.contains(x, y) } ||
+            leftSpace?.contains(x, y) == true || rightSpace?.contains(x, y) == true
+        val initialKey = if (onControl) null else findKey(x, y)
+        if (initialKey != null && !acceptKeyTap(initialKey.item, time)) return
+        val chordKey = if (chordsAllowed && state.layer == Layer.ABC && !editMode && popup == null &&
             !gearRect.contains(x, y) && !handleRect.contains(x, y) && !wheels.any { it.rect.contains(x, y) } &&
             leftSpace?.contains(x, y) != true && rightSpace?.contains(x, y) != true) findKey(x, y)?.takeIf {
                 !it.item.isStack && it.item.keys[0].let { k -> k.length == 1 && k[0].isLetter() }
@@ -1242,14 +1294,14 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val pk = chordKey ?: findKey(x, y) ?: return
         if (chordKey == null) haptic(HapticFeedbackConstants.KEYBOARD_TAP)
         if (pk.item.isStack) {
-            trackers[id] = Tracker(K_STACK, pk).also { it.x0 = x; it.y0 = y; timers.postDelayed(it.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong()) }
+            trackers[id] = Tracker(K_STACK, pk).also { it.x0 = x; it.y0 = y; pressLetter(it); timers.postDelayed(it.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong()) }
             swipe = Swipe(pk.item)
             invalidate()
             return
         }
         val t = Tracker(K_KEY, pk)
         t.x0 = x; t.y0 = y; t.glideWidth = pk.rect.width()
-        t.glideEligible = glideAllowed && settings.bool(Prefs.SWIPE_TYPING) && state.layer == Layer.ABC &&
+        t.glideEligible = !settings.bool(Prefs.TYPE_ON_PRESS) && glideAllowed && settings.bool(Prefs.SWIPE_TYPING) && state.layer == Layer.ABC &&
             pk.item.keys[0].let { it.length == 1 && it[0].isLetter() }
         if (t.glideEligible) t.points.add(GestureDecoder.Point(x, y, time))
         trackers[id] = t
@@ -1260,9 +1312,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         }
         if (pk.item.keys[0] == Keys.BACKSPACE) {
             t.consumed = true
-            listener?.onKey(Keys.BACKSPACE)
+            emitKey(Keys.BACKSPACE)
             timers.postDelayed(t.repeat, REPEAT_DELAY_MS)
         } else if (!chordTouches.isCandidate(id)) {
+            pressLetter(t)
             timers.postDelayed(t.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong())
         }
         invalidate()
@@ -1326,6 +1379,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 val step = 9 * density
                 val steps = ((x - t.x0) / step).toInt()
                 if (steps != 0) {
+                    invalidatePressAccents()
                     listener?.onCursor(steps, select = t.select)
                     t.x0 += steps * step
                     repeat(abs(steps)) { haptic(HapticFeedbackConstants.CLOCK_TICK) }
@@ -1375,7 +1429,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             finishChords(chordTouches.release(id).completions)
             val choice = it.choices.getOrNull(it.selected)
             dismissPopup()
-            choice?.let { value -> listener?.onLongPressText(value) }
+            choice?.let { value -> commitPopup(t, value) }
             return
         }
         if (t.languageDirection != 0) {
@@ -1385,6 +1439,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         }
         if (glideId == id) {
             glideId = null
+            if (reducedMotion) trail = emptyList()
             listener?.onGlide(t.points.toList(), letterCentres, letterWidth)
             invalidate()
             return
@@ -1411,6 +1466,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     wh.index = ((wh.index + best) % list.size + list.size) % list.size
                     accessibilityEvent(A_WHEEL_LEFT + wh.side, AccessibilityEvent.TYPE_VIEW_SELECTED)
                 } else if (list.isNotEmpty()) {
+                    invalidatePressAccents()
                     listener?.onSuggestion(wordAt(list, wh.index))
                 }
                 wh.dragDx = 0f
@@ -1418,7 +1474,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             K_HANDLE -> if (t.moved && abs(t.lastX - t.x0) > 36 * density) slideKeyboard(t.lastX < t.x0)
             K_STACK -> {
                 swipe = null
-                if (!t.moved && !t.consumed) listener?.onKey(t.pk!!.item.keys[shownIdx(t.pk!!.item)])
+                if (!t.moved && !t.consumed) emitKey(t.pk!!.item.keys[shownIdx(t.pk!!.item)])
             }
             K_KEY -> if (!t.consumed) commit(t)
             K_GEAR -> editMode = true
@@ -1432,7 +1488,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             if (completion.candidate) finishChord(completion.entries)
             else for (entry in completion.entries) {
                 haptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                listener?.onKey(entry.letter.toString())
+                emitKey(entry.letter.toString())
             }
         }
     }
@@ -1451,15 +1507,50 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         } else {
             for (entry in entries) {
                 haptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                listener?.onKey(entry.letter.toString())
+                emitKey(entry.letter.toString())
             }
         }
+    }
+
+    private fun acceptKeyTap(item: GridKey, time: Long): Boolean {
+        val previous = lastKeyTaps[item.id]
+        if (previous != null && time - previous in 0 until settings.int(Prefs.KEY_REPEAT_GUARD).toLong()) return false
+        lastKeyTaps[item.id] = time
+        return true
+    }
+
+    private fun invalidatePressAccents() {
+        for (t in trackers.values) if (t.pressedText != null) { t.pressedText = null; stopTimers(t) }
+    }
+
+    private fun emitKey(code: String) {
+        val output = KeyText.output(code, state)
+        if (output == null) invalidatePressAccents()
+        else for (t in trackers.values) if (t.pressedText != null) t.followingText += output
+        listener?.onKey(code)
+    }
+
+    private fun pressLetter(t: Tracker) {
+        val item = t.pk?.item ?: return
+        val code = item.keys[shownIdx(item)]
+        if (!settings.bool(Prefs.TYPE_ON_PRESS) || state.layer != Layer.ABC || code.singleOrNull()?.isLetter() != true) return
+        val output = KeyText.output(code, state) ?: return
+        t.pressChoices = KeyText.alternatives(code, state, settings.bool(Prefs.SHOW_HINTS))
+        emitKey(code)
+        t.pressedText = output
+        t.consumed = true
+    }
+
+    private fun commitPopup(t: Tracker?, choice: String) {
+        val original = t?.pressedText
+        if (original != null) listener?.onReplacePressText(original, t.followingText, choice)
+        else listener?.onLongPressText(choice)
     }
 
     private fun commit(t: Tracker) {
         if (t.deferredHaptic) { t.deferredHaptic = false; haptic(HapticFeedbackConstants.KEYBOARD_TAP) }
         val item = t.pk?.item ?: return
-        listener?.onKey(item.keys[0])
+        emitKey(item.keys[0])
     }
 
     private fun onLongPress(t: Tracker) {
@@ -1484,18 +1575,24 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     /** The key under a point. Gaps and edges belong to the nearest key, so taps never fall through. */
     private fun findKey(x: Float, y: Float, strict: Boolean = false, skip: GridKey? = null): Placed? {
         val pt = FloatArray(2)
-        val slack = settings.int(Prefs.KEY_GAP) * density / 2 + 1
+        val baseSlack = settings.int(Prefs.KEY_GAP) * density / 2 + 1
+        val extraSlack = settings.int(Prefs.TOUCH_SLACK) * density
         var hit: Placed? = null
-        for (i in placed.indices.reversed()) {
-            val pk = placed[i]
-            if (pk.item === skip) continue
-            pt[0] = x; pt[1] = y
-            pk.inverse.mapPoints(pt)
-            val r = pk.rect
-            if (pt[0] >= r.left - slack && pt[0] <= r.right + slack && pt[1] >= r.top - slack && pt[1] <= r.bottom + slack) {
-                hit = pk
-                break
+        // Existing targets win before extra slack: a neighbour must never swallow a key's center.
+        for (pass in 0..1) {
+            val slack = baseSlack + if (pass == 0) 0f else extraSlack
+            for (i in placed.indices.reversed()) {
+                val pk = placed[i]
+                if (pk.item === skip) continue
+                pt[0] = x; pt[1] = y
+                pk.inverse.mapPoints(pt)
+                val r = pk.rect
+                if (pt[0] >= r.left - slack && pt[0] <= r.right + slack && pt[1] >= r.top - slack && pt[1] <= r.bottom + slack) {
+                    hit = pk
+                    break
+                }
             }
+            if (hit != null || extraSlack == 0f) break
         }
         fun isLetter(pk: Placed) = !pk.item.isStack && pk.item.keys[0].let { it.length == 1 && it[0].isLetter() }
         if (!strict && !editMode && state.layer == Layer.ABC && settings.bool(Prefs.SMART_TARGETS) &&
