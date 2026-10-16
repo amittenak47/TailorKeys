@@ -33,6 +33,7 @@ enum Prefs {
     static let doubleSpace = "double_space_period"
     static let clicks = "haptics"
     static let keyTint = "key_tint"
+    static let swipeTyping = "swipe_typing"
     static let smartTargets = "smart_targets"
     static let lockSize = "lock_size"
     static let sameOrientations = "same_orientations"
@@ -101,6 +102,7 @@ final class KeyboardSettings {
     var doubleSpace: Bool { bool(Prefs.doubleSpace, true) }
     var clicks: Bool { bool(Prefs.clicks, true) }
     var keyTint: Bool { bool(Prefs.keyTint, true) }
+    var swipeTyping: Bool { bool(Prefs.swipeTyping, true) }
     var smartTargets: Bool { bool(Prefs.smartTargets, true) }
     var lockSize: Bool { bool(Prefs.lockSize, false) }
     var sameOrientations: Bool { bool(Prefs.sameOrientations, false) }
@@ -150,7 +152,7 @@ final class KeyboardSettings {
         // Leave learned words, migration and setup metadata intact in either store.
         var keys = [Prefs.curve.key, Prefs.keyGap.key, Prefs.cornerRadius.key, Prefs.textScale.key,
                     Prefs.longPressMs.key, Prefs.numberRow, Prefs.showHints, Prefs.autoCap, Prefs.doubleSpace,
-                    Prefs.clicks, Prefs.keyTint, Prefs.smartTargets, Prefs.lockSize, Prefs.sameOrientations,
+                    Prefs.clicks, Prefs.keyTint, Prefs.smartTargets, Prefs.swipeTyping, Prefs.lockSize, Prefs.sameOrientations,
                     Prefs.theme, Prefs.layout]
         for l in [false, true] {
             keys += [Prefs.height(l).key, Prefs.width(l).key, Prefs.bottomPadding(l).key,

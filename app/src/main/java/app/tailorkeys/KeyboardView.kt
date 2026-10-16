@@ -57,6 +57,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         fun onLongPressText(text: String)
         fun onStackFace(code: String)
         fun onSuggestion(text: String)
+        fun onGlide(points: List<GestureDecoder.Point>, keys: Map<Char, GestureDecoder.Point>, keyWidth: Float) {}
         fun onPickIme()
         fun onCursor(steps: Int, select: Boolean) {}
         fun onSelectMode(on: Boolean) {}
@@ -65,6 +66,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     var listener: Listener? = null
+    var glideAllowed = true
+        set(value) { if (field != value) cancelTouches(); field = value }
     var state = InputState()
         set(value) { field = value; refreshAccessibilityState(); invalidate() }
     var keyWeights: Map<Char, Double> = emptyMap()
@@ -114,6 +117,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private var rightSpace: RectF? = null
     private var stripH = 0f
     private var unit = 0f
+    private var letterCentres = emptyMap<Char, GestureDecoder.Point>()
+    private var letterWidth = 1f
     private var builtWidth = -1
     private var restoreWidth: Int? = null
 
@@ -134,6 +139,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun relayout() {
+        if (trackers.values.any { it.glideEligible }) cancelTouches()
         clearAccessibilityFocus()
         updateHoveredView(A_NONE)
         builtWidth = -1
@@ -169,6 +175,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     /** Places every key for this width and returns the keyboard height. */
     private fun layoutFor(width: Int): Int {
+        if (builtWidth != width && trackers.values.any { it.glideEligible }) cancelTouches()
         val d = density
         val landscape = isLandscape
         val p = settings.profile(landscape)
@@ -428,6 +435,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val minSpace = 40 * d
         leftSpace = if (areaLeft >= minSpace) RectF(0f, stripH, areaLeft, y0 + hc) else null
         rightSpace = if (width - (areaLeft + areaW) >= minSpace) RectF(areaLeft + areaW, stripH, width.toFloat(), y0 + hc) else null
+        val letters = placed.filter { !it.item.isStack && it.item.keys[0].let { k -> k.length == 1 && k[0].isLetter() } }
+        letterCentres = letters.associate { pk ->
+            val pt = floatArrayOf(pk.rect.centerX(), pk.rect.centerY())
+            pk.matrix.mapPoints(pt)
+            pk.item.keys[0][0].lowercaseChar() to GestureDecoder.Point(pt[0], pt[1])
+        }
+        letterWidth = letters.map { it.rect.width() }.sorted().let { if (it.isEmpty()) 1f else it[it.size / 2] }
         builtWidth = width
         accessibilityEvent(View.NO_ID, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE)
         return ceil(if (reserve) s.total else max(target, s.total)).toInt()
@@ -727,7 +741,26 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         leftSpace?.let { drawMoveArrow(canvas, it, pointsLeft = true) }
         rightSpace?.let { drawMoveArrow(canvas, it, pointsLeft = false) }
         drag?.let { drawGhost(canvas, it, radius) }
+        drawGlide(canvas, now)
         if (editMode) postInvalidateOnAnimation()
+    }
+
+    private fun drawGlide(canvas: Canvas, now: Long) {
+        val points = trail
+        if (points.size < 2) return
+        stroke.color = palette.accent
+        stroke.strokeWidth = 4 * density
+        var visible = false
+        for (i in 1 until points.size) {
+            val a = points[i - 1]; val b = points[i]
+            val alpha = (1f - (now - b.time) / 300f).coerceIn(0f, 1f)
+            if (alpha <= 0f) continue
+            stroke.alpha = (alpha * 220).toInt()
+            canvas.drawLine(a.x, a.y, b.x, b.y, stroke)
+            visible = true
+        }
+        stroke.alpha = 255
+        if (visible) postInvalidateOnAnimation() else if (glideId == null) trail = emptyList()
     }
 
     private fun wiggle(item: GridKey, now: Long) = (1.6 * sin(2 * PI * (now % 320) / 320.0 + item.id * 0.9)).toFloat()
@@ -1001,6 +1034,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         var fx = 0f
         var fy = 0f
         var select = false
+        var glideEligible = false
+        var glideWidth = 1f
+        val points = ArrayList<GestureDecoder.Point>()
         var wheel: Wheel? = null
         val longPress = Runnable { onLongPress(this) }
         val repeat: Runnable = object : Runnable {
@@ -1016,10 +1052,14 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val timers = Handler(Looper.getMainLooper())
     private val trackers = LinkedHashMap<Int, Tracker>()
     private var swipe: Swipe? = null
+    private var glideId: Int? = null
+    private var trail: List<GestureDecoder.Point> = emptyList()
 
     fun cancelTouches() {
         trackers.values.forEach { stopTimers(it); if (it.select) listener?.onSelectMode(false) }
         trackers.clear()
+        glideId = null
+        trail = emptyList()
         swipe = null
         drag = null
         invalidate()
@@ -1032,16 +1072,25 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         if (editMode) return editTouch(e)
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN ->
-                pointerDown(e.getPointerId(e.actionIndex), e.getX(e.actionIndex), e.getY(e.actionIndex))
-            MotionEvent.ACTION_MOVE ->
-                for (i in 0 until e.pointerCount) pointerMove(e.getPointerId(i), e.getX(i), e.getY(i))
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> pointerUp(e.getPointerId(e.actionIndex))
+                pointerDown(e.getPointerId(e.actionIndex), e.getX(e.actionIndex), e.getY(e.actionIndex), e.eventTime)
+            MotionEvent.ACTION_MOVE -> {
+                for (h in 0 until e.historySize) for (i in 0 until e.pointerCount) {
+                    trackers[e.getPointerId(i)]?.let { t -> recordGlide(e.getPointerId(i), t, e.getHistoricalX(i, h), e.getHistoricalY(i, h), e.getHistoricalEventTime(h)) }
+                }
+                for (i in 0 until e.pointerCount) pointerMove(e.getPointerId(i), e.getX(i), e.getY(i), e.eventTime)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                val i = e.actionIndex
+                trackers[e.getPointerId(i)]?.let { recordGlide(e.getPointerId(i), it, e.getX(i), e.getY(i), e.eventTime) }
+                pointerUp(e.getPointerId(i))
+            }
             MotionEvent.ACTION_CANCEL -> cancelTouches()
         }
         return true
     }
 
-    private fun pointerDown(id: Int, x: Float, y: Float) {
+    private fun pointerDown(id: Int, x: Float, y: Float, time: Long) {
+        if (glideId != null) return
         // A new finger landing finishes keys other fingers are still holding, for fast rollover typing.
         for (t in trackers.values.toList()) {
             if (t.kind != K_KEY || t.consumed) continue
@@ -1083,6 +1132,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             return
         }
         val t = Tracker(K_KEY, pk)
+        t.x0 = x; t.y0 = y; t.glideWidth = pk.rect.width()
+        t.glideEligible = glideAllowed && settings.bool(Prefs.SWIPE_TYPING) && state.layer == Layer.ABC &&
+            pk.item.keys[0].let { it.length == 1 && it[0].isLetter() }
+        if (t.glideEligible) t.points.add(GestureDecoder.Point(x, y, time))
         trackers[id] = t
         if (pk.item.keys[0] == Keys.BACKSPACE) {
             t.consumed = true
@@ -1094,8 +1147,29 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         invalidate()
     }
 
-    private fun pointerMove(id: Int, x: Float, y: Float) {
+    private fun recordGlide(id: Int, t: Tracker, x: Float, y: Float, time: Long): Boolean {
+        if (!t.glideEligible || t.consumed && glideId != id) return false
+        if (glideId != null && glideId != id) return true
+        t.points.add(GestureDecoder.Point(x, y, time))
+        if (glideId == null && hypot(x - t.x0, y - t.y0) > 0.6f * t.glideWidth) {
+            glideId = id
+            stopTimers(t)
+            t.consumed = true
+            // Existing held controls must not fire on release during this word gesture.
+            for ((otherId, other) in trackers.toMap()) if (otherId != id) {
+                stopTimers(other)
+                if (other.select) listener?.onSelectMode(false)
+                trackers.remove(otherId)
+            }
+            swipe = null
+        }
+        if (glideId == id) { trail = t.points; invalidate(); return true }
+        return false
+    }
+
+    private fun pointerMove(id: Int, x: Float, y: Float, time: Long) {
         val t = trackers[id] ?: return
+        if (recordGlide(id, t, x, y, time)) return
         when (t.kind) {
             K_WHEEL -> {
                 val dx = x - t.x0
@@ -1158,6 +1232,12 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private fun pointerUp(id: Int) {
         val t = trackers.remove(id) ?: return
         stopTimers(t)
+        if (glideId == id) {
+            glideId = null
+            listener?.onGlide(t.points.toList(), letterCentres, letterWidth)
+            invalidate()
+            return
+        }
         when (t.kind) {
             K_WHEEL -> {
                 val wh = t.wheel!!

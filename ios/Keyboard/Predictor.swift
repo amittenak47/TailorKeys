@@ -317,6 +317,21 @@ final class Predictor {
         if let f = prefix.first, f.isUppercase { return w.prefix(1).uppercased() + w.dropFirst() }
         return w
     }
+
+    // Read-only gesture inputs; tap ranking and its caches remain unchanged.
+    func gestureWords() -> [String] { base.map { $0.text } }
+    func gestureUserWords() -> [String] { Array(user.keys) }
+    func gestureFrequency(_ word: String) -> Double { frequency(word) }
+    /// The previous-word part of the suggestion score, for ranking swiped words the same way.
+    func contextScore(_ prev: String?, _ word: String) -> Double {
+        tableLock.lock()
+        let tables = seedTables
+        tableLock.unlock()
+        let pairs = prev.flatMap { rank[$0] }.flatMap { tables?.pairs[UInt64($0)] } ?? []
+        let seedPair = count(pairs, rank[word])
+        let userPair = prev.flatMap { userPairs[$0]?[word] } ?? 0
+        return 1.5 * (log(1 + Double(seedPair)) + 1.5 * log(1 + Double(userPair)))
+    }
 }
 
 /// Small seeded random generator, so a prefix always produces the same explore list.

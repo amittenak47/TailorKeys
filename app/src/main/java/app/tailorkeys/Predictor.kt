@@ -314,4 +314,16 @@ class Predictor(context: Context) {
         prefix.isNotEmpty() && prefix[0].isUpperCase() -> w.replaceFirstChar { it.uppercase() }
         else -> w
     }
+
+    // Read-only gesture inputs; tap ranking and its caches remain unchanged.
+    fun gestureWords(): List<String> = base
+    fun gestureUserWords(): Set<String> = user.keys.toSet()
+    fun gestureFrequency(word: String): Double = frequency(word)
+    /** The previous-word part of the suggestion score, for ranking swiped words the same way. */
+    fun contextScore(prev: String?, word: String): Double {
+        val pairs = rank[prev]?.let { seedTables?.pairs?.get(it.toLong()) }
+        val seedPair = count(pairs, rank[word])
+        val userPair = userPairs[prev]?.get(word) ?: 0
+        return 1.5 * (ln(1.0 + seedPair) + 1.5 * ln(1.0 + userPair))
+    }
 }
