@@ -1,4 +1,4 @@
-# XcodeGen spec. The cloud build runs `xcodegen generate` to make TailorKeys.xcodeproj from this file.
+# XcodeGen spec. Run `xcodegen` on a Mac to generate TailorKeys.xcodeproj.
 name: TailorKeys
 options:
   bundleIdPrefix: app.tailorkeys
@@ -11,11 +11,25 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     TARGETED_DEVICE_FAMILY: "1,2"
     CODE_SIGN_STYLE: Automatic
+    # The owner sets their Apple Developer team on both targets in Xcode.
+    DEVELOPMENT_TEAM: ""
 targets:
   TailorKeys:
     type: application
     platform: iOS
-    sources: [App]
+    sources:
+      - App
+      - Keyboard/KeyGrid.swift
+      - Keyboard/KeyText.swift
+      - Keyboard/Theme.swift
+      - Keyboard/KeyboardSettings.swift
+      - Keyboard/KeyboardView.swift
+      - path: ../app/src/main/assets/NOTICE-dictionary.txt
+        buildPhase: resources
+    entitlements:
+      path: App/TailorKeys.entitlements
+      properties:
+        com.apple.security.application-groups: [group.app.tailorkeys]
     info:
       path: App/Info.plist
       properties:
@@ -40,6 +54,10 @@ targets:
         buildPhase: resources
       - path: ../app/src/main/assets/NOTICE-dictionary.txt
         buildPhase: resources
+    entitlements:
+      path: Keyboard/TailorKeysKeyboard.entitlements
+      properties:
+        com.apple.security.application-groups: [group.app.tailorkeys]
     info:
       path: Keyboard/Info.plist
       properties:
@@ -51,8 +69,8 @@ targets:
             IsASCIICapable: true
             PrefersRightToLeft: false
             PrimaryLanguage: en-US
-            # No Full Access: the keyboard never needs the network or shared storage.
-            RequestsOpenAccess: false
+            # Optional Full Access shares settings with the app; no network code is used.
+            RequestsOpenAccess: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.tailorkeys.keyboard

@@ -7,7 +7,7 @@ final class ClickInputView: UIInputView, UIInputViewAudioFeedback {
 
 final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate {
 
-    private lazy var settings = KeyboardSettings(tablet: UIDevice.current.userInterfaceIdiom == .pad)
+    private var settings: KeyboardSettings!
     private let predictor = Predictor()
     private let state = InputState()
     private var keyboard: KeyboardView!
@@ -25,6 +25,21 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        let hc = view.heightAnchor.constraint(equalToConstant: 260)
+        hc.priority = UILayoutPriority(999)
+        hc.isActive = true
+        heightConstraint = hc
+    }
+
+    /// Full Access is reliable here, after the input view has been loaded.
+    private func loadKeyboardIfNeeded() {
+        if settings != nil {
+            settings.reloadStore(hasFullAccess: hasFullAccess)
+            keyboard.grid = settings.loadGrid()
+            predictor.setLayout(keyboard.grid)
+            return
+        }
+        settings = KeyboardSettings(tablet: UIDevice.current.userInterfaceIdiom == .pad, hasFullAccess: hasFullAccess)
         let kb = KeyboardView(settings: settings, grid: settings.loadGrid())
         kb.state = state
         kb.delegate = self
@@ -36,10 +51,6 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             kb.topAnchor.constraint(equalTo: view.topAnchor),
             kb.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
-        let hc = view.heightAnchor.constraint(equalToConstant: 260)
-        hc.priority = UILayoutPriority(999)
-        hc.isActive = true
-        heightConstraint = hc
         kb.onHeightChange = { [weak self] h in
             if self?.heightConstraint?.constant != h { self?.heightConstraint?.constant = h }
         }
@@ -49,6 +60,12 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        loadKeyboardIfNeeded()
+        if hasFullAccess, let group = UserDefaults(suiteName: KeyboardSettings.groupID) {
+            group.set(Date(), forKey: KeyboardSettings.fullAccessSeenKey)
+        }
+        // A panel left open across appearances must reflect the freshly loaded store too.
+        if panel != nil { panel?.removeFromSuperview(); panel = nil; openSettings() }
         let numeric: [UIKeyboardType] = [.numberPad, .decimalPad, .phonePad, .numbersAndPunctuation, .asciiCapableNumberPad]
         state.layer = numeric.contains(textDocumentProxy.keyboardType ?? .default) ? .num : .abc
         state.shift = false
@@ -61,6 +78,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        guard let keyboard = keyboard else { return }
         let h = keyboard.height(forWidth: view.bounds.width)
         if heightConstraint?.constant != h { heightConstraint?.constant = h }
     }
@@ -68,7 +86,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
         super.viewWillTransition(to: size, with: coordinator)
         coordinator.animate(alongsideTransition: nil) { [weak self] _ in
-            self?.keyboard.relayout()
+            self?.keyboard?.relayout()
             self?.panel?.orientationChanged()
         }
     }
@@ -283,6 +301,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     private func updateSuggestions() {
+        guard keyboard != nil else { return }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         if state.layer != .abc {
             keyboard.keyWeights = [:]
@@ -298,7 +317,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     /// Turns on a one-shot capital where the field asks for one: sentence starts, word starts, or always.
     private func updateAutoCap() {
-        guard settings.autoCap, state.layer == .abc, !state.capsLock else { return }
+        guard keyboard != nil, settings.autoCap, state.layer == .abc, !state.capsLock else { return }
         let type = textDocumentProxy.autocapitalizationType ?? .sentences
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         switch type {

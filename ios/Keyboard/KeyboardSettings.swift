@@ -10,7 +10,7 @@ struct IntPref {
 }
 
 /// Every setting with its default and range. Same keys and defaults as the Android app.
-/// Stored in the keyboard's own UserDefaults, so no App Group (and no paid developer account) is needed.
+/// Stored in the App Group with Full Access, or in the keyboard's own defaults without it.
 enum Prefs {
     static func height(_ l: Bool) -> IntPref { l ? IntPref(key: "height_l", def: 58, min: 24, max: 70) : IntPref(key: "height_p", def: 44, min: 24, max: 70) }
     static func width(_ l: Bool) -> IntPref { IntPref(key: l ? "width_l" : "width_p", def: 100, min: 50, max: 100) }
@@ -52,10 +52,42 @@ struct SizeProfile {
 }
 
 final class KeyboardSettings {
-    private let d = UserDefaults.standard
-    private let tablet: Bool
+    static let groupID = "group.app.tailorkeys"
+    static let fullAccessSeenKey = "keyboard_seen_full_access"
+    private static let migrationKey = "keyboard_settings_migrated"
 
-    init(tablet: Bool) { self.tablet = tablet }
+    private var d: UserDefaults
+    private let tablet: Bool
+    /// Only the app preview overrides the orientation being displayed.
+    var previewOrientation: Bool?
+
+    init(tablet: Bool, store: UserDefaults = .standard) {
+        self.tablet = tablet
+        d = store
+    }
+
+    convenience init(tablet: Bool, hasFullAccess: Bool) {
+        self.init(tablet: tablet, store: KeyboardSettings.keyboardStore(hasFullAccess: hasFullAccess))
+    }
+
+    func reloadStore(hasFullAccess: Bool) {
+        d = KeyboardSettings.keyboardStore(hasFullAccess: hasFullAccess)
+    }
+
+    private static func keyboardStore(hasFullAccess: Bool) -> UserDefaults {
+        guard hasFullAccess, let group = UserDefaults(suiteName: groupID) else { return .standard }
+        if !group.bool(forKey: migrationKey) {
+            // Inspect only the persistent domain: dictionaryRepresentation also includes system defaults.
+            if (group.persistentDomain(forName: groupID) ?? [:]).isEmpty,
+               let bundleID = Bundle.main.bundleIdentifier {
+                for (key, value) in UserDefaults.standard.persistentDomain(forName: bundleID) ?? [:] {
+                    group.set(value, forKey: key)
+                }
+            }
+            group.set(true, forKey: migrationKey)
+        }
+        return group
+    }
 
     func int(_ p: IntPref) -> Int { min(max(d.object(forKey: p.key) as? Int ?? p.def, p.min), p.max) }
     func set(_ p: IntPref, _ v: Int) { d.set(min(max(v, p.min), p.max), forKey: p.key) }
@@ -90,8 +122,9 @@ final class KeyboardSettings {
         set(Prefs.sameOrientations, true)
     }
 
-    func profile(_ l: Bool) -> SizeProfile {
-        SizeProfile(heightPercent: int(Prefs.height(l)), widthPercent: int(Prefs.width(l)), align: align(l),
+    func profile(_ landscape: Bool) -> SizeProfile {
+        let l = previewOrientation ?? landscape
+        return SizeProfile(heightPercent: int(Prefs.height(l)), widthPercent: int(Prefs.width(l)), align: align(l),
                     bottomPadding: int(Prefs.bottomPadding(l)), split: split(l), gap: int(Prefs.splitGap(l)), tilt: int(Prefs.tilt(l)), spaceTilt: int(Prefs.spaceTilt(l)))
     }
 
@@ -114,6 +147,16 @@ final class KeyboardSettings {
     }
 
     func resetAll() {
-        for key in d.dictionaryRepresentation().keys where key != "user_words" { d.removeObject(forKey: key) }
+        // Leave learned words, migration and setup metadata intact in either store.
+        var keys = [Prefs.curve.key, Prefs.keyGap.key, Prefs.cornerRadius.key, Prefs.textScale.key,
+                    Prefs.longPressMs.key, Prefs.numberRow, Prefs.showHints, Prefs.autoCap, Prefs.doubleSpace,
+                    Prefs.clicks, Prefs.keyTint, Prefs.smartTargets, Prefs.lockSize, Prefs.sameOrientations,
+                    Prefs.theme, Prefs.layout]
+        for l in [false, true] {
+            keys += [Prefs.height(l).key, Prefs.width(l).key, Prefs.bottomPadding(l).key,
+                     Prefs.splitGap(l).key, Prefs.tilt(l).key, Prefs.spaceTilt(l).key,
+                     Prefs.alignKey(l), Prefs.splitKey(l)]
+        }
+        for key in keys { d.removeObject(forKey: key) }
     }
 }
