@@ -350,6 +350,9 @@ final class Predictor {
         return w
     }
 
+    /// Bundled dictionary in frequency-rank order, independent of learned words.
+    func chordWords() -> [String] { base.prefix(20_000).map { $0.text } }
+
     // Read-only gesture inputs; tap ranking and its caches remain unchanged.
     func gestureWords() -> [String] { base.map { $0.text } }
     func gestureUserWords() -> [String] { Array(user.keys) }

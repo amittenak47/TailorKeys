@@ -1,5 +1,27 @@
 import SwiftUI
 
+struct ChordListSheet: View {
+    @ObservedObject var model: AppSettingsModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var chords: [Chord]?
+    @State private var loaded = false
+
+    var body: some View {
+        NavigationView {
+            List {
+                if let chords = chords {
+                    if chords.isEmpty { Text("No chords for this layout.") }
+                    ForEach(chords, id: \.word) { Text($0.label) }
+                } else { Text(loaded ? "Dictionary unavailable." : "Loading…") }
+            }
+            .navigationTitle("Chord list · " + (Prefs.languageNames[model.settings.currentLanguage] ?? ""))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .task(id: model.revision) { chords = model.chordList(); loaded = true }
+        }
+    }
+}
+
 struct FullAccessSheet: View {
     @Environment(\.dismiss) private var dismiss
 

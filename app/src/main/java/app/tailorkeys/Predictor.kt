@@ -336,6 +336,9 @@ class Predictor(context: Context, val language: String = "en", private val onRea
         else -> w
     }
 
+    /** Bundled dictionary in frequency-rank order; callers receive a bounded copy. */
+    fun chordWords(): List<String> = base.take(20_000)
+
     // Read-only gesture inputs; tap ranking and its caches remain unchanged.
     fun gestureWords(): List<String> = base
     fun gestureUserWords(): Set<String> = user.keys.toSet()

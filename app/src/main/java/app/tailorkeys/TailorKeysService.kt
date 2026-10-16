@@ -24,7 +24,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private lateinit var settings: KeyboardSettings
     private lateinit var predictor: Predictor
     private lateinit var gestureDecoder: GestureDecoder
-    private data class LanguageModel(val predictor: Predictor, val decoder: GestureDecoder)
+    private data class LanguageModel(val predictor: Predictor, val decoder: GestureDecoder, val chords: Chords)
     private val models = HashMap<String, LanguageModel>()
     private val loading = HashSet<String>()
     private val loader = Executors.newSingleThreadExecutor()
@@ -34,7 +34,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     private fun makeModel(lang: String): LanguageModel {
         val p = Predictor(this, lang) { main.post { if (!destroyed && state.language == lang && modelReady) updateSuggestions() } }
-        return LanguageModel(p, GestureDecoder(p.gestureWords()))
+        return LanguageModel(p, GestureDecoder(p.gestureWords()), Chords(p.chordWords()))
     }
 
     private fun activateLanguage() {
@@ -51,6 +51,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         if (g.toJson() != grid.toJson()) { grid = g; keyboardView?.grid = g }
         val model = models[lang]
         modelReady = model != null
+        keyboardView?.chordLibrary = model?.chords
         if (model != null) {
             predictor = model.predictor
             gestureDecoder = model.decoder
@@ -127,6 +128,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onCreateInputView(): View = KeyboardView(this, settings).also {
+        it.chordLibrary = models[state.language]?.chords
         it.listener = this
         it.state = state
         it.grid = grid
@@ -181,6 +183,29 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     // ---- KeyboardView.Listener ----
+
+    override fun onChord(word: String) {
+        val ic = currentInputConnection ?: return
+        ic.beginBatchEdit()
+        val shifted = state.shift
+        if (ic.getTextBeforeCursor(1, 0)?.lastOrNull()?.isLetterOrDigit() == true) typeSpace()
+        updateAutoCap()
+        state.shift = state.shift || shifted
+        val allCaps = state.capsLock || (settings.bool(Prefs.AUTO_CAP) &&
+            (currentInputEditorInfo?.inputType ?: 0) and InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS != 0)
+        val text = when {
+            allCaps -> word.uppercase()
+            state.shift -> word.replaceFirstChar { it.uppercase() }
+            else -> word
+        }
+        clearGlide()
+        commit(text)
+        typeSpace()
+        ic.endBatchEdit()
+        updateAutoCap()
+        updateSuggestions()
+        keyboardView?.invalidate()
+    }
 
     override fun onKey(code: String) {
         var letterCommitted = false

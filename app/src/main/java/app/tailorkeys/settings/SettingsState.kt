@@ -6,6 +6,8 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
+import app.tailorkeys.Chords
+import app.tailorkeys.Predictor
 import app.tailorkeys.Align
 import app.tailorkeys.BoolPref
 import app.tailorkeys.IntPref
@@ -19,6 +21,17 @@ import org.json.JSONObject
 /** Bridges preference notifications and the existing, undoable keyboard editor into Compose state. */
 @Stable
 internal class SettingsState(context: Context, val settings: KeyboardSettings) {
+    private val appContext = context.applicationContext
+    private val chordLibraries = HashMap<String, Chords>()
+    fun chordLanguage(): String { revision; return settings.currentLanguage() }
+    fun chordLetters(): Set<Char> {
+        revision
+        return preview.grid.items.filter { !it.isStack }.mapNotNull { it.keys[0].singleOrNull()?.takeIf(Char::isLetter)?.lowercaseChar() }.toSet()
+    }
+    /** Called on a worker thread by the list dialog. */
+    @Synchronized fun chordList(language: String, letters: Set<Char>): List<Chords.Chord> =
+        chordLibraries.getOrPut(language) { Chords(Predictor(appContext, language).chordWords()) }.forLetters(letters)
+
     private var revision by mutableIntStateOf(0)
     val preview = KeyboardView(context, settings).apply {
         grid = settings.loadGrid()

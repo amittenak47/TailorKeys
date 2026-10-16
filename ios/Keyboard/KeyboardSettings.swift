@@ -34,6 +34,7 @@ enum Prefs {
     static let clicks = "haptics"
     static let keyTint = "key_tint"
     static let swipeTyping = "swipe_typing"
+    static let chording = "chording"
     static let smartTargets = "smart_targets"
     static let lockSize = "lock_size"
     static let sameOrientations = "same_orientations"
@@ -128,6 +129,7 @@ final class KeyboardSettings {
     var clicks: Bool { bool(Prefs.clicks, true) }
     var keyTint: Bool { bool(Prefs.keyTint, true) }
     var swipeTyping: Bool { bool(Prefs.swipeTyping, true) }
+    var chording: Bool { bool(Prefs.chording, false) }
     var smartTargets: Bool { bool(Prefs.smartTargets, true) }
     var lockSize: Bool { bool(Prefs.lockSize, false) }
     var sameOrientations: Bool { bool(Prefs.sameOrientations, false) }
@@ -186,4 +188,86 @@ final class KeyboardSettings {
         }
         for key in keys { d.removeObject(forKey: key) }
     }
+}
+
+
+/// Shared by the keyboard and its settings app, which reads the embedded extension's dictionary.
+struct Chord {
+    let keys: String
+    let word: String
+    var label: String { keys.map(String.init).joined(separator: " ") + " → " + word }
+}
+
+struct Chords {
+    private let candidates: [Chord]
+    init(_ rankedWords: [String]) {
+        var seen = Set<String>()
+        let words = Array(rankedWords.prefix(20_000)).filter { seen.insert($0).inserted }
+        let sets = words.map(Self.letters)
+        var counts: [String: Int] = [:]
+        for keys in sets { counts[keys, default: 0] += 1 }
+        candidates = zip(words, sets).filter { $0.1.count >= 3 }.prefix(400)
+            .filter { (3...6).contains($0.1.count) && counts[$0.1] == 1 }
+            .map { Chord(keys: $0.1, word: $0.0) }
+    }
+    func forLetters(_ keys: Set<Character>) -> [Chord] {
+        Array(candidates.filter { Set($0.keys).isSubset(of: keys) }.prefix(250))
+    }
+    static func letters(_ word: String) -> String { String(Set(word.lowercased().filter(\.isLetter)).sorted()) }
+}
+
+/// Admission closes on the first lift or 60 ms after the first press. Results retain press order.
+final class ChordTouches<ID: Hashable> {
+    struct Entry { let id: ID; let letter: Character }
+    struct Completion { let entries: [Entry]; let candidate: Bool }
+    struct Prepared { let rollover: [ID]; let completions: [Completion] }
+    struct Release { let handled: Bool; let completions: [Completion] }
+    private final class Group {
+        let time: TimeInterval
+        var entries: [Entry] = []
+        var held = Set<ID>()
+        var lifted = false
+        var complete = false
+        var suppressed = false
+        init(_ time: TimeInterval) { self.time = time }
+    }
+    private var groups: [Group] = []
+    func prepareDown(_ time: TimeInterval, _ eligible: Bool) -> Prepared {
+        var rollover: [ID] = []
+        for group in groups where !group.complete && group.entries.count == 1 && (!eligible || time - group.time > 0.060) {
+            group.complete = true
+            rollover.append(contentsOf: group.held)
+        }
+        return Prepared(rollover: rollover, completions: drain())
+    }
+    func down(_ id: ID, _ letter: Character, _ time: TimeInterval) {
+        let group: Group
+        if let last = groups.last, !last.complete, !last.lifted, time - last.time <= 0.060 { group = last }
+        else { group = Group(time); groups.append(group) }
+        group.entries.append(Entry(id: id, letter: letter))
+        group.held.insert(id)
+    }
+    func contains(_ id: ID) -> Bool { groups.contains { $0.held.contains(id) } }
+    func isCandidate(_ id: ID) -> Bool { groups.contains { $0.held.contains(id) && !$0.complete && $0.entries.count >= 2 } }
+    func update(_ id: ID, _ letter: Character?, _ consumed: Bool) {
+        guard let group = groups.first(where: { $0.held.contains(id) }), group.entries.count == 1, !group.complete else { return }
+        if let letter = letter { group.entries[0] = Entry(id: id, letter: letter) }
+        group.suppressed = consumed
+    }
+    func release(_ id: ID) -> Release {
+        guard let group = groups.first(where: { $0.held.contains(id) }) else { return Release(handled: false, completions: []) }
+        group.held.remove(id)
+        group.lifted = true
+        if group.held.isEmpty { group.complete = true }
+        return Release(handled: true, completions: drain())
+    }
+    private func drain() -> [Completion] {
+        var result: [Completion] = []
+        while groups.first?.complete == true {
+            let group = groups.removeFirst()
+            if !group.suppressed { result.append(Completion(entries: group.entries, candidate: group.entries.count >= 2)) }
+        }
+        return result
+    }
+    func cancel() { groups.removeAll() }
 }

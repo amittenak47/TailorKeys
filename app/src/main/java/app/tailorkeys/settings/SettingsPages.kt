@@ -7,6 +7,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -33,6 +35,9 @@ import app.tailorkeys.R
 import app.tailorkeys.ThemeName
 import app.tailorkeys.layout.Template
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import app.tailorkeys.Chords
 
 internal fun LazyListScope.layoutOptions(state: SettingsState, editing: Boolean, spacerHeight: androidx.compose.ui.unit.Dp,
     onEdit: () -> Unit, onShare: () -> Unit, onImport: () -> Unit) {
@@ -269,12 +274,30 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
         }
     }
     item("assist") {
+        var open by remember { mutableStateOf(false) }
+        val language = state.chordLanguage()
+        val letters = state.chordLetters()
+        if (open) {
+            val chords by produceState<List<Chords.Chord>?>(null, language, letters) {
+                value = null
+                value = withContext(Dispatchers.Default) { state.chordList(language, letters) }
+            }
+            AlertDialog(onDismissRequest = { open = false }, title = { Text("Chord list · " + Prefs.LANGUAGE_NAMES.getValue(language)) },
+                text = {
+                    LazyColumn(Modifier.heightIn(max = 400.dp)) {
+                        if (chords == null) item { Text("Loading…") }
+                        else if (chords!!.isEmpty()) item { Text("No chords for this layout.") }
+                        else items(chords!!, key = { it.word }) { Text(it.label, Modifier.padding(vertical = 8.dp)) }
+                    }
+                }, confirmButton = { TextButton(onClick = { open = false }) { Text("Done") } })
+        }
         Column {
             GroupTitle("Assist")
             OptionGroup {
-                for ((label, pref) in listOf("Highlight likely keys" to Prefs.KEY_TINT, "Smart tap areas" to Prefs.SMART_TARGETS, "Vibrate on typos" to Prefs.TYPO_BUZZ)) {
+                for ((label, pref) in listOf("Highlight likely keys" to Prefs.KEY_TINT, "Smart tap areas" to Prefs.SMART_TARGETS, "Vibrate on typos" to Prefs.TYPO_BUZZ, "Chords" to Prefs.CHORDING)) {
                     ToggleRow(label, state.bool(pref)) { state.set(pref, it) }
                 }
+                ActionRow("Chord list") { open = true }
             }
         }
     }

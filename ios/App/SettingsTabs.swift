@@ -6,6 +6,7 @@ struct SettingsScreen: View {
     @State private var ratio = 1.0
     @State private var confirmReset = false
     @State private var languagesOpen = false
+    @State private var chordsOpen = false
     @State private var numberRowBlocked = false
 
     private var prefs: KeyboardSettings { model.settings }
@@ -34,6 +35,7 @@ struct SettingsScreen: View {
             .background(AppStyle.background.ignoresSafeArea())
         }
         .sheet(isPresented: $languagesOpen) { LanguagesSheet(model: model) }
+        .sheet(isPresented: $chordsOpen) { ChordListSheet(model: model) }
         .alert("Reset settings?", isPresented: $confirmReset) {
             Button("Cancel", role: .cancel) {}
             Button("Reset settings", role: .destructive) { model.reset() }
@@ -296,6 +298,8 @@ struct SettingsScreen: View {
             Section(header: Text("Assist").textCase(nil).font(.system(size: 15, weight: .semibold))) {
                 Toggle("Highlight likely keys", isOn: model.bool(Prefs.keyTint, default: true))
                 Toggle("Smart tap areas", isOn: model.bool(Prefs.smartTargets, default: true))
+                Toggle("Chords", isOn: model.bool(Prefs.chording, default: false))
+                Button("Chord list") { chordsOpen = true }
             }
             .disabled(!model.fullAccessConfirmed)
             Section {

@@ -49,6 +49,7 @@ object Prefs {
     val HAPTICS = BoolPref("haptics", true)
     val KEY_TINT = BoolPref("key_tint", true)
     val SWIPE_TYPING = BoolPref("swipe_typing", true)
+    val CHORDING = BoolPref("chording", false)
     val SMART_TARGETS = BoolPref("smart_targets", true)
     val TYPO_BUZZ = BoolPref("typo_buzz", true)
     val LOCK_SIZE = BoolPref("lock_size", false)

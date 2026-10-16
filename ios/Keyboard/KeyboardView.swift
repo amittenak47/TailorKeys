@@ -7,6 +7,7 @@ struct GlidePoint {
 }
 
 protocol KeyboardViewDelegate: AnyObject {
+    func chordTyped(_ word: String)
     func keyTapped(_ code: String)
     func longPressText(_ text: String)
     func stackFace(_ code: String)
@@ -20,6 +21,7 @@ protocol KeyboardViewDelegate: AnyObject {
 }
 
 extension KeyboardViewDelegate {
+    func chordTyped(_ word: String) {}
     func switchLanguage(_ direction: Int) {}
     func glideFinished(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat) {}
 }
@@ -30,6 +32,7 @@ extension KeyboardViewDelegate {
 final class KeyboardView: UIView {
 
     weak var delegate: KeyboardViewDelegate?
+    var chordLibrary: Chords?
     var glideAllowed = true { didSet { if glideAllowed != oldValue { cancelTouches() } } }
     var state = InputState() { didSet { rebuildAccessibilityElements(); setNeedsDisplay() } }
     var keyWeights: [Character: Double] = [:] { didSet { setNeedsDisplay() } }
@@ -105,6 +108,8 @@ final class KeyboardView: UIView {
     private var isLandscape: Bool { let b = UIScreen.main.bounds; return b.width > b.height }
 
     func reloadSettings() {
+        if chordingEnabled != settings.chording { cancelTouches() }
+        chordingEnabled = settings.chording
         state.language = settings.currentLanguage
         dismissPopup()
         palette = Palette.of(settings.theme, dark: traitCollection.userInterfaceStyle == .dark)
@@ -668,6 +673,10 @@ final class KeyboardView: UIView {
         else { bg = palette.key }
         bg.withAlphaComponent(alpha).setFill()
         UIBezierPath(roundedRect: rect, cornerRadius: radius).fill()
+        if !editMode, let key = code.lowercased().first, code.count == 1, chordHighlight.contains(key) {
+            palette.accent.withAlphaComponent(0.43).setFill()
+            UIBezierPath(roundedRect: rect, cornerRadius: radius).fill()
+        }
         if settings.keyTint && state.layer == .abc && !editMode && !pressed && !item.isStack &&
            code.count == 1 && code.first!.isLetter && !keyWeights.isEmpty {
             let weight = keyWeights[code.lowercased().first!] ?? 0
@@ -941,6 +950,7 @@ final class KeyboardView: UIView {
         var x0: CGFloat = 0
         var y0: CGFloat = 0
         var lastX: CGFloat = 0
+        var deferredClick = false
         var glideEligible = false
         var glideWidth: CGFloat = 1
         var points: [GlidePoint] = []
@@ -955,10 +965,17 @@ final class KeyboardView: UIView {
 
     private var trackers: [ObjectIdentifier: Tracker] = [:]
     private var swipe: Swipe?
+    private var chordingEnabled = false
+    private let chordTouches = ChordTouches<ObjectIdentifier>()
+    private var chordHighlight = Set<Character>()
+    private var chordHighlightWork: DispatchWorkItem?
     private var glideID: ObjectIdentifier?
     private var trail: [GlidePoint] = []
 
     func cancelTouches() {
+        chordTouches.cancel()
+        chordHighlightWork?.cancel()
+        chordHighlight.removeAll()
         dismissPopup()
         trackers.values.forEach { $0.stop() }
         trackers = [:]
@@ -972,7 +989,7 @@ final class KeyboardView: UIView {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for t in touches {
+        for t in (settings.chording ? touches.sorted { $0.timestamp < $1.timestamp } : Array(touches)) {
             let p = t.location(in: self)
             if editMode { editBegan(t, p) } else { down(ObjectIdentifier(t), p, t.timestamp) }
         }
@@ -1019,8 +1036,22 @@ final class KeyboardView: UIView {
 
     private func down(_ id: ObjectIdentifier, _ p: CGPoint, _ time: TimeInterval) {
         if glideID != nil { return }
-        // A new finger landing finishes keys other fingers are still holding, for fast rollover typing.
-        for t in trackers.values where t.kind == .key && !t.consumed {
+        let chordKey: Placed?
+        if settings.chording, state.layer == .abc, !editMode, popup == nil,
+           !gearRect.contains(p), !handleRect.contains(p), !wheels.contains(where: { $0.rect.contains(p) }),
+           leftSpace?.contains(p) != true, rightSpace?.contains(p) != true,
+           let pk = findKey(p), !pk.item.isStack, pk.item.keys[0].count == 1, pk.item.keys[0].first!.isLetter {
+            chordKey = pk
+        } else { chordKey = nil }
+        for (otherID, other) in trackers {
+            let code = other.pk?.item.keys[0]
+            chordTouches.update(otherID, code?.count == 1 ? code?.first : nil, other.consumed)
+        }
+        let prepared = chordTouches.prepareDown(time, chordKey != nil)
+        for otherID in prepared.rollover { trackers[otherID]?.stop(); trackers[otherID]?.consumed = true }
+        finishChords(prepared.completions)
+        // Chord members defer rollover; every other touch keeps the existing path.
+        for (otherID, t) in Array(trackers) where t.kind == .key && !t.consumed && !chordTouches.contains(otherID) {
             t.stop(); t.consumed = true; commit(t)
         }
         if gearRect.contains(p) { trackers[id] = Tracker(kind: .gear, pk: nil); return }
@@ -1039,8 +1070,8 @@ final class KeyboardView: UIView {
             setNeedsDisplay()
             return
         }
-        guard let pk = findKey(p) else { return }
-        click()
+        guard let pk = chordKey ?? findKey(p) else { return }
+        if chordKey == nil { click() }
         if pk.item.isStack {
             let t = Tracker(kind: .stack, pk: pk); t.x0 = p.x; t.y0 = p.y; trackers[id] = t
             startLongPress(t)
@@ -1054,6 +1085,13 @@ final class KeyboardView: UIView {
             pk.item.keys[0].count == 1 && pk.item.keys[0].first!.isLetter
         if t.glideEligible { t.points.append(GlidePoint(position: p, time: time)) }
         trackers[id] = t
+        if chordKey != nil {
+            t.deferredClick = true
+            chordTouches.down(id, pk.item.keys[0].lowercased().first!, time)
+            if chordTouches.isCandidate(id) {
+                for (otherID, other) in trackers where chordTouches.isCandidate(otherID) { other.stop() }
+            }
+        }
         if pk.item.keys[0] == Keys.backspace {
             t.consumed = true
             delegate?.keyTapped(Keys.backspace)
@@ -1062,7 +1100,7 @@ final class KeyboardView: UIView {
                 t.repeatTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.delegate?.keyTapped(Keys.backspace) }
                 _ = self
             }
-        } else {
+        } else if !chordTouches.isCandidate(id) {
             startLongPress(t)
         }
         setNeedsDisplay()
@@ -1073,6 +1111,7 @@ final class KeyboardView: UIView {
         if let active = glideID, active != id { return true }
         t.points.append(GlidePoint(position: p, time: time))
         if glideID == nil && hypot(p.x - t.x0, p.y - t.y0) > 0.6 * t.glideWidth {
+            chordTouches.cancel()
             glideID = id
             t.stop(); t.consumed = true
             for (otherID, other) in Array(trackers) where otherID != id { other.stop(); trackers.removeValue(forKey: otherID) }
@@ -1105,6 +1144,7 @@ final class KeyboardView: UIView {
             return
         }
         if recordGlide(id, t, p, time) { return }
+        if chordTouches.isCandidate(id) { return }
         switch t.kind {
         case .wheel:
             let dx = p.x - t.x0
@@ -1157,6 +1197,8 @@ final class KeyboardView: UIView {
         guard let t = trackers.removeValue(forKey: id) else { return }
         t.stop()
         if let popup = popup, popup.owner === t {
+            chordTouches.update(id, nil, true)
+            finishChords(chordTouches.release(id).completions)
             let choice = popup.selected.map { popup.choices[$0] }
             dismissPopup()
             if let choice = choice { delegate?.longPressText(choice) }
@@ -1170,6 +1212,14 @@ final class KeyboardView: UIView {
         if glideID == id {
             glideID = nil
             delegate?.glideFinished(t.points, letterCentres, letterWidth)
+            setNeedsDisplay()
+            return
+        }
+        let code = t.pk?.item.keys[0]
+        chordTouches.update(id, code?.count == 1 ? code?.first : nil, t.consumed)
+        let chordRelease = chordTouches.release(id)
+        if chordRelease.handled {
+            finishChords(chordRelease.completions)
             setNeedsDisplay()
             return
         }
@@ -1205,7 +1255,35 @@ final class KeyboardView: UIView {
         setNeedsDisplay()
     }
 
+    private func finishChords(_ completions: [ChordTouches<ObjectIdentifier>.Completion]) {
+        for completion in completions {
+            if completion.candidate { finishChord(completion.entries) }
+            else { for entry in completion.entries { click(); delegate?.keyTapped(String(entry.letter)) } }
+        }
+    }
+
+    private func finishChord(_ entries: [ChordTouches<ObjectIdentifier>.Entry]) {
+        let letters = String(entries.map { $0.letter })
+        let available = Set(grid.items.filter { !$0.isStack }.compactMap { item -> Character? in
+            guard item.keys[0].count == 1, let key = item.keys[0].lowercased().first, key.isLetter else { return nil }
+            return key
+        })
+        if let chord = chordLibrary?.forLetters(available).first(where: { $0.keys == Chords.letters(letters) }) {
+            delegate?.chordTyped(chord.word)
+            click()
+            chordHighlight = Set(chord.keys)
+            chordHighlightWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.chordHighlight.removeAll(); self?.setNeedsDisplay() }
+            chordHighlightWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+            UIAccessibility.post(notification: .announcement, argument: chord.word)
+        } else {
+            for entry in entries { click(); delegate?.keyTapped(String(entry.letter)) }
+        }
+    }
+
     private func commit(_ t: Tracker) {
+        if t.deferredClick { t.deferredClick = false; click() }
         guard let item = t.pk?.item else { return }
         delegate?.keyTapped(item.keys[0])
     }

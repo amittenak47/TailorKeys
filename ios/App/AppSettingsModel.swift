@@ -21,6 +21,26 @@ final class AppSettingsModel: ObservableObject {
     var shareCode = ""
     var importCode = ""
 
+    private var chordLibraries: [String: Chords] = [:]
+    /// Dictionaries ship in the embedded keyboard extension, so the app needs no Predictor target dependency.
+    func chordList() -> [Chord]? {
+        let language = settings.currentLanguage
+        if chordLibraries[language] == nil {
+            let suffix = language == "en" ? "" : "_" + language
+            let plugins = Bundle.main.builtInPlugInsURL.flatMap { try? FileManager.default.contentsOfDirectory(at: $0, includingPropertiesForKeys: nil) } ?? []
+            let bundles = [Bundle.main] + plugins.compactMap { Bundle(url: $0) }
+            guard let url = bundles.compactMap({ $0.url(forResource: "words" + suffix, withExtension: "txt") }).first,
+                  let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+            let words = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
+            chordLibraries[language] = Chords(words)
+        }
+        let letters = Set(grid.items.filter { !$0.isStack }.compactMap { item -> Character? in
+            guard item.keys[0].count == 1, let key = item.keys[0].lowercased().first, key.isLetter else { return nil }
+            return key
+        })
+        return chordLibraries[language]?.forLetters(letters)
+    }
+
     private var readyWork: DispatchWorkItem?
 
     init() {

@@ -53,6 +53,7 @@ import kotlin.math.sin
 class KeyboardView(context: Context, private val settings: KeyboardSettings) : View(context) {
 
     interface Listener {
+        fun onChord(word: String) {}
         fun onKey(code: String)
         fun onLongPressText(text: String)
         fun onStackFace(code: String)
@@ -67,6 +68,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     var listener: Listener? = null
+    var chordLibrary: Chords? = null
     var glideAllowed = true
         set(value) { if (field != value) cancelTouches(); field = value }
     var state = InputState()
@@ -135,6 +137,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val isLandscape get() = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     fun reloadSettings() {
+        if (settings.bool(Prefs.CHORDING) != chordingEnabled) cancelTouches()
+        chordingEnabled = settings.bool(Prefs.CHORDING)
         state.language = settings.currentLanguage()
         dismissPopup()
         palette = Palette.of(context, settings.theme())
@@ -813,6 +817,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         }
         fill.alpha = (255 * alpha).toInt()
         canvas.drawRoundRect(rect, radius, radius, fill)
+        if (!editMode && code.singleOrNull()?.lowercaseChar() in chordHighlight) {
+            fill.color = palette.accent
+            fill.alpha = 110
+            canvas.drawRoundRect(rect, radius, radius, fill)
+        }
         if (settings.bool(Prefs.KEY_TINT) && state.layer == Layer.ABC && !editMode && !pressed &&
             !item.isStack && code.length == 1 && code[0].isLetter() && keyWeights.isNotEmpty()) {
             fill.color = palette.accent
@@ -1119,6 +1128,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         var fx = 0f
         var fy = 0f
         var select = false
+        var deferredHaptic = false
         var glideEligible = false
         var glideWidth = 1f
         val points = ArrayList<GestureDecoder.Point>()
@@ -1137,10 +1147,17 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val timers = Handler(Looper.getMainLooper())
     private val trackers = LinkedHashMap<Int, Tracker>()
     private var swipe: Swipe? = null
+    private var chordingEnabled = settings.bool(Prefs.CHORDING)
+    private val chordTouches = ChordTouches<Int>()
+    private var chordHighlight = emptySet<Char>()
+    private val clearChordHighlight = Runnable { chordHighlight = emptySet(); invalidate() }
     private var glideId: Int? = null
     private var trail: List<GestureDecoder.Point> = emptyList()
 
     fun cancelTouches() {
+        chordTouches.cancel()
+        timers.removeCallbacks(clearChordHighlight)
+        chordHighlight = emptySet()
         dismissPopup()
         trackers.values.forEach { stopTimers(it); if (it.select) listener?.onSelectMode(false) }
         trackers.clear()
@@ -1181,9 +1198,18 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     private fun pointerDown(id: Int, x: Float, y: Float, time: Long) {
         if (glideId != null) return
-        // A new finger landing finishes keys other fingers are still holding, for fast rollover typing.
-        for (t in trackers.values.toList()) {
-            if (t.kind != K_KEY || t.consumed) continue
+        val chordKey = if (settings.bool(Prefs.CHORDING) && state.layer == Layer.ABC && !editMode && popup == null &&
+            !gearRect.contains(x, y) && !handleRect.contains(x, y) && !wheels.any { it.rect.contains(x, y) } &&
+            leftSpace?.contains(x, y) != true && rightSpace?.contains(x, y) != true) findKey(x, y)?.takeIf {
+                !it.item.isStack && it.item.keys[0].let { k -> k.length == 1 && k[0].isLetter() }
+            } else null
+        for ((otherId, other) in trackers) chordTouches.update(otherId, other.pk?.item?.keys?.firstOrNull()?.singleOrNull(), other.consumed)
+        val prepared = chordTouches.prepareDown(time, chordKey != null)
+        for (otherId in prepared.rollover) trackers[otherId]?.let { stopTimers(it); it.consumed = true }
+        finishChords(prepared.completions)
+        // Chord members defer rollover; every other touch keeps the existing path.
+        for ((otherId, t) in trackers.toMap()) {
+            if (t.kind != K_KEY || t.consumed || chordTouches.contains(otherId)) continue
             stopTimers(t); t.consumed = true; commit(t)
         }
         if (gearRect.contains(x, y)) {
@@ -1213,8 +1239,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             invalidate()
             return
         }
-        val pk = findKey(x, y) ?: return
-        haptic(HapticFeedbackConstants.KEYBOARD_TAP)
+        val pk = chordKey ?: findKey(x, y) ?: return
+        if (chordKey == null) haptic(HapticFeedbackConstants.KEYBOARD_TAP)
         if (pk.item.isStack) {
             trackers[id] = Tracker(K_STACK, pk).also { it.x0 = x; it.y0 = y; timers.postDelayed(it.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong()) }
             swipe = Swipe(pk.item)
@@ -1227,11 +1253,16 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             pk.item.keys[0].let { it.length == 1 && it[0].isLetter() }
         if (t.glideEligible) t.points.add(GestureDecoder.Point(x, y, time))
         trackers[id] = t
+        if (chordKey != null) {
+            t.deferredHaptic = true
+            chordTouches.down(id, pk.item.keys[0][0].lowercaseChar(), time)
+            if (chordTouches.isCandidate(id)) trackers.filterKeys { chordTouches.isCandidate(it) }.values.forEach { stopTimers(it) }
+        }
         if (pk.item.keys[0] == Keys.BACKSPACE) {
             t.consumed = true
             listener?.onKey(Keys.BACKSPACE)
             timers.postDelayed(t.repeat, REPEAT_DELAY_MS)
-        } else {
+        } else if (!chordTouches.isCandidate(id)) {
             timers.postDelayed(t.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong())
         }
         invalidate()
@@ -1242,6 +1273,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         if (glideId != null && glideId != id) return true
         t.points.add(GestureDecoder.Point(x, y, time))
         if (glideId == null && hypot(x - t.x0, y - t.y0) > 0.6f * t.glideWidth) {
+            chordTouches.cancel()
             glideId = id
             stopTimers(t)
             t.consumed = true
@@ -1274,6 +1306,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             return
         }
         if (recordGlide(id, t, x, y, time)) return
+        if (chordTouches.isCandidate(id)) return
         when (t.kind) {
             K_WHEEL -> {
                 val dx = x - t.x0
@@ -1338,6 +1371,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val t = trackers.remove(id) ?: return
         stopTimers(t)
         popup?.takeIf { it.owner === t }?.let {
+            chordTouches.update(id, null, true)
+            finishChords(chordTouches.release(id).completions)
             val choice = it.choices.getOrNull(it.selected)
             dismissPopup()
             choice?.let { value -> listener?.onLongPressText(value) }
@@ -1351,6 +1386,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         if (glideId == id) {
             glideId = null
             listener?.onGlide(t.points.toList(), letterCentres, letterWidth)
+            invalidate()
+            return
+        }
+        chordTouches.update(id, t.pk?.item?.keys?.firstOrNull()?.singleOrNull(), t.consumed)
+        val chordRelease = chordTouches.release(id)
+        if (chordRelease.handled) {
+            finishChords(chordRelease.completions)
             invalidate()
             return
         }
@@ -1385,7 +1427,37 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         invalidate()
     }
 
+    private fun finishChords(completions: List<ChordTouches.Completion<Int>>) {
+        for (completion in completions) {
+            if (completion.candidate) finishChord(completion.entries)
+            else for (entry in completion.entries) {
+                haptic(HapticFeedbackConstants.KEYBOARD_TAP)
+                listener?.onKey(entry.letter.toString())
+            }
+        }
+    }
+
+    private fun finishChord(entries: List<ChordTouches.Entry<Int>>) {
+        val letters = entries.map { it.letter }.joinToString("")
+        val available = grid.items.filter { !it.isStack }.mapNotNull { it.keys[0].singleOrNull()?.takeIf(Char::isLetter)?.lowercaseChar() }.toSet()
+        val chord = chordLibrary?.forLetters(available)?.firstOrNull { it.keys == Chords.letters(letters) }
+        if (chord != null) {
+            listener?.onChord(chord.word)
+            haptic(if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.KEYBOARD_TAP)
+            chordHighlight = chord.keys.toSet()
+            timers.removeCallbacks(clearChordHighlight)
+            timers.postDelayed(clearChordHighlight, 150)
+            announceForAccessibility(chord.word)
+        } else {
+            for (entry in entries) {
+                haptic(HapticFeedbackConstants.KEYBOARD_TAP)
+                listener?.onKey(entry.letter.toString())
+            }
+        }
+    }
+
     private fun commit(t: Tracker) {
+        if (t.deferredHaptic) { t.deferredHaptic = false; haptic(HapticFeedbackConstants.KEYBOARD_TAP) }
         val item = t.pk?.item ?: return
         listener?.onKey(item.keys[0])
     }

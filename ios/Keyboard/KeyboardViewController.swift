@@ -10,7 +10,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private var settings: KeyboardSettings!
     private var predictor: Predictor!
     private var gestureDecoder: GestureDecoder!
-    private struct LanguageModel { let predictor: Predictor; let decoder: GestureDecoder }
+    private struct LanguageModel { let predictor: Predictor; let decoder: GestureDecoder; let chords: Chords }
     private var models: [String: LanguageModel] = [:]
     private var loading = Set<String>()
     private let loader = DispatchQueue(label: "app.tailorkeys.languages", qos: .userInitiated)
@@ -23,7 +23,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
                 self.updateSuggestions()
             }
         }
-        return LanguageModel(predictor: p, decoder: GestureDecoder(p.gestureWords()))
+        return LanguageModel(predictor: p, decoder: GestureDecoder(p.gestureWords()), chords: Chords(predictor: p))
     }
 
     private func activateLanguage() {
@@ -36,6 +36,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         state.language = lang
         if let kb = keyboard { kb.grid = settings.loadGrid() }
         modelReady = models[lang] != nil
+        keyboard?.chordLibrary = models[lang]?.chords
         if let model = models[lang] {
             predictor = model.predictor
             gestureDecoder = model.decoder
@@ -99,6 +100,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         modelReady = true
         let kb = KeyboardView(settings: settings, grid: settings.loadGrid())
         kb.state = state
+        kb.chordLibrary = initial.chords
         kb.delegate = self
         kb.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(kb)
@@ -158,6 +160,23 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     // MARK: - KeyboardViewDelegate
+
+    func chordTyped(_ word: String) {
+        changingGlide = true
+        defer { changingGlide = false }
+        let shifted = state.shift
+        if let last = textDocumentProxy.documentContextBeforeInput?.last, last.isLetter || last.isNumber { typeSpace() }
+        updateAutoCap()
+        state.shift = state.shift || shifted
+        let upper = state.capsLock || (settings.autoCap && textDocumentProxy.autocapitalizationType == .allCharacters)
+        let text = upper ? word.uppercased() : (state.shift ? word.prefix(1).uppercased() + word.dropFirst() : word)
+        clearGlide()
+        insert(text)
+        typeSpace()
+        updateAutoCap()
+        updateSuggestions()
+        keyboard.setNeedsDisplay()
+    }
 
     func keyTapped(_ code: String) {
         switch code {
