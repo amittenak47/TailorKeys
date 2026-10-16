@@ -8,14 +8,20 @@ import android.graphics.DashPathEffect
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityManager
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityNodeProvider
 import app.tailorkeys.layout.GridKey
 import app.tailorkeys.layout.InputState
 import app.tailorkeys.layout.KeyGrid
@@ -58,13 +64,14 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     var listener: Listener? = null
     var state = InputState()
+        set(value) { field = value; refreshAccessibilityState(); invalidate() }
     var keyWeights: Map<Char, Double> = emptyMap()
         set(value) { field = value; invalidate() }
     /** Setting a new grid from outside clears the undo history; [undo] and [replaceGrid] keep it. */
     var grid: KeyGrid = KeyGrid.default()
         set(value) { field = value; if (!keepHistory) history.clear(); cancelTouches(); relayout() }
     var enterLabel: String? = null
-        set(value) { field = value; invalidate() }
+        set(value) { field = value; refreshAccessibilityState(); invalidate() }
     var editMode = false
         set(value) { if (field != value) { field = value; editHint = null; cancelTouches(); relayout() } }
     /** True inside the keyboard itself: shows the gear, and settings and Done while rearranging. */
@@ -82,6 +89,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     fun setSuggestions(left: List<String>, right: List<String>, prefix: String) {
         sugLeft = left; sugRight = right; this.prefix = prefix
         for (w in wheels) { w.index = 0; w.dragDx = 0f }
+        refreshAccessibilityState()
+        if (!editMode) for (id in A_WHEEL_LEFT..A_WHEEL_RIGHT) accessibilityEvent(id, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.CONTENT_CHANGE_TYPE_TEXT)
         invalidate()
     }
 
@@ -123,6 +132,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun relayout() {
+        clearAccessibilityFocus()
+        updateHoveredView(A_NONE)
         builtWidth = -1
         requestLayout()
         invalidate()
@@ -283,6 +294,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         leftSpace = if (areaLeft >= minSpace) RectF(0f, stripH, areaLeft, y0 + hc) else null
         rightSpace = if (width - (areaLeft + areaW) >= minSpace) RectF(areaLeft + areaW, stripH, width.toFloat(), y0 + hc) else null
         builtWidth = width
+        accessibilityEvent(View.NO_ID, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE)
         return ceil(s.total).toInt()
     }
 
@@ -298,10 +310,264 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         return j
     }
 
+    // ---- Accessibility ----
+
+    private val accessibilityManager = context.getSystemService(AccessibilityManager::class.java)
+    private var accessibilityFocus = A_NONE
+    private var hoveredView = A_NONE
+    private var spokenLayer = state.layer
+    private var spokenCapsLock = state.capsLock
+    private var spokenShift = state.shift
+    private var spokenEnterLabel: String? = null
+
+    init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES }
+
+    private fun accessibilityIds(): List<Int> {
+        val ids = placed.indices.toMutableList()
+        if (editMode) {
+            ids += A_UNDO
+            if (!moreRect.isEmpty) ids += A_SETTINGS
+            if (!doneRect.isEmpty) ids += A_DONE
+        } else {
+            ids += A_WHEEL_LEFT; ids += A_WHEEL_RIGHT
+            if (gearRect.width() >= 20 * density) ids += A_GEAR
+            if (!cursorRect.isEmpty) ids += A_CURSOR
+        }
+        return ids
+    }
+
+    private fun accessibilityRect(id: Int): RectF = when (id) {
+        A_WHEEL_LEFT -> wheels[0].rect
+        A_WHEEL_RIGHT -> wheels[1].rect
+        A_GEAR -> gearRect
+        A_CURSOR -> cursorRect
+        A_UNDO -> undoRect
+        A_SETTINGS -> moreRect
+        A_DONE -> doneRect
+        else -> RectF(placed[id].rect).also { placed[id].matrix.mapRect(it) }
+    }
+
+    private fun accessibilityValue(id: Int): String? {
+        placed.getOrNull(id)?.item?.let { return KeyText.spoken(it.keys[shownIdx(it)], state, enterLabel) }
+        val wheel = when (id) { A_WHEEL_LEFT -> wheels[0]; A_WHEEL_RIGHT -> wheels[1]; else -> return null }
+        val list = words(wheel)
+        return if (list.isEmpty()) null else wordAt(list, wheel.index)
+    }
+
+    private fun accessibilityLabel(id: Int): String = when (id) {
+        A_WHEEL_LEFT -> "More suggestions"
+        A_WHEEL_RIGHT -> "Suggestions"
+        A_GEAR -> "Rearrange keys"
+        A_CURSOR -> "Cursor"
+        A_UNDO -> "Undo"
+        A_SETTINGS -> "Settings"
+        A_DONE -> "Done"
+        else -> {
+            val item = placed[id].item
+            val face = accessibilityValue(id)!!
+            if (item.isStack) "$face, swipe key, ${item.keys.size} options" else face
+        }
+    }
+
+    // Older TalkBack versions identify keyboard keys by their class name.
+    private fun accessibilityClassName(id: Int): String = when {
+        id == View.NO_ID -> javaClass.name
+        id in placed.indices -> "android.inputmethodservice.Keyboard\$Key"
+        else -> "android.widget.Button"
+    }
+
+    private fun accessibilityEvent(id: Int, type: Int, change: Int = 0) {
+        if (!accessibilityManager.isEnabled) return
+        val event = AccessibilityEvent.obtain(type)
+        event.packageName = context.packageName
+        event.className = accessibilityClassName(id)
+        event.isEnabled = isEnabled
+        event.setSource(this, id)
+        if (id != View.NO_ID && id in accessibilityIds()) {
+            val value = accessibilityValue(id)
+            event.contentDescription = if (type == AccessibilityEvent.TYPE_VIEW_SELECTED) value else accessibilityLabel(id)
+            value?.let { event.text.add(it) }
+        }
+        if (type == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) event.contentChangeTypes = change
+        parent?.requestSendAccessibilityEvent(this, event)
+    }
+
+    private fun refreshAccessibilityState() {
+        val layerChanged = spokenLayer != state.layer
+        val capsChanged = spokenCapsLock != state.capsLock
+        val changed = layerChanged || capsChanged || spokenShift != state.shift || spokenEnterLabel != enterLabel
+        spokenLayer = state.layer; spokenCapsLock = state.capsLock; spokenShift = state.shift; spokenEnterLabel = enterLabel
+        if (layerChanged) announceForAccessibility(when (state.layer) { Layer.ABC -> "Letters"; Layer.NUM -> "Numbers"; Layer.SYM -> "Symbols" })
+        if (capsChanged) announceForAccessibility(if (state.capsLock) "Caps lock on" else "Caps lock off")
+        if (changed) accessibilityEvent(View.NO_ID, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE)
+    }
+
+    private fun clearAccessibilityFocus() {
+        if (accessibilityFocus == A_NONE) return
+        val old = accessibilityFocus
+        accessibilityFocus = A_NONE
+        accessibilityEvent(old, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED)
+    }
+
+    private fun updateHoveredView(id: Int) {
+        if (hoveredView == id) return
+        val old = hoveredView
+        hoveredView = id
+        if (id != A_NONE) accessibilityEvent(id, AccessibilityEvent.TYPE_VIEW_HOVER_ENTER)
+        if (old != A_NONE) accessibilityEvent(old, AccessibilityEvent.TYPE_VIEW_HOVER_EXIT)
+    }
+
+    override fun dispatchHoverEvent(event: MotionEvent): Boolean {
+        if (accessibilityManager.isEnabled && accessibilityManager.isTouchExplorationEnabled) return onHoverEvent(event)
+        return super.dispatchHoverEvent(event)
+    }
+
+    override fun onHoverEvent(event: MotionEvent): Boolean {
+        if (!accessibilityManager.isEnabled || !accessibilityManager.isTouchExplorationEnabled) return super.onHoverEvent(event)
+        ensureLayout()
+        when (event.actionMasked) {
+            MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> {
+                val x = event.x; val y = event.y
+                val id = if (y < stripH) {
+                    accessibilityIds().firstOrNull { it >= A_WHEEL_LEFT && accessibilityRect(it).contains(x, y) } ?: A_NONE
+                } else {
+                    findKey(x, y, strict = true)?.let { placed.indexOf(it) }
+                        ?: if (!editMode && cursorRect.contains(x, y)) A_CURSOR else A_NONE
+                }
+                updateHoveredView(id)
+            }
+            MotionEvent.ACTION_HOVER_EXIT -> updateHoveredView(A_NONE)
+            else -> return false
+        }
+        return true
+    }
+
+    private fun activateAccessibleView(id: Int): Boolean {
+        if (id == A_CURSOR || id == A_UNDO && history.isEmpty()) return false
+        if ((id == A_WHEEL_LEFT || id == A_WHEEL_RIGHT) && accessibilityValue(id) == null) return false
+        accessibilityEvent(id, AccessibilityEvent.TYPE_VIEW_CLICKED)
+        when (id) {
+            A_WHEEL_LEFT, A_WHEEL_RIGHT -> listener?.onSuggestion(accessibilityValue(id) ?: return false)
+            A_GEAR -> editMode = true
+            A_UNDO -> { if (history.isEmpty()) return false; undo() }
+            A_SETTINGS -> listener?.onOpenSettings()
+            A_DONE -> editMode = false
+            A_CURSOR -> return false
+            else -> {
+                val item = placed[id].item
+                haptic(HapticFeedbackConstants.KEYBOARD_TAP)
+                listener?.onKey(item.keys[shownIdx(item)])
+            }
+        }
+        refreshAccessibilityState()
+        invalidate()
+        return true
+    }
+
+    private fun adjustAccessibleView(id: Int, step: Int): Boolean {
+        when (id) {
+            A_WHEEL_LEFT, A_WHEEL_RIGHT -> {
+                val wheel = wheels[id - A_WHEEL_LEFT]
+                val list = words(wheel)
+                if (list.isEmpty()) return false
+                wheel.index = (wheel.index + step + list.size) % list.size
+                wheel.dragDx = 0f
+            }
+            A_CURSOR -> { listener?.onCursor(step, select = false); return true }
+            else -> {
+                val item = placed.getOrNull(id)?.item ?: return false
+                if (!item.isStack) return false
+                item.idx = (shownIdx(item) + step + item.keys.size) % item.keys.size
+                listener?.onStackFace(item.keys[item.idx])
+            }
+        }
+        refreshAccessibilityState()
+        invalidate()
+        accessibilityEvent(id, AccessibilityEvent.TYPE_VIEW_SELECTED)
+        return true
+    }
+
+    private val accessibilityProvider = object : AccessibilityNodeProvider() {
+        override fun createAccessibilityNodeInfo(virtualViewId: Int): AccessibilityNodeInfo? {
+            ensureLayout()
+            if (virtualViewId == View.NO_ID) return AccessibilityNodeInfo.obtain(this@KeyboardView).also {
+                onInitializeAccessibilityNodeInfo(it)
+                for (id in accessibilityIds()) it.addChild(this@KeyboardView, id)
+            }
+            val id = virtualViewId
+            if (id !in accessibilityIds()) return null
+            return AccessibilityNodeInfo.obtain().also {
+                it.setSource(this@KeyboardView, id)
+                it.setParent(this@KeyboardView)
+                it.packageName = context.packageName
+                it.className = accessibilityClassName(id)
+                it.contentDescription = accessibilityLabel(id)
+                it.isEnabled = isEnabled && (id != A_UNDO || history.isNotEmpty())
+                it.isVisibleToUser = isShown && windowVisibility == VISIBLE
+                it.isFocusable = true
+                it.isAccessibilityFocused = accessibilityFocus == id
+                val bounds = Rect()
+                accessibilityRect(id).roundOut(bounds)
+                it.setBoundsInParent(bounds)
+                val location = IntArray(2)
+                getLocationOnScreen(location)
+                bounds.offset(location[0] - scrollX, location[1] - scrollY)
+                it.setBoundsInScreen(bounds)
+                val item = placed.getOrNull(id)?.item
+                val wheel = id == A_WHEEL_LEFT || id == A_WHEEL_RIGHT
+                val value = accessibilityValue(id)
+                if (wheel) it.text = value
+                if (Build.VERSION.SDK_INT >= 29) it.isTextEntryKey = item != null
+                if (Build.VERSION.SDK_INT >= 30 && (item?.isStack == true || wheel)) it.stateDescription = value
+                it.isClickable = id != A_CURSOR && (!wheel || value != null)
+                if (it.isClickable) it.addAction(AccessibilityNodeInfo.ACTION_CLICK)
+                if (item?.isStack == true || wheel && value != null || id == A_CURSOR) {
+                    it.isScrollable = true
+                    it.addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                    it.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+                }
+                it.addAction(if (accessibilityFocus == id) AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS else AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
+            }
+        }
+
+        override fun findFocus(focus: Int): AccessibilityNodeInfo? =
+            if (focus == AccessibilityNodeInfo.FOCUS_ACCESSIBILITY && accessibilityFocus != A_NONE) createAccessibilityNodeInfo(accessibilityFocus) else null
+
+        override fun performAction(virtualViewId: Int, action: Int, arguments: Bundle?): Boolean {
+            if (virtualViewId == View.NO_ID) return performAccessibilityAction(action, arguments)
+            ensureLayout()
+            if (virtualViewId !in accessibilityIds()) return false
+            when (action) {
+                AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS -> {
+                    if (accessibilityFocus == virtualViewId || !accessibilityManager.isEnabled) return false
+                    clearAccessibilityFocus()
+                    accessibilityFocus = virtualViewId
+                    accessibilityEvent(virtualViewId, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED)
+                    return true
+                }
+                AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS -> {
+                    if (accessibilityFocus != virtualViewId) return false
+                    clearAccessibilityFocus()
+                    return true
+                }
+            }
+            if (!isEnabled) return false
+            return when (action) {
+                AccessibilityNodeInfo.ACTION_CLICK -> activateAccessibleView(virtualViewId)
+                AccessibilityNodeInfo.ACTION_SCROLL_FORWARD -> adjustAccessibleView(virtualViewId, 1)
+                AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> adjustAccessibleView(virtualViewId, -1)
+                else -> false
+            }
+        }
+    }
+
+    override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = accessibilityProvider
+
     // ---- Drawing ----
 
     override fun onDraw(canvas: Canvas) {
         ensureLayout()
+        refreshAccessibilityState()
         canvas.drawColor(palette.background)
         if (editMode) {
             drawToolbar(canvas)
@@ -724,6 +990,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     sw.stepped = true
                     sw.dy = 0f
                     listener?.onStackFace(item.keys[j])
+                    accessibilityEvent(placed.indexOf(t.pk), AccessibilityEvent.TYPE_VIEW_SELECTED)
                     haptic(HapticFeedbackConstants.KEYBOARD_TAP)
                 }
                 invalidate()
@@ -757,6 +1024,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                         if (dist < bestDist) { bestDist = dist; best = k }
                     }
                     wh.index = ((wh.index + best) % list.size + list.size) % list.size
+                    accessibilityEvent(A_WHEEL_LEFT + wh.side, AccessibilityEvent.TYPE_VIEW_SELECTED)
                 } else if (list.isNotEmpty()) {
                     listener?.onSuggestion(wordAt(list, wh.index))
                 }
@@ -894,6 +1162,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     override fun onDetachedFromWindow() {
+        clearAccessibilityFocus()
+        updateHoveredView(A_NONE)
         cancelTouches()
         super.onDetachedFromWindow()
     }
@@ -1048,6 +1318,14 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private companion object {
+        const val A_NONE = Int.MIN_VALUE
+        const val A_WHEEL_LEFT = 10000
+        const val A_WHEEL_RIGHT = 10001
+        const val A_GEAR = 10002
+        const val A_CURSOR = 10003
+        const val A_UNDO = 10004
+        const val A_SETTINGS = 10005
+        const val A_DONE = 10006
         const val REPEAT_DELAY_MS = 400L
         const val REPEAT_INTERVAL_MS = 50L
         const val K_KEY = 0

@@ -17,11 +17,11 @@ protocol KeyboardViewDelegate: AnyObject {
 final class KeyboardView: UIView {
 
     weak var delegate: KeyboardViewDelegate?
-    var state = InputState()
+    var state = InputState() { didSet { rebuildAccessibilityElements(); setNeedsDisplay() } }
     var keyWeights: [Character: Double] = [:] { didSet { setNeedsDisplay() } }
     /// Setting a new grid from outside clears the undo history; `undo()` and `replaceGrid(_:)` keep it.
     var grid: KeyGrid { didSet { if !keepHistory { history.removeAll() }; cancelTouches(); relayout() } }
-    var enterLabel: String? { didSet { setNeedsDisplay() } }
+    var enterLabel: String? { didSet { rebuildAccessibilityElements(); setNeedsDisplay() } }
     var editMode = false { didSet { if editMode != oldValue { editHint = nil; cancelTouches(); updateWiggle(); relayout() } } }
 
     private var history: [String] = []
@@ -39,6 +39,7 @@ final class KeyboardView: UIView {
     func setSuggestions(left: [String], right: [String], prefix: String) {
         sugLeft = left; sugRight = right; self.prefix = prefix
         for w in wheels { w.index = 0; w.dragDx = 0 }
+        rebuildAccessibilityElements()
         setNeedsDisplay()
     }
 
@@ -77,6 +78,7 @@ final class KeyboardView: UIView {
         palette = Palette.of(settings.theme, dark: false)
         super.init(frame: .zero)
         isMultipleTouchEnabled = true
+        isAccessibilityElement = false
         isOpaque = true
         contentMode = .redraw
         palette = Palette.of(settings.theme, dark: traitCollection.userInterfaceStyle == .dark)
@@ -120,6 +122,7 @@ final class KeyboardView: UIView {
     /// Places every key for this width and returns the keyboard height.
     @discardableResult
     private func layoutFor(_ width: CGFloat) -> CGFloat {
+        let accessibilityLayoutChanged = builtWidth != width
         let p = settings.profile(isLandscape)
         let screenH = UIScreen.main.bounds.height
         let split = p.split
@@ -258,6 +261,7 @@ final class KeyboardView: UIView {
         leftSpace = areaLeft >= 40 ? CGRect(x: 0, y: strip, width: areaLeft, height: y0 + hc - strip) : nil
         rightSpace = width - (areaLeft + areaW) >= 40 ? CGRect(x: areaLeft + areaW, y: strip, width: width - areaLeft - areaW, height: y0 + hc - strip) : nil
         builtWidth = width
+        rebuildAccessibilityElements(layoutChanged: accessibilityLayoutChanged)
         return ceil(total(s))
     }
 
@@ -273,11 +277,150 @@ final class KeyboardView: UIView {
         return j
     }
 
+    // MARK: - Accessibility
+
+    private final class AccessibleElement: UIAccessibilityElement {
+        var activate: (() -> Bool)?
+        var increment: (() -> Void)?
+        var decrement: (() -> Void)?
+        override func accessibilityActivate() -> Bool { activate?() ?? false }
+        override func accessibilityIncrement() { increment?() }
+        override func accessibilityDecrement() { decrement?() }
+    }
+
+    private var accessibleItems: [String: AccessibleElement] = [:]
+    private var accessibilitySignature: [String] = []
+    private var spokenLayer: Layer = .abc
+    private var spokenCapsLock = false
+
+    private func rebuildAccessibilityElements(layoutChanged: Bool = false) {
+        let layerChanged = spokenLayer != state.layer
+        let capsChanged = spokenCapsLock != state.capsLock
+        spokenLayer = state.layer; spokenCapsLock = state.capsLock
+        if layerChanged {
+            let name: String
+            switch state.layer { case .abc: name = "Letters"; case .num: name = "Numbers"; case .sym: name = "Symbols" }
+            UIAccessibility.post(notification: .announcement, argument: name)
+        }
+        if capsChanged { UIAccessibility.post(notification: .announcement, argument: state.capsLock ? "Caps lock on" : "Caps lock off") }
+        var signature = ["\(state.layer)", "\(state.capsLock)", "\(state.shift)", enterLabel ?? "", "\(editMode)", "\(history.isEmpty)"]
+        signature.append(contentsOf: placed.map { "\(KeyText.spoken($0.item.keys[shownIdx($0.item)], state, enterLabel)):\($0.item.keys.count)" })
+        signature.append(contentsOf: wheels.map { words($0).isEmpty ? "" : wordAt(words($0), $0.index) })
+        guard layoutChanged || signature != accessibilitySignature else { return }
+        accessibilitySignature = signature
+        var items: [String: AccessibleElement] = [:]
+        var ordered: [AccessibleElement] = []
+        func element(_ id: String, _ frame: CGRect, _ label: String, _ traits: UIAccessibilityTraits) -> AccessibleElement {
+            let e = accessibleItems[id] ?? AccessibleElement(accessibilityContainer: self)
+            e.isAccessibilityElement = true
+            e.accessibilityFrameInContainerSpace = frame
+            e.accessibilityLabel = label
+            e.accessibilityTraits = traits
+            e.accessibilityValue = nil
+            e.activate = nil; e.increment = nil; e.decrement = nil
+            items[id] = e
+            ordered.append(e)
+            return e
+        }
+        for (index, pk) in placed.enumerated() {
+            let face = KeyText.spoken(pk.item.keys[shownIdx(pk.item)], state, enterLabel)
+            let label = pk.item.isStack ? "\(face), swipe key, \(pk.item.keys.count) options" : face
+            let traits: UIAccessibilityTraits = pk.item.isStack ? [.keyboardKey, .adjustable] : .keyboardKey
+            let e = element("key\(index)", pk.rect.applying(pk.t), label, traits)
+            e.activate = { [weak self] in self?.activateAccessibleKey(index) ?? false }
+            if pk.item.isStack {
+                e.accessibilityValue = face
+                e.increment = { [weak self] in self?.adjustAccessibleKey(index, 1) }
+                e.decrement = { [weak self] in self?.adjustAccessibleKey(index, -1) }
+            }
+        }
+        if editMode {
+            let undo = element("undo", undoRect, "Undo", history.isEmpty ? [.button, .notEnabled] : .button)
+            undo.activate = { [weak self] in
+                guard let self = self, !self.history.isEmpty else { return false }
+                self.undo()
+                return true
+            }
+            let settings = element("settings", moreRect, "Settings", .button)
+            settings.activate = { [weak self] in
+                guard let self = self, let delegate = self.delegate else { return false }
+                delegate.openSettings()
+                return true
+            }
+            let done = element("done", doneRect, "Done", .button)
+            done.activate = { [weak self] in
+                guard let self = self else { return false }
+                self.editMode = false
+                return true
+            }
+        } else {
+            for (index, wheel) in wheels.enumerated() {
+                let list = words(wheel)
+                let e = element("wheel\(index)", wheel.rect, index == 0 ? "More suggestions" : "Suggestions", list.isEmpty ? [.adjustable, .notEnabled] : .adjustable)
+                e.accessibilityValue = list.isEmpty ? nil : wordAt(list, wheel.index)
+                e.activate = { [weak self] in self?.activateAccessibleWheel(index) ?? false }
+                e.increment = { [weak self] in self?.adjustAccessibleWheel(index, 1) }
+                e.decrement = { [weak self] in self?.adjustAccessibleWheel(index, -1) }
+            }
+            let gear = element("gear", gearRect, "Rearrange keys", .button)
+            gear.activate = { [weak self] in
+                guard let self = self else { return false }
+                self.editMode = true
+                return true
+            }
+        }
+        accessibleItems = items
+        accessibilityElements = ordered
+        if layoutChanged { UIAccessibility.post(notification: .layoutChanged, argument: nil) }
+    }
+
+    private func activateAccessibleKey(_ index: Int) -> Bool {
+        guard placed.indices.contains(index), let delegate = delegate else { return false }
+        let item = placed[index].item
+        click()
+        delegate.keyTapped(item.keys[shownIdx(item)])
+        rebuildAccessibilityElements()
+        setNeedsDisplay()
+        return true
+    }
+
+    private func adjustAccessibleKey(_ index: Int, _ step: Int) {
+        guard placed.indices.contains(index) else { return }
+        let item = placed[index].item
+        guard item.isStack else { return }
+        item.idx = (shownIdx(item) + step + item.keys.count) % item.keys.count
+        delegate?.stackFace(item.keys[item.idx])
+        click()
+        rebuildAccessibilityElements()
+        setNeedsDisplay()
+    }
+
+    private func activateAccessibleWheel(_ index: Int) -> Bool {
+        let wheel = wheels[index]
+        let list = words(wheel)
+        guard !list.isEmpty, let delegate = delegate else { return false }
+        delegate.suggestionPicked(wordAt(list, wheel.index))
+        rebuildAccessibilityElements()
+        setNeedsDisplay()
+        return true
+    }
+
+    private func adjustAccessibleWheel(_ index: Int, _ step: Int) {
+        let wheel = wheels[index]
+        let list = words(wheel)
+        guard !list.isEmpty else { return }
+        wheel.index = (wheel.index + step + list.count) % list.count
+        wheel.dragDx = 0
+        rebuildAccessibilityElements()
+        setNeedsDisplay()
+    }
+
     // MARK: - Drawing
 
     override func draw(_ rect: CGRect) {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
         if builtWidth != bounds.width { layoutFor(bounds.width) }
+        rebuildAccessibilityElements()
         palette.background.setFill()
         ctx.fill(bounds)
         if editMode {

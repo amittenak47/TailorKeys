@@ -49,6 +49,58 @@ enum KeyText {
         return lp
     }
 
+    /// A spoken name for the face the key types right now.
+    static func spoken(_ code: String, _ state: InputState, _ enterLabel: String?) -> String {
+        switch code {
+        case Keys.space: return "space"
+        case Keys.backspace: return "backspace"
+        case Keys.enter: return enterLabel.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 } ?? "enter"
+        case Keys.abc: return "letters" + (state.capsLock ? ", caps lock on" : (state.shift ? ", shift on" : ""))
+        case Keys.num: return "numbers"
+        case Keys.sym: return "symbols"
+        default:
+            let face = output(code, state) ?? code
+            switch face {
+            case "'": return "apostrophe"
+            case ",": return "comma"
+            case ".": return "period"
+            case "?": return "question mark"
+            case "!": return "exclamation mark"
+            case "\"": return "quotation mark"
+            case ":": return "colon"
+            case ";": return "semicolon"
+            case "-": return "hyphen"
+            case "_": return "underscore"
+            case "/": return "slash"
+            case "\\": return "backslash"
+            case "@": return "at sign"
+            case "#": return "number sign"
+            case "$": return "dollar sign"
+            case "%": return "percent sign"
+            case "&": return "ampersand"
+            case "*": return "asterisk"
+            case "+": return "plus sign"
+            case "=": return "equals sign"
+            case "(": return "left parenthesis"
+            case ")": return "right parenthesis"
+            case "[": return "left bracket"
+            case "]": return "right bracket"
+            case "{": return "left brace"
+            case "}": return "right brace"
+            case "<": return "less than"
+            case ">": return "greater than"
+            case "|": return "vertical bar"
+            case "~": return "tilde"
+            case "^": return "caret"
+            case "€": return "euro sign"
+            case "£": return "pound sign"
+            case "¥": return "yen sign"
+            case "•": return "bullet"
+            default: return state.upper && face.count == 1 && face.first!.isLetter ? "capital \(face)" : face
+            }
+        }
+    }
+
     static func label(_ k: String, _ s: InputState) -> String {
         switch k {
         case Keys.abc: return s.capsLock ? "ABC" : (s.shift && s.layer == .abc ? "Abc" : "abc")

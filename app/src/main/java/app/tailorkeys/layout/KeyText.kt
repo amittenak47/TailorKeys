@@ -42,6 +42,57 @@ object KeyText {
     /** Small corner hint, shown only for long-press digits. */
     fun hint(k: String, s: InputState): String? = longPress(k, s)?.takeIf { it[0].isDigit() }
 
+    /** A spoken name for the face the key types right now. */
+    fun spoken(code: String, state: InputState, enterLabel: String?): String = when (code) {
+        Keys.SPACE -> "space"
+        Keys.BACKSPACE -> "backspace"
+        Keys.ENTER -> enterLabel?.takeIf { it.isNotBlank() } ?: "enter"
+        Keys.ABC -> "letters" + when { state.capsLock -> ", caps lock on"; state.shift -> ", shift on"; else -> "" }
+        Keys.NUM -> "numbers"
+        Keys.SYM -> "symbols"
+        else -> {
+            val face = output(code, state) ?: code
+            when (face) {
+                "'" -> "apostrophe"
+                "," -> "comma"
+                "." -> "period"
+                "?" -> "question mark"
+                "!" -> "exclamation mark"
+                "\"" -> "quotation mark"
+                ":" -> "colon"
+                ";" -> "semicolon"
+                "-" -> "hyphen"
+                "_" -> "underscore"
+                "/" -> "slash"
+                "\\" -> "backslash"
+                "@" -> "at sign"
+                "#" -> "number sign"
+                "$" -> "dollar sign"
+                "%" -> "percent sign"
+                "&" -> "ampersand"
+                "*" -> "asterisk"
+                "+" -> "plus sign"
+                "=" -> "equals sign"
+                "(" -> "left parenthesis"
+                ")" -> "right parenthesis"
+                "[" -> "left bracket"
+                "]" -> "right bracket"
+                "{" -> "left brace"
+                "}" -> "right brace"
+                "<" -> "less than"
+                ">" -> "greater than"
+                "|" -> "vertical bar"
+                "~" -> "tilde"
+                "^" -> "caret"
+                "€" -> "euro sign"
+                "£" -> "pound sign"
+                "¥" -> "yen sign"
+                "•" -> "bullet"
+                else -> if (state.upper && face.length == 1 && face[0].isLetter()) "capital $face" else face
+            }
+        }
+    }
+
     fun label(k: String, s: InputState): String = when (k) {
         Keys.ABC -> when { s.capsLock -> "ABC"; s.shift && s.layer == Layer.ABC -> "Abc"; else -> "abc" }
         Keys.NUM -> "123"
