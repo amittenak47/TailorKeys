@@ -68,3 +68,7 @@ Then open the TailorKeys app on the phone and follow the two setup steps.
 **Milestone 7: Play Store**
 - Release signing, privacy policy, store listing and screenshots
 - Accessibility (TalkBack) and translatable strings
+
+## Credits
+
+English word list: Android Open Source Project (AOSP) LatinIME, Apache License 2.0; see `app/src/main/assets/NOTICE-dictionary.txt`.

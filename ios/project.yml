@@ -38,6 +38,8 @@ targets:
         buildPhase: resources
       - path: ../app/src/main/assets/bigrams.txt
         buildPhase: resources
+      - path: ../app/src/main/assets/NOTICE-dictionary.txt
+        buildPhase: resources
     info:
       path: Keyboard/Info.plist
       properties:
