@@ -296,6 +296,7 @@ struct SettingsScreen: View {
             }
             .disabled(!model.fullAccessConfirmed)
             Section(header: Text("Assist").textCase(nil).font(.system(size: 15, weight: .semibold))) {
+                Toggle("Swipe typing", isOn: model.bool(Prefs.swipeTyping, default: true))
                 Toggle("Highlight likely keys", isOn: model.bool(Prefs.keyTint, default: true))
                 Toggle("Smart tap areas", isOn: model.bool(Prefs.smartTargets, default: true))
                 Toggle("Chords", isOn: model.bool(Prefs.chording, default: false))

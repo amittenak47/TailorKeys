@@ -294,7 +294,7 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
         Column {
             GroupTitle("Assist")
             OptionGroup {
-                for ((label, pref) in listOf("Highlight likely keys" to Prefs.KEY_TINT, "Smart tap areas" to Prefs.SMART_TARGETS, "Vibrate on typos" to Prefs.TYPO_BUZZ, "Chords" to Prefs.CHORDING)) {
+                for ((label, pref) in listOf("Swipe typing" to Prefs.SWIPE_TYPING, "Highlight likely keys" to Prefs.KEY_TINT, "Smart tap areas" to Prefs.SMART_TARGETS, "Vibrate on typos" to Prefs.TYPO_BUZZ, "Chords" to Prefs.CHORDING)) {
                     ToggleRow(label, state.bool(pref)) { state.set(pref, it) }
                 }
                 ActionRow("Chord list") { open = true }
