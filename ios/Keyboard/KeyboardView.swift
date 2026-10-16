@@ -130,6 +130,9 @@ final class KeyboardView: UIView {
 
     // MARK: - Layout
 
+    /// The last worst-case tilt solution and the inputs it was computed for (see `layoutFor`).
+    private var reservedCache: (key: String, un: CGFloat, cw: CGFloat)?
+
     private func rotateAbout(_ a: CGFloat, _ px: CGFloat, _ py: CGFloat) -> CGAffineTransform {
         CGAffineTransform(translationX: -px, y: -py).concatenating(CGAffineTransform(rotationAngle: a)).concatenating(CGAffineTransform(translationX: px, y: py))
     }
@@ -152,8 +155,14 @@ final class KeyboardView: UIView {
         let handleH: CGFloat = 14
         let pad: CGFloat = 4
         let bottomPad = CGFloat(p.bottomPadding)
-        let target = Swift.min(screenH * CGFloat(p.heightPercent) / 100, screenH * 0.72)
-        let areaW = width * CGFloat(p.widthPercent) / 100
+        // "Same size when rotated": landscape keeps portrait's physical key size instead of applying the same
+        // percentages to the shorter screen. Split halves keep their portrait width and sit at the edges.
+        let screen = UIScreen.main.bounds.size
+        let sameScale = isLandscape && settings.sameOrientations
+        let portraitW = Swift.min(screen.width, screen.height)
+        let portraitH = Swift.max(screen.width, screen.height)
+        let target = Swift.min((sameScale ? portraitH : screenH) * CGFloat(p.heightPercent) / 100, screenH * 0.72)
+        let areaW = sameScale && !split ? Swift.min(width, portraitW * CGFloat(p.widthPercent) / 100) : width * CGFloat(p.widthPercent) / 100
         let areaLeft: CGFloat
         switch p.align {
         case .left: areaLeft = 0
@@ -162,8 +171,16 @@ final class KeyboardView: UIView {
         }
         let innerW = areaW - 2 * pad
         let innerLeft = areaLeft + pad
-        let gapPx = split ? innerW * CGFloat(p.gap) / 100 : 0
-        let half = split ? (innerW - gapPx) / 2 : innerW
+        let half: CGFloat
+        if !split {
+            half = innerW
+        } else if sameScale {
+            let pInner = portraitW * CGFloat(p.widthPercent) / 100 - 2 * pad
+            half = Swift.min((pInner - pInner * CGFloat(p.gap) / 100) / 2, innerW / 2)
+        } else {
+            half = (innerW - innerW * CGFloat(p.gap) / 100) / 2
+        }
+        let gapPx = split ? innerW - 2 * half : 0
         let strip = stripH
 
         struct Sol {
@@ -212,27 +229,39 @@ final class KeyboardView: UIView {
             }
             return s
         }
+        // Each letter key's fan angle depends only on its column and the curve, so work it out once per layout
+        // instead of in every trial below (this search runs hundreds of times while a slider moves).
+        var fanCache: [CGFloat: (widths: [CGFloat], sines: [CGFloat])] = [:]
+        func fans(_ bend: CGFloat) -> (widths: [CGFloat], sines: [CGFloat]) {
+            if let cached = fanCache[bend] { return cached }
+            var widths: [CGFloat] = []
+            var sines: [CGFloat] = []
+            for item in grid.items where item.r < n - 1 && item.c != KeyGrid.center {
+                let side = item.c < KeyGrid.center ? 0 : 1
+                let lc = side == 0 ? item.c : item.c - 6
+                widths.append(CGFloat(item.w))
+                sines.append(CGFloat(sin(Double(abs(KeyboardView.ang[side][lc]) * bend) * Double.pi / 180)))
+            }
+            fanCache[bend] = (widths, sines)
+            return (widths, sines)
+        }
         // Bounds include every key's fan rotation, even wide keys, at any smaller curve.
         func blocks(_ un: CGFloat, _ cw: CGFloat, _ angle: Double, _ spaceAngle: Double, _ bend: CGFloat) -> Sol {
             let letterH = un * CGFloat(n - 1)
             var fanX: CGFloat = 0
             var fanY: CGFloat = 0
-            for item in grid.items where item.r < n - 1 && item.c != KeyGrid.center {
-                let side = item.c < KeyGrid.center ? 0 : 1
-                let lc = side == 0 ? item.c : item.c - 6
-                let a = Double(abs(KeyboardView.ang[side][lc]) * bend) * Double.pi / 180
-                fanX = Swift.max(fanX, Swift.max(0, un - gap) * CGFloat(sin(a)) / 2)
-                fanY = Swift.max(fanY, Swift.max(0, CGFloat(item.w) * cw / 5 - gap) * CGFloat(sin(a)) / 2)
+            let f = fans(bend)
+            for i in f.widths.indices {
+                fanX = Swift.max(fanX, Swift.max(0, un - gap) * f.sines[i] / 2)
+                fanY = Swift.max(fanY, Swift.max(0, f.widths[i] * cw / 5 - gap) * f.sines[i] / 2)
             }
+            // Axis-aligned bounds of a rotated rectangle, without temporary arrays: this runs hundreds of times.
             func bounds(_ x0: CGFloat, _ y0: CGFloat, _ x1: CGFloat, _ y1: CGFloat, _ a: Double) -> CGRect {
-                var minX = CGFloat.infinity, minY = CGFloat.infinity
-                var maxX = -CGFloat.infinity, maxY = -CGFloat.infinity
-                for (x, y) in [(x0, y0), (x0, y1), (x1, y0), (x1, y1)] {
-                    let rx = x * CGFloat(cos(a)) - y * CGFloat(sin(a))
-                    let ry = x * CGFloat(sin(a)) + y * CGFloat(cos(a))
-                    minX = Swift.min(minX, rx); maxX = Swift.max(maxX, rx)
-                    minY = Swift.min(minY, ry); maxY = Swift.max(maxY, ry)
-                }
+                let c = CGFloat(cos(a)), s = CGFloat(sin(a))
+                let ax = x0 * c - y0 * s, bx = x0 * c - y1 * s, cx = x1 * c - y0 * s, dx = x1 * c - y1 * s
+                let ay = x0 * s + y0 * c, by = x0 * s + y1 * c, cy = x1 * s + y0 * c, dy = x1 * s + y1 * c
+                let minX = Swift.min(Swift.min(ax, bx), Swift.min(cx, dx)), maxX = Swift.max(Swift.max(ax, bx), Swift.max(cx, dx))
+                let minY = Swift.min(Swift.min(ay, by), Swift.min(cy, dy)), maxY = Swift.max(Swift.max(ay, by), Swift.max(cy, dy))
                 return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
             }
             let letters = bounds(-cw + gap / 2 - fanX, -letterH + gap / 2 - 0.38 * bend * un - fanY,
@@ -256,22 +285,33 @@ final class KeyboardView: UIView {
             let spaceRange = Prefs.spaceTilt(isLandscape)
             let angles = [range.min, range.max].map { Double($0) * Double.pi / 180 }
             let spaceAngles = [spaceRange.min, spaceRange.max].map { Double($0) * Double.pi / 180 }
+            // 14 halvings resolve widths and heights far below a point.
             func worst(_ un: CGFloat) -> Sol {
                 var lo = gap
                 var hi = half
-                for _ in 0..<20 {
+                for _ in 0..<14 {
                     let cw = (lo + hi) / 2
                     if angles.allSatisfy({ a in spaceAngles.allSatisfy { b in blocks(un, cw, a, b, 1).span <= half } }) { lo = cw } else { hi = cw }
                 }
                 return angles.flatMap { a in spaceAngles.map { b in blocks(un, lo, a, b, 1) } }.max { total($0) < total($1) }!
             }
-            var lo: CGFloat = 14
-            var hi = Swift.max(lo, (target - strip - handleH - pad - bottomPad) / CGFloat(n))
-            for _ in 0..<20 {
-                let un = (lo + hi) / 2
-                if total(worst(un)) <= target { lo = un } else { hi = un }
+            // The worst case doesn't depend on the live tilt or curve, so moving those sliders reuses it.
+            let key = "\(n)|\(target)|\(half)|\(innerW)|\(gap)|\(strip)|\(bottomPad)|\(range.min)|\(range.max)|\(spaceRange.min)|\(spaceRange.max)|"
+                + grid.items.filter { $0.r < n - 1 }.map { "\($0.c):\($0.w)" }.joined(separator: ",")
+            let reserved: (un: CGFloat, cw: CGFloat)
+            if let cached = reservedCache, cached.key == key {
+                reserved = (cached.un, cached.cw)
+            } else {
+                var lo: CGFloat = 14
+                var hi = Swift.max(lo, (target - strip - handleH - pad - bottomPad) / CGFloat(n))
+                for _ in 0..<14 {
+                    let un = (lo + hi) / 2
+                    if total(worst(un)) <= target { lo = un } else { hi = un }
+                }
+                let w = worst(lo)
+                reserved = (w.un, w.cw)
+                reservedCache = (key, w.un, w.cw)
             }
-            let reserved = worst(lo)
             s = blocks(reserved.un, reserved.cw, th, Double(spaceTilt) * Double.pi / 180, curve)
         } else {
             s = fit(th, curve)
