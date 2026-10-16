@@ -233,7 +233,6 @@ final class KeyboardView: UIView {
                        spaceY: letters.height + gap - space.minY + extra, span: right - left)
         }
         let reserve = split && !editMode
-        var reservedTotal = target
         let s: Sol
         if reserve {
             // Fit both ranges together at maximum curve; neither live angle changes key dimensions.
@@ -257,14 +256,14 @@ final class KeyboardView: UIView {
                 if total(worst(un)) <= target { lo = un } else { hi = un }
             }
             let reserved = worst(lo)
-            reservedTotal = Swift.max(target, total(reserved))
             s = blocks(reserved.un, reserved.cw, th, Double(spaceTilt) * Double.pi / 180, curve)
         } else {
             s = fit(th, curve)
         }
         unit = s.un
-        // Centre the active key area in the space reserved for the worst case.
-        let y0 = strip + s.padTop + Swift.max(0, reservedTotal - total(s)) / (reserve ? 2 : 1)
+        // Split: key size comes from the worst-case tilt (so keys never resize), but the frame fits the keys at the
+        // current tilt, so there are no empty bands above and below them.
+        let y0 = strip + s.padTop + (reserve ? 0 : Swift.max(0, target - total(s)))
         let hc = s.hc
 
         struct Cont { let c0: Int; let cols: Int; let u: CGFloat; let side: Int; let base: CGAffineTransform; var spaceBase: CGAffineTransform? = nil }
@@ -350,7 +349,7 @@ final class KeyboardView: UIView {
         rightSpace = width - (areaLeft + areaW) >= 40 ? CGRect(x: areaLeft + areaW, y: strip, width: width - areaLeft - areaW, height: y0 + hc - strip) : nil
         builtWidth = width
         rebuildAccessibilityElements(layoutChanged: accessibilityLayoutChanged)
-        return ceil(reserve ? reservedTotal : Swift.max(target, total(s)))
+        return ceil(reserve ? total(s) : Swift.max(target, total(s)))
     }
 
     /// The face a swipe key shows: the one you swiped to, unless another key switched to a different layer.

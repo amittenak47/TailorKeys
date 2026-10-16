@@ -290,7 +290,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 letters.height() + gap - space.top + extra, right - left)
         }
         val reserve = split && !editMode
-        var reservedTotal = target
         val s = if (reserve) {
             // Fit both ranges together at maximum curve; neither live angle changes key dimensions.
             val range = Prefs.tilt(landscape)
@@ -320,12 +319,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 val w = worst(lo)
                 floatArrayOf(w.un, w.cw, w.total).also { reservedCache = key to it }
             }
-            reservedTotal = max(target, reserved[2])
             blocks(reserved[0], reserved[1], th, Math.toRadians(spaceTilt.toDouble()), curve)
         } else fit(th, curve)
         unit = s.un
         // Centre the active key area in the space reserved for the worst case.
-        val y0 = stripH + s.padTop + max(0f, reservedTotal - s.total) / (if (reserve) 2 else 1)
+        // Split: key size comes from the worst-case tilt (so keys never resize), but the frame fits the keys at the
+        // current tilt, so there are no empty bands above and below them.
+        val y0 = stripH + s.padTop + if (reserve) 0f else max(0f, target - s.total)
         val hc = s.hc
 
         class Cont(val c0: Int, val cols: Int, val u: Float, val side: Int, val base: Matrix, val spaceBase: Matrix? = null)
@@ -424,7 +424,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         rightSpace = if (width - (areaLeft + areaW) >= minSpace) RectF(areaLeft + areaW, stripH, width.toFloat(), y0 + hc) else null
         builtWidth = width
         accessibilityEvent(View.NO_ID, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE)
-        return ceil(if (reserve) reservedTotal else max(target, s.total)).toInt()
+        return ceil(if (reserve) s.total else max(target, s.total)).toInt()
     }
 
     /** The face a swipe key shows: the one you swiped to, unless another key switched to a different layer. */
