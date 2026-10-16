@@ -88,6 +88,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         default:
             if KeyText.isLayerKey(code) { tapLayerKey(code) } else if let s = KeyText.output(code, state) { insert(s) }
         }
+        // No typo buzz on iOS: keyboards can't vibrate without Full Access.
         updateAutoCap()
         updateSuggestions()
         keyboard.setNeedsDisplay()
@@ -138,7 +139,10 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         guard panel == nil else { return }
         let landscape = UIScreen.main.bounds.width > UIScreen.main.bounds.height
         let p = SettingsPanel(settings: settings, landscape: landscape)
-        p.onChange = { [weak self] in self?.keyboard.reloadSettings() }
+        p.onChange = { [weak self] in
+            self?.keyboard.reloadSettings()
+            self?.updateSuggestions()
+        }
         p.onClose = { [weak self] in self?.closePanel() }
         p.onRearrange = { [weak self] in self?.rearrange() }
         p.onTemplate = { [weak self] t in
@@ -281,12 +285,14 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func updateSuggestions() {
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         if state.layer != .abc {
+            keyboard.keyWeights = [:]
             let s = predictor.symbols(before: before.last)
             keyboard.setSuggestions(left: s.explore, right: s.closest, prefix: "")
             return
         }
         let prefix = currentWord(before)
         let prev = previousWord(before)
+        keyboard.keyWeights = (settings.keyTint || settings.smartTargets) ? predictor.nextLetters(prefix, prev) : [:]
         keyboard.setSuggestions(left: predictor.explore(prefix, prev), right: predictor.closest(prefix, prev), prefix: prefix)
     }
 

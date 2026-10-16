@@ -151,6 +151,22 @@ class Predictor(context: Context) {
         return result
     }
 
+    fun nextLetters(prefix: String, prev: String?): Map<Char, Double> {
+        val weights = HashMap<Char, Double>()
+        for (candidate in candidates(prefix, prev)) {
+            if (candidate.correction || candidate.word.length <= prefix.length) continue
+            val letter = candidate.word[prefix.length]
+            weights[letter] = (weights[letter] ?: 0.0) + exp(candidate.score)
+        }
+        val max = weights.values.maxOrNull() ?: return emptyMap()
+        return weights.mapValues { it.value / max }
+    }
+
+    fun isDeadEnd(prefix: String): Boolean {
+        val p = prefix.lowercase()
+        return prefix.length >= 2 && user.keys.none { it.startsWith(p) } && base.none { it.startsWith(p) }
+    }
+
     fun closest(prefix: String, prev: String? = null, n: Int = 8): List<String> {
         val c = candidates(prefix, prev)
         val maxCorrections = if (c.count { !it.correction } < 5) n else 3

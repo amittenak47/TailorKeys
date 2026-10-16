@@ -152,6 +152,22 @@ final class Predictor {
         return result
     }
 
+    func nextLetters(_ prefix: String, _ prev: String?) -> [Character: Double] {
+        let length = prefix.count
+        var weights: [Character: Double] = [:]
+        for candidate in candidates(prefix, prev) where !candidate.correction {
+            guard let letter = candidate.word.dropFirst(length).first else { continue }
+            weights[letter, default: 0] += exp(candidate.score)
+        }
+        guard let max = weights.values.max() else { return [:] }
+        return weights.mapValues { $0 / max }
+    }
+
+    func isDeadEnd(_ prefix: String) -> Bool {
+        let p = prefix.lowercased()
+        return prefix.count >= 2 && !user.keys.contains { $0.hasPrefix(p) } && !base.contains { $0.text.hasPrefix(p) }
+    }
+
     func closest(_ prefix: String, _ prev: String? = nil, _ n: Int = 8) -> [String] {
         let c = candidates(prefix, prev)
         let maxCorrections = c.reduce(0) { $0 + ($1.correction ? 0 : 1) } < 5 ? n : 3

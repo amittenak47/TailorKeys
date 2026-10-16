@@ -31,6 +31,8 @@ enum Prefs {
     static let autoCap = "auto_cap"
     static let doubleSpace = "double_space_period"
     static let clicks = "haptics"
+    static let keyTint = "key_tint"
+    static let smartTargets = "smart_targets"
     static let lockSize = "lock_size"
     static let sameOrientations = "same_orientations"
     static let theme = "theme"
@@ -64,6 +66,8 @@ final class KeyboardSettings {
     var autoCap: Bool { bool(Prefs.autoCap, true) }
     var doubleSpace: Bool { bool(Prefs.doubleSpace, true) }
     var clicks: Bool { bool(Prefs.clicks, true) }
+    var keyTint: Bool { bool(Prefs.keyTint, true) }
+    var smartTargets: Bool { bool(Prefs.smartTargets, true) }
     var lockSize: Bool { bool(Prefs.lockSize, false) }
     var sameOrientations: Bool { bool(Prefs.sameOrientations, false) }
 

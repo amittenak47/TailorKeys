@@ -32,6 +32,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private var selectTotal = 0
     /** False in password and no-suggestion fields: nothing is suggested or learned there. */
     private var learn = true
+    private var deadEnd = false
 
     // Any settings change, including from the settings screen while the keyboard is open, applies at once.
     // A layout the keyboard saved itself is already showing; reloading it would wipe the undo history.
@@ -45,6 +46,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             }
         }
         keyboardView?.reloadSettings()
+        updateSuggestions()
     }
 
     override fun onCreate() {
@@ -86,6 +88,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             (cls == InputType.TYPE_CLASS_NUMBER && variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD)
         learn = cls == InputType.TYPE_CLASS_TEXT && !password && info.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS == 0
         lastSpaceAt = 0L
+        deadEnd = false
         keyboardView?.let {
             it.enterLabel = enterLabel(info)
             it.reloadSettings()
@@ -113,13 +116,18 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     // ---- KeyboardView.Listener ----
 
     override fun onKey(code: String) {
+        var letterCommitted = false
         when {
             code == Keys.BACKSPACE -> sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
             code == Keys.SPACE -> typeSpace()
             code == Keys.ENTER -> pressEnter()
             KeyText.isLayerKey(code) -> tapLayerKey(code)
-            else -> KeyText.output(code, state)?.let { commit(it) }
+            else -> KeyText.output(code, state)?.let {
+                commit(it)
+                letterCommitted = it.length == 1 && it[0].isLetter()
+            }
         }
+        updateSuggestions(letterCommitted)
         keyboardView?.invalidate()
     }
 
@@ -275,17 +283,28 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         return before.subSequence(start, end).toString().lowercase()
     }
 
-    private fun updateSuggestions() {
-        val view = keyboardView ?: return
-        if (!learn) { view.setSuggestions(emptyList(), emptyList(), ""); return }
+    private fun updateSuggestions(letterCommitted: Boolean = false) {
         val before = currentInputConnection?.getTextBeforeCursor(64, 0)
+        val prefix = currentWord(before)
+        val isDeadEnd = predictor.isDeadEnd(prefix)
+        if (letterCommitted && learn && settings.bool(Prefs.TYPO_BUZZ) && settings.bool(Prefs.HAPTICS) && isDeadEnd && !deadEnd) {
+            keyboardView?.typoBuzz()
+        }
+        deadEnd = isDeadEnd
+        val view = keyboardView ?: return
+        if (!learn) {
+            view.keyWeights = emptyMap()
+            view.setSuggestions(emptyList(), emptyList(), "")
+            return
+        }
         if (state.layer != Layer.ABC) {
+            view.keyWeights = emptyMap()
             val (explore, closest) = predictor.symbols(before?.lastOrNull())
             view.setSuggestions(explore, closest, "")
             return
         }
-        val prefix = currentWord(before)
         val prev = previousWord(before)
+        view.keyWeights = if (settings.bool(Prefs.KEY_TINT) || settings.bool(Prefs.SMART_TARGETS)) predictor.nextLetters(prefix, prev) else emptyMap()
         view.setSuggestions(predictor.explore(prefix, prev), predictor.closest(prefix, prev), prefix)
     }
 
