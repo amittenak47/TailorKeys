@@ -446,7 +446,6 @@ final class KeyboardView: UIView {
             drawGear()
         }
         let radius = CGFloat(settings.int(Prefs.cornerRadius))
-        if !editMode && !cursorRect.isEmpty { drawCursor(radius) }
         let pressed = Set(trackers.values.compactMap { $0.pk?.item.id })
         let now = CACurrentMediaTime()
         for pk in placed {
@@ -591,13 +590,6 @@ final class KeyboardView: UIView {
         let path = poly(CGPoint(x: area.midX, y: area.midY), s, false, [0.25 * d, -0.5, -0.25 * d, 0, 0.25 * d, 0.5])
         path.lineWidth = s * 0.135
         path.stroke()
-    }
-
-    private func drawCursor(_ radius: CGFloat) {
-        if trackers.values.contains(where: { $0.kind == .cursor }) {
-            palette.pressed.withAlphaComponent(0.25).setFill()
-            UIBezierPath(roundedRect: cursorRect, cornerRadius: radius).fill()
-        }
     }
 
     private func drawHandle() {

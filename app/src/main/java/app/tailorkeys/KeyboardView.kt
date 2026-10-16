@@ -8,8 +8,10 @@ import android.graphics.DashPathEffect
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Shader
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -763,14 +765,26 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         canvas.drawPath(shape(area.centerX(), area.centerY(), s, false, 0.25f * dir, -0.5f, -0.25f * dir, 0f, 0.25f * dir, 0.5f), strokeIn(palette.hint, s * 1.5f, 255))
     }
 
+    /**
+     * While a finger holds still in the gap, a soft glow grows outward from it over the long-press delay.
+     * Full size means text selection is on; it then follows the finger. Moving resets it.
+     */
     private fun drawCursor(canvas: Canvas, radius: Float) {
-        if (trackers.values.any { it.kind == K_CURSOR }) {
-            val select = trackers.values.any { it.kind == K_CURSOR && it.select }
-            fill.color = if (select) palette.accent else palette.pressed
-            fill.alpha = if (select) 77 else 64
-            canvas.drawRoundRect(cursorRect, radius, radius, fill)
-            fill.alpha = 255
-        }
+        val t = trackers.values.firstOrNull { it.kind == K_CURSOR } ?: return
+        val held = (SystemClock.uptimeMillis() - t.holdAt).toFloat() / settings.int(Prefs.LONG_PRESS_MS)
+        val p = if (t.select) 1f else held.coerceIn(0f, 1f).let { it * it * (3 - 2 * it) }
+        if (!t.select) postInvalidateOnAnimation()
+        if (p <= 0.02f) return
+        val r = 64 * density * p
+        val rgb = palette.accent and 0x00FFFFFF
+        fill.shader = RadialGradient(t.fx, t.fy, r, intArrayOf(rgb or ((120 * p).toInt() shl 24), rgb), null, Shader.TileMode.CLAMP)
+        canvas.save()
+        path.reset()
+        path.addRoundRect(cursorRect, radius, radius, Path.Direction.CW)
+        canvas.clipPath(path)
+        canvas.drawCircle(t.fx, t.fy, r, fill)
+        canvas.restore()
+        fill.shader = null
     }
 
     private fun drawHandle(canvas: Canvas) {
@@ -862,6 +876,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         var lastX = 0f
         var holdX = 0f
         var holdY = 0f
+        var holdAt = 0L
+        var fx = 0f
+        var fy = 0f
         var select = false
         var wheel: Wheel? = null
         val longPress = Runnable { onLongPress(this) }
@@ -929,7 +946,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val hit = findKey(x, y, strict = true)
         if (hit == null && cursorRect.contains(x, y)) {
             trackers[id] = Tracker(K_CURSOR, null).also {
-                it.x0 = x; it.holdX = x; it.holdY = y
+                it.x0 = x; it.holdX = x; it.holdY = y; it.fx = x; it.fy = y
+                it.holdAt = SystemClock.uptimeMillis()
                 timers.postDelayed(it.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong())
             }
             invalidate()
@@ -965,8 +983,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             }
             K_HANDLE -> { t.lastX = x; if (abs(x - t.x0) > 8 * density) t.moved = true }
             K_CURSOR -> {
+                t.fx = x; t.fy = y
+                invalidate()
                 if (!t.select && hypot(x - t.holdX, y - t.holdY) > 6 * density) {
                     t.holdX = x; t.holdY = y
+                    t.holdAt = SystemClock.uptimeMillis()
                     timers.removeCallbacks(t.longPress)
                     timers.postDelayed(t.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong())
                 }

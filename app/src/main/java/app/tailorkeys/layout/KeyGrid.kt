@@ -246,10 +246,13 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
             fun add(r: Int, c: Int, keys: List<String>, w: Int = 1) { items.add(GridKey(items.size, r, c, w, keys.toMutableList())) }
             "qwertyuiop".forEachIndexed { i, ch -> add(0, if (i < 5) i else i + 1, listOf(ch.toString())) }
             "asdfghjkl'".forEachIndexed { i, ch -> add(1, if (i < 5) i else i + 1, listOf(ch.toString())) }
-            "zxcv".forEachIndexed { i, ch -> add(2, i, listOf(ch.toString())) }
-            "bnm".forEachIndexed { i, ch -> add(2, 7 + i, listOf(ch.toString())) }
-            add(2, 10, listOf(Keys.BACKSPACE))
-            add(3, 0, listOf(Keys.ABC, Keys.NUM, Keys.SYM))
+            // iPhone arrangement: shift (abc) starts the bottom letter row, a wide backspace ends it,
+            // and 123 (swipe for #+=) sits bottom left.
+            add(2, 0, listOf(Keys.ABC))
+            "zxcv".forEachIndexed { i, ch -> add(2, 1 + i, listOf(ch.toString())) }
+            "bnm".forEachIndexed { i, ch -> add(2, 6 + i, listOf(ch.toString())) }
+            add(2, 9, listOf(Keys.BACKSPACE), 2)
+            add(3, 0, listOf(Keys.NUM, Keys.SYM))
             add(3, 1, listOf(Keys.SPACE), 4)
             add(3, 6, listOf(Keys.SPACE), 4)
             add(3, 10, listOf(Keys.ENTER))

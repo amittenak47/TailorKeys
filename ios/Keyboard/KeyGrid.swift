@@ -278,10 +278,13 @@ final class KeyGrid {
         func add(_ r: Int, _ c: Int, _ keys: [String], _ w: Int = 1) { items.append(GridKey(id: items.count, r: r, c: c, w: w, keys: keys)) }
         for (i, ch) in "qwertyuiop".enumerated() { add(0, i < 5 ? i : i + 1, [String(ch)]) }
         for (i, ch) in "asdfghjkl'".enumerated() { add(1, i < 5 ? i : i + 1, [String(ch)]) }
-        for (i, ch) in "zxcv".enumerated() { add(2, i, [String(ch)]) }
-        for (i, ch) in "bnm".enumerated() { add(2, 7 + i, [String(ch)]) }
-        add(2, 10, [Keys.backspace])
-        add(3, 0, [Keys.abc, Keys.num, Keys.sym])
+        // iPhone arrangement: shift (abc) starts the bottom letter row, a wide backspace ends it,
+        // and 123 (swipe for #+=) sits bottom left.
+        add(2, 0, [Keys.abc])
+        for (i, ch) in "zxcv".enumerated() { add(2, 1 + i, [String(ch)]) }
+        for (i, ch) in "bnm".enumerated() { add(2, 6 + i, [String(ch)]) }
+        add(2, 9, [Keys.backspace], 2)
+        add(3, 0, [Keys.num, Keys.sym])
         add(3, 1, [Keys.space], 4)
         add(3, 6, [Keys.space], 4)
         add(3, 10, [Keys.enter])
