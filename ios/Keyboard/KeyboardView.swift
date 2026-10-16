@@ -135,8 +135,7 @@ final class KeyboardView: UIView {
         let handleH: CGFloat = 14
         let pad: CGFloat = 4
         let bottomPad = CGFloat(p.bottomPadding)
-        let target = screenH * CGFloat(p.heightPercent) / 100
-        let cap = screenH * 0.72
+        let target = Swift.min(screenH * CGFloat(p.heightPercent) / 100, screenH * 0.72)
         let areaW = width * CGFloat(p.widthPercent) / 100
         let areaLeft: CGFloat
         switch p.align {
@@ -184,14 +183,14 @@ final class KeyboardView: UIView {
             return Sol(un: un, hc: hc, cw: cw, pv: pv, disp: disp, padTop: pad + disp + raise)
         }
 
-        // Tilt and curve add room; if that would run past the cap, the keys shrink instead.
-        var s = solve(Swift.max(18, (target - strip - handleH - pad) / 4))
+        // Fit tilt, curve and all rows within the selected height, keeping a point of room when shrinking.
+        var s = solve(Swift.max(14, (target - strip - handleH - pad - bottomPad) / CGFloat(n)))
         for _ in 0..<24 {
-            if total(s) <= cap + 1 { break }
-            s = solve(Swift.max(14, s.un - (total(s) - cap) / (CGFloat(n) + 0.5)))
+            if total(s) <= target { break }
+            s = solve(Swift.max(14, s.un - (total(s) - target + 1) / (CGFloat(n) + 0.5)))
         }
         unit = s.un
-        let y0 = strip + s.padTop
+        let y0 = strip + s.padTop + Swift.max(0, target - total(s))
         let hc = s.hc
 
         struct Cont { let c0: Int; let cols: Int; let u: CGFloat; let side: Int; let base: CGAffineTransform }
@@ -262,7 +261,7 @@ final class KeyboardView: UIView {
         rightSpace = width - (areaLeft + areaW) >= 40 ? CGRect(x: areaLeft + areaW, y: strip, width: width - areaLeft - areaW, height: y0 + hc - strip) : nil
         builtWidth = width
         rebuildAccessibilityElements(layoutChanged: accessibilityLayoutChanged)
-        return ceil(total(s))
+        return ceil(Swift.max(target, total(s)))
     }
 
     /// The face a swipe key shows: the one you swiped to, unless another key switched to a different layer.

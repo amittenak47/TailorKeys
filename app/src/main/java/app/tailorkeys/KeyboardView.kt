@@ -164,8 +164,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val handleH = 14 * d
         val pad = 4 * d
         val bottomPad = p.bottomPaddingDp * d
-        val target = screenH * p.heightPercent / 100f
-        val cap = screenH * 0.72f
+        val target = min(screenH * p.heightPercent / 100f, screenH * 0.72f)
         val areaW = width * p.widthPercent / 100f
         val areaLeft = when (p.align) { Align.LEFT -> 0f; Align.CENTER -> (width - areaW) / 2f; Align.RIGHT -> width - areaW }
         val innerW = areaW - 2 * pad
@@ -206,14 +205,14 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             return Sol(un, hc, cw, pv, disp, pad + disp + raise)
         }
 
-        // Tilt and curve add room; if that would run past the cap, the keys shrink instead.
-        var s = solve(max(18 * d, (target - stripH - handleH - pad) / 4f))
+        // Fit tilt, curve and all rows within the selected height, keeping a pixel of room when shrinking.
+        var s = solve(max(14 * d, (target - stripH - handleH - pad - bottomPad) / n))
         for (i in 0 until 24) {
-            if (s.total <= cap + 1) break
-            s = solve(max(14 * d, s.un - (s.total - cap) / (n + 0.5f)))
+            if (s.total <= target) break
+            s = solve(max(14 * d, s.un - (s.total - target + 1) / (n + 0.5f)))
         }
         unit = s.un
-        val y0 = stripH + s.padTop
+        val y0 = stripH + s.padTop + max(0f, target - s.total)
         val hc = s.hc
 
         class Cont(val c0: Int, val cols: Int, val u: Float, val side: Int, val base: Matrix)
@@ -295,7 +294,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         rightSpace = if (width - (areaLeft + areaW) >= minSpace) RectF(areaLeft + areaW, stripH, width.toFloat(), y0 + hc) else null
         builtWidth = width
         accessibilityEvent(View.NO_ID, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE)
-        return ceil(s.total).toInt()
+        return ceil(max(target, s.total)).toInt()
     }
 
     /** The face a swipe key shows: the one you swiped to, unless another key switched to a different layer. */
