@@ -9,6 +9,7 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -26,8 +27,10 @@ import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
@@ -55,6 +58,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     var listener: Listener? = null
     var state = InputState()
+    var keyWeights: Map<Char, Double> = emptyMap()
+        set(value) { field = value; invalidate() }
     /** Setting a new grid from outside clears the undo history; [undo] and [replaceGrid] keep it. */
     var grid: KeyGrid = KeyGrid.default()
         set(value) { field = value; if (!keepHistory) history.clear(); cancelTouches(); relayout() }
@@ -340,6 +345,12 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         }
         fill.alpha = (255 * alpha).toInt()
         canvas.drawRoundRect(rect, radius, radius, fill)
+        if (settings.bool(Prefs.KEY_TINT) && state.layer == Layer.ABC && !editMode && !pressed &&
+            !item.isStack && code.length == 1 && code[0].isLetter() && keyWeights.isNotEmpty()) {
+            fill.color = palette.accent
+            fill.alpha = (56 * (keyWeights[code[0].lowercaseChar()] ?: 0.0)).roundToInt()
+            canvas.drawRoundRect(rect, radius, radius, fill)
+        }
         fill.alpha = 255
         val fg = when { accentBg && !pressed -> palette.onAccent; oneShot -> palette.accent; else -> palette.text }
 
@@ -653,7 +664,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             invalidate()
             return
         }
-        val pk = hit ?: findKey(x, y) ?: return
+        val pk = findKey(x, y) ?: return
         haptic(HapticFeedbackConstants.KEYBOARD_TAP)
         if (pk.item.isStack) {
             trackers[id] = Tracker(K_STACK, pk).also { it.y0 = y }
@@ -791,14 +802,41 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private fun findKey(x: Float, y: Float, strict: Boolean = false, skip: GridKey? = null): Placed? {
         val pt = FloatArray(2)
         val slack = settings.int(Prefs.KEY_GAP) * density / 2 + 1
+        var hit: Placed? = null
         for (i in placed.indices.reversed()) {
             val pk = placed[i]
             if (pk.item === skip) continue
             pt[0] = x; pt[1] = y
             pk.inverse.mapPoints(pt)
             val r = pk.rect
-            if (pt[0] >= r.left - slack && pt[0] <= r.right + slack && pt[1] >= r.top - slack && pt[1] <= r.bottom + slack) return pk
+            if (pt[0] >= r.left - slack && pt[0] <= r.right + slack && pt[1] >= r.top - slack && pt[1] <= r.bottom + slack) {
+                hit = pk
+                break
+            }
         }
+        fun isLetter(pk: Placed) = !pk.item.isStack && pk.item.keys[0].let { it.length == 1 && it[0].isLetter() }
+        if (!strict && !editMode && state.layer == Layer.ABC && settings.bool(Prefs.SMART_TARGETS) &&
+            keyWeights.isNotEmpty() && (hit == null || isLetter(hit))) {
+            var best: Placed? = null
+            var bestScore = Double.NEGATIVE_INFINITY
+            for (pk in placed) {
+                if (pk.item === skip || !isLetter(pk)) continue
+                pt[0] = x; pt[1] = y
+                pk.inverse.mapPoints(pt)
+                val r = pk.rect
+                val core = RectF(r).apply { inset(width() * 0.3f, height() * 0.3f) }
+                if (core.contains(pt[0], pt[1])) return pk
+                val target = RectF(r).apply { inset(-width() * 0.35f, -height() * 0.35f) }
+                if (!target.contains(pt[0], pt[1])) continue
+                val dx = ((pt[0] - r.centerX()) / r.width()).toDouble()
+                val dy = ((pt[1] - r.centerY()) / r.height()).toDouble()
+                val weight = keyWeights[pk.item.keys[0][0].lowercaseChar()] ?: 0.0
+                val score = -(dx * dx + dy * dy) / (2 * 0.35 * 0.35) + ln(0.05 + weight)
+                if (score > bestScore) { bestScore = score; best = pk }
+            }
+            if (best != null) return best
+        }
+        if (hit != null) return hit
         if (strict || y < stripH) return null
         var best: Placed? = null
         var bestDist = Float.MAX_VALUE
@@ -845,6 +883,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private fun stopTimers(t: Tracker) {
         timers.removeCallbacks(t.longPress)
         timers.removeCallbacks(t.repeat)
+    }
+
+    fun typoBuzz() {
+        performHapticFeedback(if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.REJECT else HapticFeedbackConstants.LONG_PRESS)
     }
 
     private fun haptic(type: Int) {

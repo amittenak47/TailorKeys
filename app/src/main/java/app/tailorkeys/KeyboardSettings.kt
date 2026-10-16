@@ -43,6 +43,9 @@ object Prefs {
     val AUTO_CAP = BoolPref("auto_cap", true)
     val DOUBLE_SPACE_PERIOD = BoolPref("double_space_period", true)
     val HAPTICS = BoolPref("haptics", true)
+    val KEY_TINT = BoolPref("key_tint", true)
+    val SMART_TARGETS = BoolPref("smart_targets", true)
+    val TYPO_BUZZ = BoolPref("typo_buzz", true)
     val LOCK_SIZE = BoolPref("lock_size", false)
     /** Portrait and landscape share one set of size and split settings. */
     val SAME_ORIENTATIONS = BoolPref("same_orientations", false)

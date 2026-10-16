@@ -18,6 +18,7 @@ final class KeyboardView: UIView {
 
     weak var delegate: KeyboardViewDelegate?
     var state = InputState()
+    var keyWeights: [Character: Double] = [:] { didSet { setNeedsDisplay() } }
     /// Setting a new grid from outside clears the undo history; `undo()` and `replaceGrid(_:)` keep it.
     var grid: KeyGrid { didSet { if !keepHistory { history.removeAll() }; cancelTouches(); relayout() } }
     var enterLabel: String? { didSet { setNeedsDisplay() } }
@@ -325,6 +326,12 @@ final class KeyboardView: UIView {
         else { bg = palette.key }
         bg.withAlphaComponent(alpha).setFill()
         UIBezierPath(roundedRect: rect, cornerRadius: radius).fill()
+        if settings.keyTint && state.layer == .abc && !editMode && !pressed && !item.isStack &&
+           code.count == 1 && code.first!.isLetter && !keyWeights.isEmpty {
+            let weight = keyWeights[code.lowercased().first!] ?? 0
+            palette.accent.withAlphaComponent(CGFloat(0.22 * weight)).setFill()
+            UIBezierPath(roundedRect: rect, cornerRadius: radius).fill()
+        }
         let fg = (accentBg && !pressed ? palette.onAccent : (oneShot ? palette.accent : palette.text)).withAlphaComponent(alpha)
 
         ctx.saveGState()
@@ -613,7 +620,7 @@ final class KeyboardView: UIView {
             setNeedsDisplay()
             return
         }
-        guard let pk = hit ?? findKey(p) else { return }
+        guard let pk = findKey(p) else { return }
         click()
         if pk.item.isStack {
             let t = Tracker(kind: .stack, pk: pk); t.y0 = p.y; trackers[id] = t
@@ -740,9 +747,29 @@ final class KeyboardView: UIView {
     /// The key under a point. Gaps and edges belong to the nearest key, so taps never fall through.
     private func findKey(_ p: CGPoint, strict: Bool = false, skip: GridKey? = nil) -> Placed? {
         let slack = CGFloat(settings.int(Prefs.keyGap)) / 2 + 1
-        for pk in placed.reversed() where pk.item !== skip {
-            if pk.rect.insetBy(dx: -slack, dy: -slack).contains(p.applying(pk.inv)) { return pk }
+        let hit = placed.reversed().first { $0.item !== skip && $0.rect.insetBy(dx: -slack, dy: -slack).contains(p.applying($0.inv)) }
+        func isLetter(_ pk: Placed) -> Bool {
+            let code = pk.item.keys[0]
+            return !pk.item.isStack && code.count == 1 && code.first!.isLetter
         }
+        if !strict && !editMode && state.layer == .abc && settings.smartTargets && !keyWeights.isEmpty &&
+           (hit == nil || isLetter(hit!)) {
+            var best: Placed?
+            var bestScore = -Double.infinity
+            for pk in placed where pk.item !== skip && isLetter(pk) {
+                let local = p.applying(pk.inv)
+                let r = pk.rect
+                if r.insetBy(dx: r.width * 0.3, dy: r.height * 0.3).contains(local) { return pk }
+                if !r.insetBy(dx: -r.width * 0.35, dy: -r.height * 0.35).contains(local) { continue }
+                let dx = Double((local.x - r.midX) / r.width)
+                let dy = Double((local.y - r.midY) / r.height)
+                let weight = keyWeights[pk.item.keys[0].lowercased().first!] ?? 0
+                let score = -(dx * dx + dy * dy) / (2 * 0.35 * 0.35) + log(0.05 + weight)
+                if score > bestScore { bestScore = score; best = pk }
+            }
+            if let best = best { return best }
+        }
+        if let hit = hit { return hit }
         if strict || p.y < stripH { return nil }
         var best: Placed?
         var bestDist = CGFloat.greatestFiniteMagnitude
