@@ -8,8 +8,51 @@ final class ClickInputView: UIInputView, UIInputViewAudioFeedback {
 final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate {
 
     private var settings: KeyboardSettings!
-    private let predictor = Predictor()
-    private lazy var gestureDecoder = GestureDecoder(predictor.gestureWords())
+    private var predictor: Predictor!
+    private var gestureDecoder: GestureDecoder!
+    private struct LanguageModel { let predictor: Predictor; let decoder: GestureDecoder }
+    private var models: [String: LanguageModel] = [:]
+    private var loading = Set<String>()
+    private let loader = DispatchQueue(label: "app.tailorkeys.languages", qos: .userInitiated)
+    private var modelReady = false
+
+    private func makeModel(_ lang: String) -> LanguageModel {
+        let p = Predictor(lang) { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, self.state.language == lang, self.modelReady else { return }
+                self.updateSuggestions()
+            }
+        }
+        return LanguageModel(predictor: p, decoder: GestureDecoder(p.gestureWords()))
+    }
+
+    private func activateLanguage() {
+        let lang = settings.currentLanguage
+        if state.language != lang {
+            clearGlide()
+            lastSpace = 0
+            keyboard?.cancelTouches()
+        }
+        state.language = lang
+        if let kb = keyboard { kb.grid = settings.loadGrid() }
+        modelReady = models[lang] != nil
+        if let model = models[lang] {
+            predictor = model.predictor
+            gestureDecoder = model.decoder
+            if let kb = keyboard { predictor.setLayout(kb.grid) }
+        } else if loading.insert(lang).inserted {
+            loader.async { [weak self] in
+                guard let self = self else { return }
+                let model = self.makeModel(lang)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    self.models[lang] = model
+                    self.loading.remove(lang)
+                    if self.state.language == lang { self.activateLanguage(); self.updateSuggestions() }
+                }
+            }
+        }
+    }
     private var glideWord: String?
     private var glideBefore: String?
     private var glideDocument: UUID?
@@ -44,10 +87,16 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         if settings != nil {
             settings.reloadStore(hasFullAccess: hasFullAccess)
             keyboard.grid = settings.loadGrid()
-            predictor.setLayout(keyboard.grid)
+            activateLanguage()
             return
         }
         settings = KeyboardSettings(tablet: UIDevice.current.userInterfaceIdiom == .pad, hasFullAccess: hasFullAccess)
+        state.language = settings.currentLanguage
+        let initial = makeModel(state.language)
+        models[state.language] = initial
+        predictor = initial.predictor
+        gestureDecoder = initial.decoder
+        modelReady = true
         let kb = KeyboardView(settings: settings, grid: settings.loadGrid())
         kb.state = state
         kb.delegate = self
@@ -103,6 +152,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     override func textDidChange(_ textInput: UITextInput?) {
         if changingGlide { return }
+        if settings != nil && (state.language != settings.currentLanguage || predictor?.language != settings.currentLanguage) { activateLanguage() }
         updateAutoCap()
         updateSuggestions()
     }
@@ -175,14 +225,14 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             let prev = previousWord(before)
             for _ in 0..<prefix.count { textDocumentProxy.deleteBackward() }
             textDocumentProxy.insertText(text + " ")
-            if suggestAllowed { predictor.learn(text, prev, previousWord2(before)) }
+            if suggestAllowed && modelReady { predictor.learn(text, prev, previousWord2(before)) }
         }
         updateAutoCap()
         updateSuggestions()
     }
 
     func glideFinished(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat) {
-        guard suggestAllowed, settings.swipeTyping, state.layer == .abc else { return }
+        guard modelReady, suggestAllowed, settings.swipeTyping, state.layer == .abc else { return }
         gestureDecoder.addWords(predictor.gestureUserWords())
         gestureDecoder.setKeys(keys, keyWidth)
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
@@ -234,10 +284,20 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     private func finishGlideLearning() {
-        if currentGlide() && suggestAllowed { predictor.learn(glideWord!, previousWord(textDocumentProxy.documentContextBeforeInput ?? "")) }
+        if currentGlide() && suggestAllowed && modelReady { predictor.learn(glideWord!, previousWord(textDocumentProxy.documentContextBeforeInput ?? "")) }
     }
 
     func spaceLongPressed() { advanceToNextInputMode() }
+
+    func switchLanguage(_ direction: Int) {
+        let enabled = settings.languages
+        guard enabled.count > 1, let index = enabled.firstIndex(of: settings.currentLanguage) else { return }
+        settings.currentLanguage = enabled[(index + direction + enabled.count) % enabled.count]
+        activateLanguage()
+        keyboard.reloadSettings()
+        updateSuggestions()
+        UIAccessibility.post(notification: .announcement, argument: Prefs.languageNames[state.language])
+    }
 
     /// The gear in the rearranging toolbar: leaves rearranging and shows the settings panel.
     func openSettings() {
@@ -253,7 +313,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         p.onRearrange = { [weak self] in self?.rearrange() }
         p.onTemplate = { [weak self] t in
             guard let self = self else { return }
-            let g = KeyGrid.template(t)
+            let g = KeyGrid.template(t, self.settings.currentLanguage)
             if self.settings.numberRow { g.setNumberRow(true) }
             self.keyboard.replaceGrid(g)
             if t.split { self.settings.setSplitFor(landscape, true) }
@@ -276,7 +336,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         }
         p.onResetLayout = { [weak self] in
             guard let self = self else { return }
-            let g = KeyGrid.makeDefault()
+            let g = KeyGrid.makeDefault(self.settings.currentLanguage)
             if self.settings.numberRow { g.setNumberRow(true) }
             self.settings.saveGrid(g)
             self.keyboard.grid = g
@@ -349,7 +409,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func typeSpace() {
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         let word = currentWord(before)
-        if suggestAllowed && word.count > 1 { predictor.learn(word, previousWord(before), previousWord2(before)) }
+        if suggestAllowed && modelReady && word.count > 1 { predictor.learn(word, previousWord(before), previousWord2(before)) }
         clearGlide()
         let now = CACurrentMediaTime()
         if settings.doubleSpace && state.layer == .abc && now - lastSpace < 0.6,
@@ -407,6 +467,11 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     private func updateSuggestions() {
         guard keyboard != nil else { return }
+        if !modelReady {
+            keyboard.keyWeights = [:]
+            keyboard.setSuggestions(left: [], right: [], prefix: "")
+            return
+        }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         keyboard.glideAllowed = suggestAllowed
         if !settings.swipeTyping { clearGlide() }

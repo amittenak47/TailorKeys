@@ -54,6 +54,24 @@ targets:
         buildPhase: resources
       - path: ../app/src/main/assets/trigrams.txt
         buildPhase: resources
+      - path: ../app/src/main/assets/words_es.txt
+        buildPhase: resources
+      - path: ../app/src/main/assets/bigrams_es.txt
+        buildPhase: resources
+      - path: ../app/src/main/assets/trigrams_es.txt
+        buildPhase: resources
+      - path: ../app/src/main/assets/words_de.txt
+        buildPhase: resources
+      - path: ../app/src/main/assets/bigrams_de.txt
+        buildPhase: resources
+      - path: ../app/src/main/assets/trigrams_de.txt
+        buildPhase: resources
+      - path: ../app/src/main/assets/words_fr.txt
+        buildPhase: resources
+      - path: ../app/src/main/assets/bigrams_fr.txt
+        buildPhase: resources
+      - path: ../app/src/main/assets/trigrams_fr.txt
+        buildPhase: resources
       - path: ../app/src/main/assets/NOTICE-dictionary.txt
         buildPhase: resources
     entitlements:

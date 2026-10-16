@@ -36,6 +36,37 @@ class GridKey(val id: Int, var r: Int, var c: Int, var w: Int, val keys: Mutable
  */
 class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>, private var nextId: Int) {
 
+    private fun mapLetters(lang: String) {
+        val from = "qwertyuiopasdfghjkl'zxcvbnm"
+        val to = when (lang) {
+            "es" -> "qwertyuiopasdfghjklñzxcvbnm"
+            "de" -> "qwertzuiopasdfghjklßyxcvbnm"
+            "fr" -> "azertyuiopqsdfghjklmwxcvbn'"
+            else -> return
+        }
+        items.forEach { key -> key.keys.indices.forEach { i ->
+            val code = key.keys[i]
+            val index = if (code.length == 1) from.indexOf(code) else -1
+            if (index >= 0) key.keys[i] = to[index].toString()
+        } }
+    }
+
+    /** Recognized presets follow the active language in memory; custom layouts keep every key. */
+    fun languageVariant(lang: String): KeyGrid {
+        for (t in Template.entries) for (source in listOf("en", "es", "de", "fr")) {
+            val candidate = template(t, source)
+            if (rows == 5) candidate.setNumberRow(true)
+            if (rows == candidate.rows && items.size == candidate.items.size && items.zip(candidate.items).all { (a, b) ->
+                    a.r == b.r && a.c == b.c && a.w == b.w && a.keys == b.keys }) {
+                val result = template(t, lang)
+                if (rows == 5) result.setNumberRow(true)
+                result.items.zip(items).forEach { (a, b) -> a.idx = b.idx }
+                return result
+            }
+        }
+        return this
+    }
+
     fun itemAt(r: Int, c: Int, skip: GridKey? = null) =
         items.firstOrNull { it !== skip && it.r == r && c >= it.c && c < it.c + it.w }
 
@@ -216,8 +247,8 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         }
 
         /** Starting layouts. Standard is [default]; the others put B on the left hand like ergonomic keyboards. */
-        fun template(t: Template): KeyGrid {
-            if (t == Template.STANDARD) return default()
+        fun template(t: Template, lang: String = "en"): KeyGrid {
+            if (t == Template.STANDARD) return default(lang)
             val items = mutableListOf<GridKey>()
             fun add(r: Int, c: Int, keys: List<String>, w: Int = 1) { items.add(GridKey(items.size, r, c, w, keys.toMutableList())) }
             fun row(r: Int, c0: Int, s: String) = s.forEachIndexed { i, ch -> add(r, c0 + i, listOf(ch.toString())) }
@@ -238,10 +269,10 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
                 add(3, 6, listOf(Keys.ENTER))
                 add(3, 7, listOf(Keys.SPACE), 4)
             }
-            return KeyGrid(4, items, items.size)
+            return KeyGrid(4, items, items.size).also { it.mapLetters(lang) }
         }
 
-        fun default(): KeyGrid {
+        fun default(lang: String = "en"): KeyGrid {
             val items = mutableListOf<GridKey>()
             fun add(r: Int, c: Int, keys: List<String>, w: Int = 1) { items.add(GridKey(items.size, r, c, w, keys.toMutableList())) }
             "qwertyuiop".forEachIndexed { i, ch -> add(0, if (i < 5) i else i + 1, listOf(ch.toString())) }
@@ -256,7 +287,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
             add(3, 1, listOf(Keys.SPACE), 4)
             add(3, 6, listOf(Keys.SPACE), 4)
             add(3, 10, listOf(Keys.ENTER))
-            return KeyGrid(4, items, items.size)
+            return KeyGrid(4, items, items.size).also { it.mapLetters(lang) }
         }
 
         fun fromJson(s: String?): KeyGrid? {

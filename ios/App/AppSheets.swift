@@ -134,3 +134,34 @@ struct AboutSheet: View {
         .navigationViewStyle(.stack)
     }
 }
+
+struct LanguagesSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var model: AppSettingsModel
+
+    var body: some View {
+        NavigationView {
+            List {
+                ForEach(Prefs.languageCodes, id: \.self) { code in
+                    let selected = model.settings.languages.contains(code)
+                    Button {
+                        let enabled = model.settings.languages
+                        model.setLanguages(selected ? enabled.filter { $0 != code } : enabled + [code])
+                    } label: {
+                        HStack {
+                            Image(systemName: selected ? "checkmark.square.fill" : "square")
+                            Text(Prefs.languageNames[code] ?? code).foregroundColor(.primary)
+                        }
+                    }
+                    .disabled(selected && model.settings.languages.count == 1)
+                    .accessibilityValue(selected ? "Enabled" : "Disabled")
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+            }
+            .navigationTitle("Languages")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .navigationViewStyle(.stack)
+    }
+}

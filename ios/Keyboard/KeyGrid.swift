@@ -230,11 +230,45 @@ final class KeyGrid {
         return g
     }
 
+    private func mapLetters(_ lang: String) {
+        let from = Array("qwertyuiopasdfghjkl'zxcvbnm")
+        let to: [Character]
+        switch lang {
+        case "es": to = Array("qwertyuiopasdfghjklñzxcvbnm")
+        case "de": to = Array("qwertzuiopasdfghjklßyxcvbnm")
+        case "fr": to = Array("azertyuiopqsdfghjklmwxcvbn'")
+        default: return
+        }
+        for key in items {
+            key.keys = key.keys.map { code in
+                guard code.count == 1, let i = from.firstIndex(of: code.first!) else { return code }
+                return String(to[i])
+            }
+        }
+    }
+
+    /// Only recognized presets follow the active language in memory. Custom grids stay custom.
+    func languageVariant(_ lang: String) -> KeyGrid {
+        for t in Template.allCases { for source in ["en", "es", "de", "fr"] {
+            let candidate = KeyGrid.template(t, source)
+            if rows == 5 { candidate.setNumberRow(true) }
+            if rows == candidate.rows && items.count == candidate.items.count && zip(items, candidate.items).allSatisfy({ a, b in
+                a.r == b.r && a.c == b.c && a.w == b.w && a.keys == b.keys
+            }) {
+                let result = KeyGrid.template(t, lang)
+                if rows == 5 { result.setNumberRow(true) }
+                for (a, b) in zip(result.items, items) { a.idx = b.idx }
+                return result
+            }
+        } }
+        return self
+    }
+
     // MARK: - Templates
 
     /// Starting layouts. Standard is the default; the others put B on the left hand like ergonomic keyboards.
-    static func template(_ t: Template) -> KeyGrid {
-        if t == .standard { return makeDefault() }
+    static func template(_ t: Template, _ lang: String = "en") -> KeyGrid {
+        if t == .standard { return makeDefault(lang) }
         var items: [GridKey] = []
         func add(_ r: Int, _ c: Int, _ keys: [String], _ w: Int = 1) { items.append(GridKey(id: items.count, r: r, c: c, w: w, keys: keys)) }
         func row(_ r: Int, _ c0: Int, _ s: String) { for (i, ch) in s.enumerated() { add(r, c0 + i, [String(ch)]) } }
@@ -255,7 +289,9 @@ final class KeyGrid {
             add(3, 6, [Keys.enter])
             add(3, 7, [Keys.space], 4)
         }
-        return KeyGrid(rows: 4, items: items, nextId: items.count)
+        let grid = KeyGrid(rows: 4, items: items, nextId: items.count)
+        grid.mapLetters(lang)
+        return grid
     }
 
     private struct ItemDTO: Codable { let r: Int; let c: Int; let w: Int; let k: [String]; let i: Int }
@@ -273,7 +309,7 @@ final class KeyGrid {
         return KeyGrid(rows: dto.rows, items: items, nextId: items.count)
     }
 
-    static func makeDefault() -> KeyGrid {
+    static func makeDefault(_ lang: String = "en") -> KeyGrid {
         var items: [GridKey] = []
         func add(_ r: Int, _ c: Int, _ keys: [String], _ w: Int = 1) { items.append(GridKey(id: items.count, r: r, c: c, w: w, keys: keys)) }
         for (i, ch) in "qwertyuiop".enumerated() { add(0, i < 5 ? i : i + 1, [String(ch)]) }
@@ -288,6 +324,8 @@ final class KeyGrid {
         add(3, 1, [Keys.space], 4)
         add(3, 6, [Keys.space], 4)
         add(3, 10, [Keys.enter])
-        return KeyGrid(rows: 4, items: items, nextId: items.count)
+        let grid = KeyGrid(rows: 4, items: items, nextId: items.count)
+        grid.mapLetters(lang)
+        return grid
     }
 }

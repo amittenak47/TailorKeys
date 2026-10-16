@@ -3,7 +3,10 @@ package app.tailorkeys
 import android.content.Intent
 import android.content.SharedPreferences
 import android.inputmethodservice.InputMethodService
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
+import java.util.concurrent.Executors
 import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
@@ -21,6 +24,50 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private lateinit var settings: KeyboardSettings
     private lateinit var predictor: Predictor
     private lateinit var gestureDecoder: GestureDecoder
+    private data class LanguageModel(val predictor: Predictor, val decoder: GestureDecoder)
+    private val models = HashMap<String, LanguageModel>()
+    private val loading = HashSet<String>()
+    private val loader = Executors.newSingleThreadExecutor()
+    private val main = Handler(Looper.getMainLooper())
+    private var modelReady = false
+    private var destroyed = false
+
+    private fun makeModel(lang: String): LanguageModel {
+        val p = Predictor(this, lang) { main.post { if (!destroyed && state.language == lang && modelReady) updateSuggestions() } }
+        return LanguageModel(p, GestureDecoder(p.gestureWords()))
+    }
+
+    private fun activateLanguage() {
+        val lang = settings.currentLanguage()
+        val changed = state.language != lang
+        state.language = lang
+        if (changed) {
+            clearGlide()
+            lastSpaceAt = 0L
+            deadEnd = false
+            keyboardView?.cancelTouches()
+        }
+        val g = settings.loadGrid()
+        if (g.toJson() != grid.toJson()) { grid = g; keyboardView?.grid = g }
+        val model = models[lang]
+        modelReady = model != null
+        if (model != null) {
+            predictor = model.predictor
+            gestureDecoder = model.decoder
+            predictor.setLayout(grid)
+        } else if (loading.add(lang)) {
+            loader.execute {
+                val loaded = makeModel(lang)
+                main.post {
+                    if (!destroyed) {
+                        models[lang] = loaded
+                        loading.remove(lang)
+                        if (state.language == lang) { activateLanguage(); updateSuggestions() }
+                    }
+                }
+            }
+        }
+    }
     private var glideWord: String? = null
     private var glideBefore: String? = null
     private var glideCandidates = emptyList<String>()
@@ -44,6 +91,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     // Any settings change, including from the settings screen while the keyboard is open, applies at once.
     // A layout the keyboard saved itself is already showing; reloading it would wipe the undo history.
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == Prefs.LANGUAGES || key == Prefs.CURRENT_LANGUAGE || key == null) activateLanguage()
         if (key == null || key == Prefs.LAYOUT) {
             val g = settings.loadGrid()
             if (g.toJson() != grid.toJson()) {
@@ -59,8 +107,12 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     override fun onCreate() {
         super.onCreate()
         settings = KeyboardSettings(this)
-        predictor = Predictor(this)
-        gestureDecoder = GestureDecoder(predictor.gestureWords())
+        state.language = settings.currentLanguage()
+        val initial = makeModel(state.language)
+        models[state.language] = initial
+        predictor = initial.predictor
+        gestureDecoder = initial.decoder
+        modelReady = true
         grid = settings.loadGrid()
         predictor.setLayout(grid)
         settings.prefs.registerOnSharedPreferenceChangeListener(prefsListener)
@@ -68,7 +120,9 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     override fun onDestroy() {
         settings.prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
-        predictor.save()
+        models.values.forEach { it.predictor.save() }
+        destroyed = true
+        loader.shutdown()
         super.onDestroy()
     }
 
@@ -111,7 +165,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     override fun onFinishInputView(finishingInput: Boolean) {
         keyboardView?.let { it.cancelTouches(); it.editMode = false }
-        predictor.save()
+        models.values.forEach { it.predictor.save() }
         super.onFinishInputView(finishingInput)
     }
 
@@ -174,7 +228,19 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         repeat(abs(steps)) { sendDownUpKeyEvents(code) }
     }
 
-    override fun onLongPressText(text: String) = commit(text)
+    override fun onLongPressText(text: String) {
+        commit(text)
+        updateSuggestions(text.any { it.isLetter() })
+        keyboardView?.invalidate()
+    }
+
+    override fun onSwitchLanguage(direction: Int) {
+        val enabled = settings.languages()
+        if (enabled.size < 2) return
+        val index = enabled.indexOf(settings.currentLanguage())
+        settings.setCurrentLanguage(enabled[(index + direction + enabled.size) % enabled.size])
+        keyboardView?.announceForAccessibility(Prefs.LANGUAGE_NAMES.getValue(settings.currentLanguage()))
+    }
 
     /** A swipe key landed on a new face. Layer faces switch the layout straight away. */
     override fun onStackFace(code: String) {
@@ -210,11 +276,11 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val prev = previousWord(before)
         if (prefix.isNotEmpty()) ic.deleteSurroundingText(prefix.length, 0)
         ic.commitText("$text ", 1)
-        if (learn) predictor.learn(text, prev, previousWord2(before))
+        if (learn && modelReady) predictor.learn(text, prev, previousWord2(before))
     }
 
     override fun onGlide(points: List<GestureDecoder.Point>, keys: Map<Char, GestureDecoder.Point>, keyWidth: Float) {
-        if (!suggest || !settings.bool(Prefs.SWIPE_TYPING) || state.layer != Layer.ABC) return
+        if (!modelReady || !suggest || !settings.bool(Prefs.SWIPE_TYPING) || state.layer != Layer.ABC) return
         val ic = currentInputConnection ?: return
         gestureDecoder.addWords(predictor.gestureUserWords())
         gestureDecoder.setKeys(keys, keyWidth)
@@ -285,7 +351,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val ic = currentInputConnection ?: return
         if (currentGlide()) {
             if (text.firstOrNull()?.isLetter() == true) typeSpace()
-            else if (text.any { !it.isLetterOrDigit() && it != '\'' } && learn) {
+            else if (text.any { !it.isLetterOrDigit() && it != '\'' } && learn && modelReady) {
                 predictor.learn(glideWord!!, previousWord(ic.getTextBeforeCursor(64, 0)))
             }
         }
@@ -315,7 +381,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val ic = currentInputConnection ?: return
         val before = ic.getTextBeforeCursor(64, 0)
         val word = currentWord(before)
-        if (learn && word.length > 1) predictor.learn(word, previousWord(before), previousWord2(before))
+        if (learn && modelReady && word.length > 1) predictor.learn(word, previousWord(before), previousWord2(before))
         clearGlide()
         val now = SystemClock.uptimeMillis()
         if (settings.bool(Prefs.DOUBLE_SPACE_PERIOD) && state.layer == Layer.ABC && now - lastSpaceAt < DOUBLE_SPACE_MS) {
@@ -332,7 +398,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     private fun pressEnter() {
-        if (currentGlide() && learn) predictor.learn(glideWord!!, previousWord(currentInputConnection?.getTextBeforeCursor(64, 0)))
+        if (currentGlide() && learn && modelReady) predictor.learn(glideWord!!, previousWord(currentInputConnection?.getTextBeforeCursor(64, 0)))
         clearGlide()
         val info = currentInputEditorInfo ?: return
         val action = editorAction(info)
@@ -398,6 +464,11 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     private fun updateSuggestions(letterCommitted: Boolean = false) {
+        if (!modelReady) {
+            keyboardView?.keyWeights = emptyMap()
+            keyboardView?.setSuggestions(emptyList(), emptyList(), "")
+            return
+        }
         if (!settings.bool(Prefs.SWIPE_TYPING)) clearGlide()
         val before = currentInputConnection?.getTextBeforeCursor(64, 0)
         val prefix = currentWord(before)

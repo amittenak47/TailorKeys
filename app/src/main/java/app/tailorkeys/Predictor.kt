@@ -16,21 +16,23 @@ import kotlin.random.Random
  * Explore (left wheel): a weighted random draw from further down the same completions, so less obvious
  * words show up. The draw is seeded by the prefix and context, so it stays steady on redraw.
  */
-class Predictor(context: Context) {
+class Predictor(context: Context, val language: String = "en", private val onReady: () -> Unit = {}) {
     private val base: List<String>
     private val rank = HashMap<String, Int>()
     private val user = HashMap<String, Int>()
     // Context IDs -> sorted packed (word ID, count) rows. No retained n-gram strings.
-    private data class SeedTables(val pairs: Map<Long, LongArray>, val triples: Map<Long, LongArray>)
+    private data class SeedTables(val pairs: Map<Long, LongArray>, val triples: Map<Long, LongArray>,
+                                  val frequencies: DoubleArray = doubleArrayOf(), val common: List<String> = emptyList())
     @Volatile private var seedTables: SeedTables? = null
     private var cachedTables: SeedTables? = null
     private val topWords: List<String>
     private val userPairs = HashMap<String, MutableMap<String, Int>>()
     private val userTriples = HashMap<String, MutableMap<String, Int>>()
     private val neighbours = HashMap<Char, MutableSet<Char>>()
-    private val userFile = File(context.filesDir, "user_words.txt")
-    private val pairFile = File(context.filesDir, "user_bigrams.txt")
-    private val tripleFile = File(context.filesDir, "user_trigrams.txt")
+    private val suffix = if (language == "en") "" else "_$language"
+    private val userFile = File(context.filesDir, "user_words${suffix}.txt")
+    private val pairFile = File(context.filesDir, "user_bigrams${suffix}.txt")
+    private val tripleFile = File(context.filesDir, "user_trigrams${suffix}.txt")
     private var dirty = false
     private var cachedPrefix: String? = null
     private var cachedPrev: String? = null
@@ -38,7 +40,7 @@ class Predictor(context: Context) {
     private var cachedCandidates: List<Candidate>? = null
 
     init {
-        val words = context.assets.open("words.txt").bufferedReader().use { it.readLines() }
+        val words = context.assets.open("words${suffix}.txt").bufferedReader().use { it.readLines() }
             .map { it.trim().lowercase() }.filter { it.isNotEmpty() }
         words.forEachIndexed { i, w -> rank.putIfAbsent(w, i) }
         base = words.distinct()
@@ -61,12 +63,27 @@ class Predictor(context: Context) {
             .sortedWith(compareByDescending<String> { frequency(it) }.thenBy { it }).take(300)
         Thread({
             val tables = try {
-                SeedTables(loadCounts(context, "bigrams.txt", 2), loadCounts(context, "trigrams.txt", 3))
+                val pairs = loadCounts(context, "bigrams${suffix}.txt", 2)
+                val triples = loadCounts(context, "trigrams${suffix}.txt", 3)
+                // Conversation counts complement AOSP ranks in the new languages (e.g. danke).
+                // English retains its original ranking exactly.
+                val frequencies = if (language == "en") doubleArrayOf() else DoubleArray(base.size).apply {
+                    pairs.forEach { (context, row) -> row.forEach {
+                        val count = (it and 0xffffffffL).toDouble()
+                        this[context.toInt()] += count
+                        this[(it ushr 32).toInt()] += count
+                    } }
+                    val max = maxOrNull() ?: 0.0
+                    if (max > 0) indices.forEach { this[it] /= max }
+                }
+                val common = frequencies.indices.sortedByDescending { frequencies[it] }.take(300).map { base[it] }
+                SeedTables(pairs, triples, frequencies, common)
             } catch (_: java.io.IOException) {
                 SeedTables(emptyMap(), emptyMap())
             }
             // Publish both immutable tables together. UI-owned caches notice the new snapshot.
             seedTables = tables
+            onReady()
         }, "TailorKeys-ngrams").apply { isDaemon = true; start() }
     }
 
@@ -84,7 +101,10 @@ class Predictor(context: Context) {
         }
     }
 
-    private fun frequency(w: String) = 1.0 / ((rank[w] ?: 5000) + 10) + (user[w] ?: 0) * 0.05
+    private fun frequency(w: String, tables: SeedTables? = seedTables): Double {
+        val corpus = rank[w]?.let { tables?.frequencies?.getOrNull(it) } ?: 0.0
+        return 1.0 / ((rank[w] ?: 5000) + 10) + 0.2 * corpus + (user[w] ?: 0) * 0.05
+    }
     private fun contextId(first: Int, second: Int) = (first.toLong() shl 32) or second.toLong()
 
     private fun loadCounts(context: Context, name: String, n: Int): Map<Long, LongArray> {
@@ -200,7 +220,7 @@ class Predictor(context: Context) {
             // User triples receive the same logarithmic personal weighting as pairs.
             val context = ln(1.0 + seedPair) + 1.5 * ln(1.0 + userPair) +
                 1.2 * (ln(1.0 + seedTriple) + 1.5 * ln(1.0 + userTriple))
-            val score = ln(frequency(w)) + 1.5 * context - 2.5 * cost / 10.0
+            val score = ln(frequency(w, tables)) + 1.5 * context - 2.5 * cost / 10.0
             all.add(Candidate(w, score, !completion, seedPair + userPair, seedTriple + userTriple))
         }
         if (p.isEmpty()) {
@@ -211,6 +231,7 @@ class Predictor(context: Context) {
             learnedTriples?.keys?.let { pool.addAll(it) }
             learnedPairs?.keys?.let { pool.addAll(it) }
             pool.addAll(topWords)
+            tables?.common?.let { pool.addAll(it) }
             for (w in pool) add(w)
         } else {
             for (w in user.keys) add(w)

@@ -5,6 +5,7 @@ struct SettingsScreen: View {
     let tab: SettingsTab
     @State private var ratio = 1.0
     @State private var confirmReset = false
+    @State private var languagesOpen = false
     @State private var numberRowBlocked = false
 
     private var prefs: KeyboardSettings { model.settings }
@@ -32,6 +33,7 @@ struct SettingsScreen: View {
             .environment(\.defaultMinListRowHeight, 48)
             .background(AppStyle.background.ignoresSafeArea())
         }
+        .sheet(isPresented: $languagesOpen) { LanguagesSheet(model: model) }
         .alert("Reset settings?", isPresented: $confirmReset) {
             Button("Cancel", role: .cancel) {}
             Button("Reset settings", role: .destructive) { model.reset() }
@@ -272,6 +274,17 @@ struct SettingsScreen: View {
 
     private var typingOptions: some View {
         Group {
+            Section {
+                Button { languagesOpen = true } label: {
+                    HStack {
+                        Text("Languages").foregroundColor(.primary)
+                        Spacer()
+                        Text(prefs.languages.compactMap { Prefs.languageNames[$0] }.joined(separator: ", "))
+                            .foregroundColor(.secondary).multilineTextAlignment(.trailing)
+                    }
+                }
+                .disabled(!model.fullAccessConfirmed)
+            }
             Section {
                 Toggle("Auto-capitalize", isOn: model.bool(Prefs.autoCap, default: true))
                 Toggle("Double-space period", isOn: model.bool(Prefs.doubleSpace, default: true))

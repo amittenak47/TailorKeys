@@ -39,6 +39,10 @@ enum Prefs {
     static let sameOrientations = "same_orientations"
     static let theme = "theme"
     static let layout = "layout"
+    static let languages = "languages"
+    static let currentLanguage = "current_language"
+    static let languageCodes = ["en", "es", "de", "fr"]
+    static let languageNames = ["en": "English", "es": "Español", "de": "Deutsch", "fr": "Français"]
 }
 
 struct SizeProfile {
@@ -90,6 +94,27 @@ final class KeyboardSettings {
         return group
     }
 
+    private var deviceLanguage: String {
+        let lang = Locale.preferredLanguages.first.flatMap { Locale(identifier: $0).languageCode } ?? "en"
+        return Prefs.languageCodes.contains(lang) ? lang : "en"
+    }
+    var languages: [String] {
+        let stored = d.string(forKey: Prefs.languages)?.components(separatedBy: ",") ?? [deviceLanguage]
+        let enabled = Prefs.languageCodes.filter { stored.contains($0) }
+        return enabled.isEmpty ? [deviceLanguage] : enabled
+    }
+    var currentLanguage: String {
+        get { let value = d.string(forKey: Prefs.currentLanguage) ?? ""; return languages.contains(value) ? value : languages[0] }
+        set { if languages.contains(newValue) { d.set(newValue, forKey: Prefs.currentLanguage) } }
+    }
+    func setLanguages(_ enabled: [String]) {
+        let valid = Prefs.languageCodes.filter { enabled.contains($0) }
+        guard !valid.isEmpty else { return }
+        let current = currentLanguage
+        d.set(valid.joined(separator: ","), forKey: Prefs.languages)
+        currentLanguage = valid.contains(current) ? current : valid[0]
+    }
+
     func int(_ p: IntPref) -> Int { min(max(d.object(forKey: p.key) as? Int ?? p.def, p.min), p.max) }
     func set(_ p: IntPref, _ v: Int) { d.set(min(max(v, p.min), p.max), forKey: p.key) }
 
@@ -136,8 +161,8 @@ final class KeyboardSettings {
     }
 
     func loadGrid() -> KeyGrid {
-        if let g = KeyGrid.fromJSON(d.string(forKey: Prefs.layout)) { return g }
-        let g = KeyGrid.makeDefault()
+        if let g = KeyGrid.fromJSON(d.string(forKey: Prefs.layout)) { return g.languageVariant(currentLanguage) }
+        let g = KeyGrid.makeDefault(currentLanguage)
         if numberRow { g.setNumberRow(true) }
         return g
     }
@@ -153,7 +178,7 @@ final class KeyboardSettings {
         var keys = [Prefs.curve.key, Prefs.keyGap.key, Prefs.cornerRadius.key, Prefs.textScale.key,
                     Prefs.longPressMs.key, Prefs.numberRow, Prefs.showHints, Prefs.autoCap, Prefs.doubleSpace,
                     Prefs.clicks, Prefs.keyTint, Prefs.smartTargets, Prefs.swipeTyping, Prefs.lockSize, Prefs.sameOrientations,
-                    Prefs.theme, Prefs.layout]
+                    Prefs.theme, Prefs.layout, Prefs.languages, Prefs.currentLanguage]
         for l in [false, true] {
             keys += [Prefs.height(l).key, Prefs.width(l).key, Prefs.bottomPadding(l).key,
                      Prefs.splitGap(l).key, Prefs.tilt(l).key, Prefs.spaceTilt(l).key,

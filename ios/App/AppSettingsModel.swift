@@ -94,9 +94,16 @@ final class AppSettingsModel: ObservableObject {
         changed()
     }
 
+    func setLanguages(_ enabled: [String]) {
+        guard fullAccessConfirmed else { return }
+        settings.setLanguages(enabled)
+        grid = settings.loadGrid()
+        changed()
+    }
+
     func applyTemplate(_ template: Template) {
         guard fullAccessConfirmed else { return }
-        let g = KeyGrid.template(template)
+        let g = KeyGrid.template(template, settings.currentLanguage)
         if settings.numberRow { g.setNumberRow(true) }
         saveGrid(g)
         if template.split { settings.setSplitFor(landscape, true) }
@@ -105,7 +112,7 @@ final class AppSettingsModel: ObservableObject {
 
     var layoutTitle: String {
         for template in Template.allCases {
-            let g = KeyGrid.template(template)
+            let g = KeyGrid.template(template, settings.currentLanguage)
             if settings.numberRow { g.setNumberRow(true) }
             if Self.sameJSON(g.toJSON(), grid.toJSON()) { return template.title }
         }

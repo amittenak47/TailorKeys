@@ -59,6 +59,9 @@ object Prefs {
 
     const val THEME = "theme"
     const val LAYOUT = "layout"
+    const val LANGUAGES = "languages"
+    const val CURRENT_LANGUAGE = "current_language"
+    val LANGUAGE_NAMES = linkedMapOf("en" to "English", "es" to "Español", "de" to "Deutsch", "fr" to "Français")
 }
 
 data class SizeProfile(
@@ -75,6 +78,27 @@ data class SizeProfile(
 class KeyboardSettings(context: Context) {
     val prefs: SharedPreferences = context.applicationContext.getSharedPreferences("settings", Context.MODE_PRIVATE)
     private val tablet = context.resources.configuration.smallestScreenWidthDp >= 600
+
+    private val deviceLanguage = context.resources.configuration.locales[0].language.takeIf { it in Prefs.LANGUAGE_NAMES } ?: "en"
+    fun languages(): List<String> {
+        val stored = prefs.all[Prefs.LANGUAGES]
+        val enabled = when (stored) {
+            is Set<*> -> stored.filterIsInstance<String>().toSet()
+            is String -> stored.split(',').toSet()
+            else -> setOf(deviceLanguage)
+        }
+        return Prefs.LANGUAGE_NAMES.keys.filter { it in enabled }.ifEmpty { listOf(deviceLanguage) }
+    }
+    fun currentLanguage(): String = prefs.getString(Prefs.CURRENT_LANGUAGE, null)?.takeIf { it in languages() } ?: languages().first()
+    fun setLanguages(enabled: Set<String>) {
+        val valid = Prefs.LANGUAGE_NAMES.keys.filter { it in enabled }
+        if (valid.isEmpty()) return
+        val current = currentLanguage().takeIf { it in valid } ?: valid.first()
+        prefs.edit().putStringSet(Prefs.LANGUAGES, valid.toSet()).putString(Prefs.CURRENT_LANGUAGE, current).apply()
+    }
+    fun setCurrentLanguage(lang: String) {
+        if (lang in languages()) prefs.edit().putString(Prefs.CURRENT_LANGUAGE, lang).apply()
+    }
 
     fun int(p: IntPref) = prefs.getInt(p.key, p.default).coerceIn(p.min, p.max)
     fun bool(p: BoolPref) = prefs.getBoolean(p.key, p.default)
@@ -144,8 +168,8 @@ class KeyboardSettings(context: Context) {
 
     fun setTheme(theme: ThemeName) = prefs.edit().putString(Prefs.THEME, theme.name).apply()
 
-    fun loadGrid(): KeyGrid = KeyGrid.fromJson(prefs.getString(Prefs.LAYOUT, null))
-        ?: KeyGrid.default().also { if (bool(Prefs.NUMBER_ROW)) it.setNumberRow(true) }
+    fun loadGrid(): KeyGrid = KeyGrid.fromJson(prefs.getString(Prefs.LAYOUT, null))?.languageVariant(currentLanguage())
+        ?: KeyGrid.default(currentLanguage()).also { if (bool(Prefs.NUMBER_ROW)) it.setNumberRow(true) }
 
     /** Saves the layout. The number-row switch follows whether the layout has a number row. */
     fun saveGrid(grid: KeyGrid) =

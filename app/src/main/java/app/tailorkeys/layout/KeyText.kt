@@ -4,6 +4,7 @@ enum class Layer { ABC, NUM, SYM }
 
 /** Which layer is showing and how letters are cased. Shared by the service and the view. */
 class InputState {
+    var language = "en"
     var layer = Layer.ABC
     var capsLock = false
     /** One-shot capital for the next letter, from auto-cap or a tap on ABC. */
@@ -32,15 +33,40 @@ object KeyText {
     fun output(k: String, s: InputState): String? {
         if (isDigit(k)) return k.substring(1)
         if (k.length != 1) return null
-        if (s.layer != Layer.ABC) alt[k]?.let { return if (s.layer == Layer.NUM) it.first else it.second }
+        if (s.layer != Layer.ABC) alt[baseKey(k, s.language)]?.let { return if (s.layer == Layer.NUM) it.first else it.second }
         return if (s.upper) k.uppercase() else k
     }
 
     /** The character offered on long-press: the key's number-layer character. */
-    fun longPress(k: String, s: InputState): String? = if (k.length == 1 && s.layer == Layer.ABC) alt[k]?.first else null
+    fun longPress(k: String, s: InputState): String? = if (k.length == 1 && s.layer == Layer.ABC) alt[baseKey(k, s.language)]?.first else null
 
     /** Small corner hint, shown only for long-press digits. */
     fun hint(k: String, s: InputState): String? = longPress(k, s)?.takeIf { it[0].isDigit() }
+
+    /** Layer symbols and number hints follow the letter's position in the language preset. */
+    private fun baseKey(k: String, lang: String): String {
+        val variant = when (lang) {
+            "es" -> "qwertyuiopasdfghjklñzxcvbnm"
+            "de" -> "qwertzuiopasdfghjklßyxcvbnm"
+            "fr" -> "azertyuiopqsdfghjklmwxcvbn'"
+            else -> return k
+        }
+        val index = variant.indexOf(k).takeIf { k.length == 1 && it >= 0 } ?: return k
+        return "qwertyuiopasdfghjkl'zxcvbnm"[index].toString()
+    }
+
+    fun alternatives(k: String, s: InputState, hints: Boolean): List<String> {
+        if (s.layer != Layer.ABC || k.length != 1) return emptyList()
+        val accents = when (s.language) {
+            "es" -> mapOf("a" to "á", "e" to "é", "i" to "í", "o" to "ó", "u" to "úü", "n" to "ñ", "ñ" to "n", "?" to "¿", "!" to "¡")
+            "de" -> mapOf("a" to "ä", "o" to "ö", "u" to "ü", "s" to "ß", "ß" to "s")
+            "fr" -> mapOf("a" to "àâæ", "e" to "éèêë", "i" to "îï", "o" to "ôœ", "u" to "ùûü", "c" to "ç", "y" to "ÿ")
+            else -> emptyMap()
+        }[k].orEmpty().map { if (s.upper) it.toString().uppercase() else it.toString() }
+        val old = longPress(k, s)
+        val first = if (old != null && (old.first().isDigit() && hints || !old.first().isDigit() && (s.language == "en" || accents.isEmpty()))) listOf(old) else emptyList()
+        return (first + accents).distinct()
+    }
 
     /** A spoken name for the face the key types right now. */
     fun spoken(code: String, state: InputState, enterLabel: String?): String = when (code) {
