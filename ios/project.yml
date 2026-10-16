@@ -52,6 +52,8 @@ targets:
         buildPhase: resources
       - path: ../app/src/main/assets/bigrams.txt
         buildPhase: resources
+      - path: ../app/src/main/assets/trigrams.txt
+        buildPhase: resources
       - path: ../app/src/main/assets/NOTICE-dictionary.txt
         buildPhase: resources
     entitlements:

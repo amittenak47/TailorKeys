@@ -204,3 +204,20 @@ Copyright (c) 2008, The Android Open Source Project
 
 
 Includes Dictionaries © Lexiteria LLC.  Used by permission.
+
+Tatoeba sentence n-gram attribution
+
+Project: Tatoeba contributors, eng sentences
+Project URL: https://tatoeba.org/
+Source URL: https://downloads.tatoeba.org/exports/per_language/eng/eng_sentences.tsv.bz2
+Download date (UTC): 2026-10-15
+Source SHA-256: 0eabb52f54350bbb39807190920bfddaf9fee2ba50ca75af67e11a22ec475c29
+License: Creative Commons Attribution 2.0 France (CC BY 2.0 FR)
+License URL: https://creativecommons.org/licenses/by/2.0/fr/
+Export documentation: https://tatoeba.org/en/downloads
+
+Modified by TailorKeys: lowercased and tokenized into letters/apostrophes;
+counted adjacent vocabulary-only pairs/triples within sentences; retained
+counts >= 3, limited each asset to the highest-count 150,000 entries.
+Existing TailorKeys pair weights merged using the maximum.
+This attribution covers bigrams.txt and trigrams.txt.

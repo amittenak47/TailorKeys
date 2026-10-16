@@ -179,7 +179,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val prev = previousWord(before)
         if (prefix.isNotEmpty()) ic.deleteSurroundingText(prefix.length, 0)
         ic.commitText("$text ", 1)
-        if (learn) predictor.learn(text, prev)
+        if (learn) predictor.learn(text, prev, previousWord2(before))
     }
 
     override fun onPickIme() {
@@ -226,7 +226,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val ic = currentInputConnection ?: return
         val before = ic.getTextBeforeCursor(64, 0)
         val word = currentWord(before)
-        if (learn && word.length > 1) predictor.learn(word, previousWord(before))
+        if (learn && word.length > 1) predictor.learn(word, previousWord(before), previousWord2(before))
         val now = SystemClock.uptimeMillis()
         if (settings.bool(Prefs.DOUBLE_SPACE_PERIOD) && state.layer == Layer.ABC && now - lastSpaceAt < DOUBLE_SPACE_MS) {
             val last2 = ic.getTextBeforeCursor(2, 0)
@@ -286,6 +286,25 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         return before.subSequence(start, end).toString().lowercase()
     }
 
+    private fun previousWord2(before: CharSequence?): String? {
+        if (before == null) return null
+        var end = before.length - currentWord(before).length
+        repeat(2) { index ->
+            while (end > 0) {
+                val ch = before[end - 1]
+                if (ch == '.' || ch == '!' || ch == '?' || ch == '\n' || ch == '\r') return null
+                if (ch.isLetter() || ch == '\'') break
+                end--
+            }
+            var start = end
+            while (start > 0 && (before[start - 1].isLetter() || before[start - 1] == '\'')) start--
+            if (start == end || start == 0 && before.length == 64) return null
+            if (index == 1) return before.subSequence(start, end).toString().lowercase()
+            end = start
+        }
+        return null
+    }
+
     private fun updateSuggestions(letterCommitted: Boolean = false) {
         val before = currentInputConnection?.getTextBeforeCursor(64, 0)
         val prefix = currentWord(before)
@@ -307,8 +326,9 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             return
         }
         val prev = previousWord(before)
-        view.keyWeights = if (settings.bool(Prefs.KEY_TINT) || settings.bool(Prefs.SMART_TARGETS)) predictor.nextLetters(prefix, prev) else emptyMap()
-        view.setSuggestions(predictor.explore(prefix, prev), predictor.closest(prefix, prev), prefix)
+        val prev2 = previousWord2(before)
+        view.keyWeights = if (settings.bool(Prefs.KEY_TINT) || settings.bool(Prefs.SMART_TARGETS)) predictor.nextLetters(prefix, prev, prev2) else emptyMap()
+        view.setSuggestions(predictor.explore(prefix, prev, prev2), predictor.closest(prefix, prev, prev2), prefix)
     }
 
     /** Turns on a one-shot capital at the start of a sentence, when the field asks for it. */

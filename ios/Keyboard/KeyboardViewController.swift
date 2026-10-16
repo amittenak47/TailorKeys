@@ -143,7 +143,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             let prev = previousWord(before)
             for _ in 0..<prefix.count { textDocumentProxy.deleteBackward() }
             textDocumentProxy.insertText(text + " ")
-            predictor.learn(text, prev)
+            predictor.learn(text, prev, previousWord2(before))
         }
         updateAutoCap()
         updateSuggestions()
@@ -256,7 +256,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func typeSpace() {
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         let word = currentWord(before)
-        if word.count > 1 { predictor.learn(word, previousWord(before)) }
+        if word.count > 1 { predictor.learn(word, previousWord(before), previousWord2(before)) }
         let now = CACurrentMediaTime()
         if settings.doubleSpace && state.layer == .abc && now - lastSpace < 0.6,
            before.hasSuffix(" "), let prev = before.dropLast().last, prev.isLetter || prev.isNumber {
@@ -300,6 +300,17 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         return word.isEmpty ? nil : word
     }
 
+    private func previousWord2(_ before: String) -> String? {
+        var remaining = before.dropLast(currentWord(before).count)
+        while let ch = remaining.last {
+            if ch == "." || ch == "!" || ch == "?" || ch.isNewline { return nil }
+            if ch.isLetter || ch == "'" { break }
+            remaining.removeLast()
+        }
+        // previousWord skips this completed previous word and applies the same reset rules.
+        return previousWord(String(remaining))
+    }
+
     private func updateSuggestions() {
         guard keyboard != nil else { return }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
@@ -311,8 +322,9 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         }
         let prefix = currentWord(before)
         let prev = previousWord(before)
-        keyboard.keyWeights = (settings.keyTint || settings.smartTargets) ? predictor.nextLetters(prefix, prev) : [:]
-        keyboard.setSuggestions(left: predictor.explore(prefix, prev), right: predictor.closest(prefix, prev), prefix: prefix)
+        let prev2 = previousWord2(before)
+        keyboard.keyWeights = (settings.keyTint || settings.smartTargets) ? predictor.nextLetters(prefix, prev, prev2) : [:]
+        keyboard.setSuggestions(left: predictor.explore(prefix, prev, prev2), right: predictor.closest(prefix, prev, prev2), prefix: prefix)
     }
 
     /// Turns on a one-shot capital where the field asks for one: sentence starts, word starts, or always.

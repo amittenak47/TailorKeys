@@ -12,7 +12,7 @@ import kotlin.random.Random
 /**
  * Suggestions for the two wheels, from a bundled list of common words plus words you type.
  *
- * Closest (right wheel): completions and layout-aware corrections, ranked with the previous word.
+ * Closest (right wheel): completions and layout-aware corrections, ranked with two previous words.
  * Explore (left wheel): a weighted random draw from further down the same completions, so less obvious
  * words show up. The draw is seeded by the prefix and context, so it stays steady on redraw.
  */
@@ -20,29 +20,28 @@ class Predictor(context: Context) {
     private val base: List<String>
     private val rank = HashMap<String, Int>()
     private val user = HashMap<String, Int>()
-    private val seedPairs = HashMap<String, MutableMap<String, Int>>()
+    // Context IDs -> sorted packed (word ID, count) rows. No retained n-gram strings.
+    private data class SeedTables(val pairs: Map<Long, LongArray>, val triples: Map<Long, LongArray>)
+    @Volatile private var seedTables: SeedTables? = null
+    private var cachedTables: SeedTables? = null
+    private val topWords: List<String>
     private val userPairs = HashMap<String, MutableMap<String, Int>>()
+    private val userTriples = HashMap<String, MutableMap<String, Int>>()
     private val neighbours = HashMap<Char, MutableSet<Char>>()
     private val userFile = File(context.filesDir, "user_words.txt")
     private val pairFile = File(context.filesDir, "user_bigrams.txt")
+    private val tripleFile = File(context.filesDir, "user_trigrams.txt")
     private var dirty = false
     private var cachedPrefix: String? = null
     private var cachedPrev: String? = null
+    private var cachedPrev2: String? = null
     private var cachedCandidates: List<Candidate>? = null
 
     init {
         val words = context.assets.open("words.txt").bufferedReader().use { it.readLines() }
             .map { it.trim().lowercase() }.filter { it.isNotEmpty() }
         words.forEachIndexed { i, w -> rank.putIfAbsent(w, i) }
-        base = rank.keys.sortedBy { rank[it] }
-        context.assets.open("bigrams.txt").bufferedReader().useLines { lines ->
-            lines.forEach { line ->
-                val parts = line.split(' ')
-                if (parts.size == 3 && rank.containsKey(parts[0]) && rank.containsKey(parts[1])) {
-                    parts[2].toIntOrNull()?.let { seedPairs.getOrPut(parts[0]) { HashMap() }[parts[1]] = it }
-                }
-            }
-        }
+        base = words.distinct()
         if (userFile.exists()) userFile.readLines().forEach { line ->
             val parts = line.split('\t')
             if (parts.size == 2) parts[1].toIntOrNull()?.let { user[parts[0]] = it }
@@ -51,6 +50,24 @@ class Predictor(context: Context) {
             val parts = line.split('\t')
             if (parts.size == 3) parts[2].toIntOrNull()?.let { userPairs.getOrPut(parts[0]) { HashMap() }[parts[1]] = it }
         }
+        if (tripleFile.exists()) tripleFile.useLines { lines -> lines.forEach { line ->
+            val parts = line.split('\t')
+            if (parts.size == 4) parts[3].toIntOrNull()?.let {
+                userTriples.getOrPut("${parts[0]}\t${parts[1]}") { HashMap() }[parts[2]] = it
+            }
+        } }
+        // Only these base words and learned words can enter the frequency top 300.
+        topWords = (base.take(300) + user.keys).distinct()
+            .sortedWith(compareByDescending<String> { frequency(it) }.thenBy { it }).take(300)
+        Thread({
+            val tables = try {
+                SeedTables(loadCounts(context, "bigrams.txt", 2), loadCounts(context, "trigrams.txt", 3))
+            } catch (_: java.io.IOException) {
+                SeedTables(emptyMap(), emptyMap())
+            }
+            // Publish both immutable tables together. UI-owned caches notice the new snapshot.
+            seedTables = tables
+        }, "TailorKeys-ngrams").apply { isDaemon = true; start() }
     }
 
     fun setLayout(grid: KeyGrid) {
@@ -68,8 +85,39 @@ class Predictor(context: Context) {
     }
 
     private fun frequency(w: String) = 1.0 / ((rank[w] ?: 5000) + 10) + (user[w] ?: 0) * 0.05
-    private fun pairCount(prev: String?, w: String) = (seedPairs[prev]?.get(w) ?: 0) + 3.0 * (userPairs[prev]?.get(w) ?: 0)
-    private data class Candidate(val word: String, val score: Double, val correction: Boolean)
+    private fun contextId(first: Int, second: Int) = (first.toLong() shl 32) or second.toLong()
+
+    private fun loadCounts(context: Context, name: String, n: Int): Map<Long, LongArray> {
+        val rows = HashMap<Long, MutableList<Long>>()
+        context.assets.open(name).bufferedReader().useLines { lines -> lines.forEach { line ->
+            val parts = line.split(' ')
+            if (parts.size != n + 1) return@forEach
+            val first = rank[parts[0]] ?: return@forEach
+            val second = rank[parts[1]] ?: return@forEach
+            val word = rank[parts[n - 1]] ?: return@forEach
+            val count = parts[n].toIntOrNull() ?: return@forEach
+            if (count <= 0) return@forEach
+            val key = if (n == 2) first.toLong() else contextId(first, second)
+            rows.getOrPut(key) { ArrayList() }.add((word.toLong() shl 32) or count.toLong())
+        } }
+        return rows.mapValues { (_, values) -> values.toLongArray().apply { sort() } }
+    }
+
+    private fun count(row: LongArray?, word: Int?): Int {
+        if (row == null || word == null) return 0
+        var low = 0
+        var high = row.size - 1
+        while (low <= high) {
+            val mid = (low + high) ushr 1
+            val id = (row[mid] ushr 32).toInt()
+            if (id == word) return row[mid].toInt()
+            if (id < word) low = mid + 1 else high = mid - 1
+        }
+        return 0
+    }
+
+    private data class Candidate(val word: String, val score: Double, val correction: Boolean,
+                                 val pairCount: Int, val tripleCount: Int)
 
     // Costs are tenths. Three bounded rows are reused for every dictionary entry in a lookup.
     private fun cost(p: String, w: String, limit: Int, rows: Array<IntArray>): Int {
@@ -124,9 +172,18 @@ class Predictor(context: Context) {
         return best + extra
     }
 
-    private fun candidates(prefix: String, prev: String?): List<Candidate> {
+    private fun candidates(prefix: String, prev: String?, prev2: String?): List<Candidate> {
         val p = prefix.lowercase()
-        cachedCandidates?.let { if (cachedPrefix == p && cachedPrev == prev) return it }
+        val tables = seedTables
+        cachedCandidates?.let {
+            if (cachedPrefix == p && cachedPrev == prev && cachedPrev2 == prev2 && cachedTables === tables) return it
+        }
+        val prevId = rank[prev]
+        val prev2Id = rank[prev2]
+        val pairs = prevId?.let { tables?.pairs?.get(it.toLong()) }
+        val triples = if (prevId != null && prev2Id != null) tables?.triples?.get(contextId(prev2Id, prevId)) else null
+        val learnedPairs = userPairs[prev]
+        val learnedTriples = if (prev2 != null && prev != null) userTriples["$prev2\t$prev"] else null
         val limit = if (p.length <= 4) 9 else 13
         val rows = Array(3) { IntArray(p.length + 1) }
         val all = ArrayList<Candidate>()
@@ -135,25 +192,49 @@ class Predictor(context: Context) {
             val completion = w.startsWith(p)
             val cost = if (completion) 0 else if (p.length >= 2) cost(p, w, limit, rows) else return
             if (cost > limit) return
-            val score = ln(frequency(w)) + 1.5 * ln(1 + pairCount(prev, w)) - 2.5 * cost / 10.0
-            all.add(Candidate(w, score, !completion))
+            val id = rank[w]
+            val seedPair = count(pairs, id)
+            val userPair = learnedPairs?.get(w) ?: 0
+            val seedTriple = count(triples, id)
+            val userTriple = learnedTriples?.get(w) ?: 0
+            // User triples receive the same logarithmic personal weighting as pairs.
+            val context = ln(1.0 + seedPair) + 1.5 * ln(1.0 + userPair) +
+                1.2 * (ln(1.0 + seedTriple) + 1.5 * ln(1.0 + userTriple))
+            val score = ln(frequency(w)) + 1.5 * context - 2.5 * cost / 10.0
+            all.add(Candidate(w, score, !completion, seedPair + userPair, seedTriple + userTriple))
         }
-        for (w in user.keys) add(w)
-        for (w in base) if (!user.containsKey(w)) add(w)
+        if (p.isEmpty()) {
+            // No dictionary scan: only this context's followers plus the load-time top 300.
+            val pool = LinkedHashSet<String>()
+            triples?.forEach { pool.add(base[(it ushr 32).toInt()]) }
+            pairs?.forEach { pool.add(base[(it ushr 32).toInt()]) }
+            learnedTriples?.keys?.let { pool.addAll(it) }
+            learnedPairs?.keys?.let { pool.addAll(it) }
+            pool.addAll(topWords)
+            for (w in pool) add(w)
+        } else {
+            for (w in user.keys) add(w)
+            for (w in base) if (!user.containsKey(w)) add(w)
+        }
         val result = if (p.isEmpty() && prev != null) {
-            all.sortedWith(compareByDescending<Candidate> { pairCount(prev, it.word) }.thenByDescending { it.score }.thenBy { it.word })
+            // Trigram followers, then remaining bigram followers, then frequency fallback.
+            all.sortedWith(compareByDescending<Candidate> { if (it.tripleCount > 0) 2 else if (it.pairCount > 0) 1 else 0 }
+                .thenByDescending { if (it.tripleCount > 0) it.tripleCount else it.pairCount }
+                .thenByDescending { it.score }.thenBy { it.word })
         } else {
             all.sortedWith(compareByDescending<Candidate> { it.score }.thenBy { it.word })
         }
         cachedPrefix = p
         cachedPrev = prev
+        cachedPrev2 = prev2
+        cachedTables = tables
         cachedCandidates = result
         return result
     }
 
-    fun nextLetters(prefix: String, prev: String?): Map<Char, Double> {
+    fun nextLetters(prefix: String, prev: String?, prev2: String? = null): Map<Char, Double> {
         val weights = HashMap<Char, Double>()
-        for (candidate in candidates(prefix, prev)) {
+        for (candidate in candidates(prefix, prev, prev2)) {
             if (candidate.correction || candidate.word.length <= prefix.length) continue
             val letter = candidate.word[prefix.length]
             weights[letter] = (weights[letter] ?: 0.0) + exp(candidate.score)
@@ -167,21 +248,21 @@ class Predictor(context: Context) {
         return prefix.length >= 2 && user.keys.none { it.startsWith(p) } && base.none { it.startsWith(p) }
     }
 
-    fun closest(prefix: String, prev: String? = null, n: Int = 8): List<String> {
-        val c = candidates(prefix, prev)
+    fun closest(prefix: String, prev: String? = null, prev2: String? = null, n: Int = 8): List<String> {
+        val c = candidates(prefix, prev, prev2)
         val maxCorrections = if (c.count { !it.correction } < 5) n else 3
         var corrections = 0
         return c.asSequence().filter { !it.correction || corrections++ < maxCorrections }
             .take(n).map { matchCase(it.word, prefix) }.toList()
     }
 
-    fun explore(prefix: String, prev: String? = null, n: Int = 8): List<String> {
-        val c = candidates(prefix, prev)
-        val seed = prefix.lowercase() + (prev?.let { "\t$it" } ?: "")
+    fun explore(prefix: String, prev: String? = null, prev2: String? = null, n: Int = 8): List<String> {
+        val c = candidates(prefix, prev, prev2)
+        val seed = prefix.lowercase() + "\t${prev.orEmpty()}\t${prev2.orEmpty()}"
         val rnd = Random(seed.hashCode())
         // Weighted sampling without replacement. Temperature 2.5 flattens the ranking.
-        return c.drop(1).take(300)
-            .map { it.word to rnd.nextDouble().pow(1.0 / exp(it.score / 2.5)) }
+        val pool = if (prefix.isEmpty()) c.drop(1) else c.drop(1).take(300)
+        return pool.map { it.word to rnd.nextDouble().pow(1.0 / exp(it.score / 2.5)) }
             .sortedByDescending { it.second }
             .take(n)
             .map { matchCase(it.first, prefix) }
@@ -200,13 +281,17 @@ class Predictor(context: Context) {
     }
 
     /** Remembers a word you typed. Never call this for password fields. */
-    fun learn(word: String, prev: String? = null) {
+    fun learn(word: String, prev: String? = null, prev2: String? = null) {
         val w = word.lowercase()
         if (w.length < 2 || !w.all { it.isLetter() || it == '\'' }) return
         user[w] = (user[w] ?: 0) + 1
         if (prev != null) {
             val pairs = userPairs.getOrPut(prev) { HashMap() }
             pairs[w] = (pairs[w] ?: 0) + 1
+            if (prev2 != null) {
+                val triples = userTriples.getOrPut("$prev2\t$prev") { HashMap() }
+                triples[w] = (triples[w] ?: 0) + 1
+            }
         }
         cachedCandidates = null
         dirty = true
@@ -217,6 +302,9 @@ class Predictor(context: Context) {
         userFile.writeText(user.entries.joinToString("\n") { "${it.key}\t${it.value}" })
         pairFile.writeText(userPairs.entries.flatMap { (prev, pairs) ->
             pairs.map { (word, count) -> "$prev\t$word\t$count" }
+        }.joinToString("\n"))
+        tripleFile.writeText(userTriples.entries.flatMap { (context, triples) ->
+            triples.map { (word, count) -> "$context\t$word\t$count" }
         }.joinToString("\n"))
         dirty = false
     }
