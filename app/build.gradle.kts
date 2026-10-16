@@ -18,9 +18,12 @@ android {
     }
 
     buildTypes {
+        // R8 shrinks, optimizes and obfuscates release builds. Keep build/outputs/mapping/release/mapping.txt
+        // from every release you ship: it's the only way to read that version's crash stack traces.
         release {
             isMinifyEnabled = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 
