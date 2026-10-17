@@ -73,7 +73,10 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
     private fun occupied(r: Int, c: Int, skip: GridKey?) = itemAt(r, c, skip) != null
 
     fun valid(key: GridKey): Boolean {
-        if (key.c < 0 || key.c + key.w > COLS || key.r < 0 || key.r >= rows) return false
+        // Check each operand before adding: imported Int.MAX_VALUE widths must not wrap.
+        if (rows !in 4..5 || key.c !in 0 until COLS || key.w !in 1..COLS ||
+            key.w > COLS - key.c || key.r !in 0 until rows || key.keys.isEmpty() || key.keys.any { it.isEmpty() } ||
+            key.idx !in key.keys.indices) return false
         if (region(key.c) != region(key.c + key.w - 1)) return false
         return (0 until key.w).none { occupied(key.r, key.c + it, key) }
     }
@@ -195,7 +198,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
     }
 
     /** True when every key fits on the grid without overlapping. Imported layouts must pass this. */
-    fun isSound() = rows in 4..5 && items.isNotEmpty() && items.all { it.keys.isNotEmpty() && it.w >= 1 && valid(it) }
+    fun isSound() = rows in 4..5 && items.size in 1..(rows * COLS) && items.all { valid(it) }
 
     fun toJson(): String {
         val a = JSONArray()
@@ -231,16 +234,19 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
             val m = CODE.find(text) ?: return null
             return try {
                 val inf = Inflater(true)
-                inf.setInput(Base64.decode(m.groupValues[1], Base64.URL_SAFE) + 0) // raw deflate wants one spare byte
-                val out = ByteArrayOutputStream()
-                val buf = ByteArray(1024)
-                while (!inf.finished() && out.size() < 64 * 1024) {
-                    val n = inf.inflate(buf)
-                    if (n == 0 && inf.needsInput()) break
-                    out.write(buf, 0, n)
+                try {
+                    inf.setInput(Base64.decode(m.groupValues[1], Base64.URL_SAFE) + 0)
+                    val out = ByteArrayOutputStream()
+                    val buf = ByteArray(1024)
+                    while (!inf.finished()) {
+                        val n = inf.inflate(buf)
+                        if (n == 0 || out.size() + n > 64 * 1024) return null
+                        out.write(buf, 0, n)
+                    }
+                    fromJson(out.toString("UTF-8"))
+                } finally {
+                    inf.end()
                 }
-                inf.end()
-                fromJson(out.toString("UTF-8"))?.takeIf { it.isSound() }
             } catch (e: Exception) {
                 null
             }
@@ -295,16 +301,23 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
             return try {
                 val o = JSONObject(s)
                 val a = o.getJSONArray("items")
+                if (a.length() !in 1..55) return null
+                fun integer(o: JSONObject, key: String) = o.get(key).toString().toInt()
                 val items = mutableListOf<GridKey>()
                 for (i in 0 until a.length()) {
                     val j = a.getJSONObject(i)
                     val ks = j.getJSONArray("k")
-                    items.add(GridKey(i, j.getInt("r"), j.getInt("c"), j.getInt("w"), MutableList(ks.length()) { ks.getString(it) }, j.optInt("i")))
+                    items.add(GridKey(i, integer(j, "r"), integer(j, "c"), integer(j, "w"), MutableList(ks.length()) { ks.getString(it) }, if (j.has("i")) integer(j, "i") else 0))
                 }
-                KeyGrid(o.getInt("rows"), items, items.size)
+                KeyGrid(integer(o, "rows"), items, items.size).takeIf { it.isSound() }
             } catch (e: Exception) {
                 null
             }
         }
+
+        /** Shared recovery for persisted layouts, including old malformed saved state. */
+        fun savedOrDefault(saved: KeyGrid?, lang: String, numberRow: Boolean): KeyGrid =
+            saved?.takeIf { it.isSound() }?.languageVariant(lang)
+                ?: default(lang).also { if (numberRow) it.setNumberRow(true) }
     }
 }

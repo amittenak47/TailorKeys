@@ -83,11 +83,13 @@ data class SizeProfile(
     val spaceTilt: Int,
 )
 
-class KeyboardSettings(context: Context) {
-    val prefs: SharedPreferences = context.applicationContext.getSharedPreferences("settings", Context.MODE_PRIVATE)
-    private val tablet = context.resources.configuration.smallestScreenWidthDp >= 600
-
-    private val deviceLanguage = context.resources.configuration.locales[0].language.takeIf { it in Prefs.LANGUAGE_NAMES } ?: "en"
+class KeyboardSettings internal constructor(
+    val prefs: SharedPreferences, private val tablet: Boolean, private val deviceLanguage: String,
+) {
+    constructor(context: Context) : this(
+        context.applicationContext.getSharedPreferences("settings", Context.MODE_PRIVATE),
+        context.resources.configuration.smallestScreenWidthDp >= 600,
+        context.resources.configuration.locales[0].language.takeIf { it in Prefs.LANGUAGE_NAMES } ?: "en")
     fun languages(): List<String> {
         val stored = prefs.all[Prefs.LANGUAGES]
         val enabled = when (stored) {
@@ -157,6 +159,17 @@ class KeyboardSettings(context: Context) {
         e.apply()
     }
 
+    /** Width and alignment form one gesture: notify observers after both are stored. */
+    fun setHandleFor(landscape: Boolean, width: Int, align: Align) {
+        val e = prefs.edit()
+        for (orientation in orientations(landscape)) {
+            val pref = Prefs.width(orientation)
+            e.putInt(pref.key, width.coerceIn(pref.min, pref.max))
+            e.putString(Prefs.alignKey(orientation), align.name)
+        }
+        e.apply()
+    }
+
     fun setSplitFor(landscape: Boolean, on: Boolean) {
         val e = prefs.edit()
         orientations(landscape).forEach { e.putBoolean(Prefs.splitKey(it), on) }
@@ -204,12 +217,14 @@ class KeyboardSettings(context: Context) {
 
     fun setTheme(theme: ThemeName) = prefs.edit().putString(Prefs.THEME, theme.name).apply()
 
-    fun loadGrid(): KeyGrid = KeyGrid.fromJson(prefs.getString(Prefs.LAYOUT, null))?.languageVariant(currentLanguage())
-        ?: KeyGrid.default(currentLanguage()).also { if (bool(Prefs.NUMBER_ROW)) it.setNumberRow(true) }
+    fun loadGrid(): KeyGrid = KeyGrid.savedOrDefault(KeyGrid.fromJson(prefs.getString(Prefs.LAYOUT, null)),
+        currentLanguage(), bool(Prefs.NUMBER_ROW))
 
     /** Saves the layout. The number-row switch follows whether the layout has a number row. */
-    fun saveGrid(grid: KeyGrid) =
+    fun saveGrid(grid: KeyGrid) {
+        if (!grid.isSound()) return
         prefs.edit().putString(Prefs.LAYOUT, grid.toJson()).putBoolean(Prefs.NUMBER_ROW.key, grid.rows == 5).apply()
+    }
 
     /** Back to defaults, without showing the first-run guide again. */
     fun resetAll() = prefs.edit().clear().putBoolean(Prefs.ONBOARDED.key, true).apply()
