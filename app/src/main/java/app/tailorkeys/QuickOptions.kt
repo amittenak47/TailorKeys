@@ -32,7 +32,8 @@ internal class CursorJoystick {
     var push = 0.0
         private set
     private var fraction = 0.0
-    private var lastTime: Long? = null
+    private var lastTime = 0L
+    private var hasTime = false
     private var reachLeft = MIN_REACH
     /**
      * Below 1, the same push moves the cursor (and the glow) less, yet reaching the gap's edge still gives top speed:
@@ -69,7 +70,7 @@ internal class CursorJoystick {
     fun advance(now: Long): Int {
         val previous = lastTime
         lastTime = now
-        if (previous == null) return 0
+        if (!hasTime) { hasTime = true; return 0 }
         fraction += speed * (now - previous).coerceAtLeast(0) / 1000.0
         // Avoid losing a whole character to floating-point error at an exact boundary.
         val steps = (fraction + if (fraction > 0) 1e-9 else -1e-9).toInt()
