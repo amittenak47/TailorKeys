@@ -486,8 +486,26 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             hintRect.set(undoRect.right, 0f, right - undoRect.width(), stripH)
         }
         handleRect.set(areaLeft, y0 + hc, areaLeft + areaW, y0 + hc + handleH)
-        if (split && !editMode) cursorRect.set(innerLeft + half, stripH, innerLeft + half + gapPx, handleRect.top)
-        else cursorRect.setEmpty()
+        // The cursor strip covers the whole empty gap you can see between the halves, which is wider than the nominal
+        // gap because keys are sized for the full tilt range. Keys still win where a touch lands on one.
+        if (split && !editMode) {
+            val pt = FloatArray(2)
+            // Horizontal extent of a placed key after its tilt/curve transform.
+            fun edge(pk: Placed, rightmost: Boolean): Float {
+                var e = if (rightmost) Float.NEGATIVE_INFINITY else Float.POSITIVE_INFINITY
+                for (cx in floatArrayOf(pk.rect.left, pk.rect.right)) for (cy in floatArrayOf(pk.rect.top, pk.rect.bottom)) {
+                    pt[0] = cx; pt[1] = cy
+                    pk.matrix.mapPoints(pt)
+                    e = if (rightmost) max(e, pt[0]) else min(e, pt[0])
+                }
+                return e
+            }
+            // From the left half's least-inner right edge to the right half's least-inner left edge: every row's
+            // visible gap is inside, and a strict key hit is checked first anyway.
+            val leftInner = placed.filter { it.item.c < KeyGrid.CENTER }.minOfOrNull { edge(it, true) } ?: (innerLeft + half)
+            val rightInner = placed.filter { it.item.c > KeyGrid.CENTER }.maxOfOrNull { edge(it, false) } ?: (innerLeft + half + gapPx)
+            cursorRect.set(min(leftInner, innerLeft + half), stripH, max(rightInner, innerLeft + half + gapPx), handleRect.top)
+        } else cursorRect.setEmpty()
         val minSpace = 40 * d
         leftSpace = if (areaLeft >= minSpace) RectF(0f, stripH, areaLeft, y0 + hc) else null
         rightSpace = if (width - (areaLeft + areaW) >= minSpace) RectF(areaLeft + areaW, stripH, width.toFloat(), y0 + hc) else null
@@ -1033,12 +1051,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     /**
-     * While a finger holds still in the gap, a soft glow grows outward from it over the long-press delay.
-     * Full size means text selection is on; it then follows the finger. Moving resets it.
+     * While a finger holds still at the start of a gap drag, a soft glow grows outward from it over half a second.
+     * Full size means text selection is on; it then follows the finger. Once the finger moves first, no glow.
      */
     private fun drawCursor(canvas: Canvas, radius: Float) {
         val t = trackers.values.firstOrNull { it.kind == K_CURSOR } ?: return
-        val held = (SystemClock.uptimeMillis() - t.holdAt).toFloat() / settings.int(Prefs.LONG_PRESS_MS)
+        if (t.moved && !t.select) return
+        val held = (SystemClock.uptimeMillis() - t.holdAt).toFloat() / SELECT_HOLD_MS
         val p = if (t.select) 1f else held.coerceIn(0f, 1f).let { it * it * (3 - 2 * it) }
         if (!t.select) postInvalidateOnAnimation()
         if (p <= 0.02f) return
@@ -1210,6 +1229,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         var holdX = 0f
         var holdY = 0f
         var holdAt = 0L
+        var lastT = 0L
         var fx = 0f
         var fy = 0f
         var select = false
@@ -1323,7 +1343,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             trackers[id] = Tracker(K_CURSOR, null).also {
                 it.x0 = x; it.holdX = x; it.holdY = y; it.fx = x; it.fy = y
                 it.holdAt = SystemClock.uptimeMillis()
-                timers.postDelayed(it.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong())
+                it.lastX = x; it.lastT = it.holdAt
+                timers.postDelayed(it.longPress, SELECT_HOLD_MS)
             }
             invalidate()
             return
@@ -1362,7 +1383,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         if (!t.glideEligible || t.consumed && glideId != id) return false
         if (glideId != null && glideId != id) return true
         t.points.add(GestureDecoder.Point(x, y, time))
-        if (glideId == null && hypot(x - t.x0, y - t.y0) > 0.6f * t.glideWidth) {
+        if (glideId == null && hypot(x - t.x0, y - t.y0) > 1.0f * t.glideWidth) {
             chordTouches.cancel()
             glideId = id
             stopTimers(t)
@@ -1407,19 +1428,26 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             K_CURSOR -> {
                 t.fx = x; t.fy = y
                 invalidate()
-                if (!t.select && hypot(x - t.holdX, y - t.holdY) > 6 * density) {
-                    t.holdX = x; t.holdY = y
-                    t.holdAt = SystemClock.uptimeMillis()
+                // Selection only starts from a hold at the very start; once the finger moves, it's cursor movement
+                // for the rest of the gesture (slow drags used to trip selection mid-way).
+                if (!t.select && !t.moved && hypot(x - t.holdX, y - t.holdY) > 6 * density) {
+                    t.moved = true
                     timers.removeCallbacks(t.longPress)
-                    timers.postDelayed(t.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong())
                 }
-                val step = 9 * density
+                // Mouse-style acceleration: 9 dp per character when moving slowly, down to ~2 dp when flicking,
+                // so a long move doesn't run the finger into the keys.
+                val now = SystemClock.uptimeMillis()
+                val speed = abs(x - t.lastX) / density / max(1L, now - t.lastT)
+                t.lastX = x; t.lastT = now
+                val step = 9 * density / (1f + min(3.5f, speed * 3f))
                 val steps = ((x - t.x0) / step).toInt()
                 if (steps != 0) {
+                    if (!t.moved) { t.moved = true; timers.removeCallbacks(t.longPress) }
                     invalidatePressAccents()
                     listener?.onCursor(steps, select = t.select)
                     t.x0 += steps * step
-                    repeat(abs(steps)) { haptic(HapticFeedbackConstants.CLOCK_TICK) }
+                    // One tick per step reads as a buzz on fast flicks; cap it.
+                    repeat(min(abs(steps), 3)) { haptic(HapticFeedbackConstants.CLOCK_TICK) }
                 }
             }
             K_STACK -> {
@@ -1642,7 +1670,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 pt[0] = x; pt[1] = y
                 pk.inverse.mapPoints(pt)
                 val r = pk.rect
-                val core = RectF(r).apply { inset(width() * 0.3f, height() * 0.3f) }
+                val core = RectF(r).apply { inset(width() * 0.15f, height() * 0.15f) }
                 if (core.contains(pt[0], pt[1])) return pk
                 val target = RectF(r).apply { inset(-width() * 0.35f, -height() * 0.35f) }
                 if (!target.contains(pt[0], pt[1])) continue
@@ -1885,6 +1913,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         const val K_HANDLE = 3
         const val K_GEAR = 4
         const val K_CURSOR = 5
+        /** Holding still this long at the start of a centre-gap drag switches it to text selection. */
+        const val SELECT_HOLD_MS = 500L
         const val MAX_UNDO = 50
         const val T_MOVE = 0
         const val T_SPACE = 1

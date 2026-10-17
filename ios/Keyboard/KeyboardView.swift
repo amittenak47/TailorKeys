@@ -455,7 +455,22 @@ final class KeyboardView: UIView {
         moreRect = CGRect(x: doneRect.minX - 44, y: 0, width: 44, height: strip)
         hintRect = CGRect(x: undoRect.maxX, y: 0, width: Swift.max(0, moreRect.minX - undoRect.maxX), height: strip)
         handleRect = CGRect(x: areaLeft, y: y0 + hc, width: areaW, height: handleH)
-        cursorRect = split && !editMode ? CGRect(x: innerLeft + half, y: stripH, width: gapPx, height: handleRect.minY - stripH) : .zero
+        // The cursor strip covers the whole empty gap you can see between the halves, which is wider than the nominal
+        // gap because keys are sized for the full tilt range. Keys still win where a touch lands on one.
+        if split && !editMode {
+            func edge(_ pk: Placed, rightmost: Bool) -> CGFloat {
+                let xs = [CGPoint(x: pk.rect.minX, y: pk.rect.minY), CGPoint(x: pk.rect.maxX, y: pk.rect.minY),
+                          CGPoint(x: pk.rect.minX, y: pk.rect.maxY), CGPoint(x: pk.rect.maxX, y: pk.rect.maxY)].map { $0.applying(pk.t).x }
+                return rightmost ? xs.max()! : xs.min()!
+            }
+            let leftInner = placed.filter { $0.item.c < KeyGrid.center }.map { edge($0, rightmost: true) }.min() ?? innerLeft + half
+            let rightInner = placed.filter { $0.item.c > KeyGrid.center }.map { edge($0, rightmost: false) }.max() ?? innerLeft + half + gapPx
+            let x0 = Swift.min(leftInner, innerLeft + half)
+            let x1 = Swift.max(rightInner, innerLeft + half + gapPx)
+            cursorRect = CGRect(x: x0, y: stripH, width: x1 - x0, height: handleRect.minY - stripH)
+        } else {
+            cursorRect = .zero
+        }
         leftSpace = areaLeft >= 40 ? CGRect(x: 0, y: strip, width: areaLeft, height: y0 + hc - strip) : nil
         rightSpace = width - (areaLeft + areaW) >= 40 ? CGRect(x: areaLeft + areaW, y: strip, width: width - areaLeft - areaW, height: y0 + hc - strip) : nil
         let letters = placed.filter { !$0.item.isStack && $0.item.keys[0].count == 1 && $0.item.keys[0].first!.isLetter }
@@ -1035,6 +1050,7 @@ final class KeyboardView: UIView {
         var x0: CGFloat = 0
         var y0: CGFloat = 0
         var lastX: CGFloat = 0
+        var lastTime: CFTimeInterval = 0
         var deferredClick = false
         var glideEligible = false
         var glideWidth: CGFloat = 1
@@ -1154,7 +1170,7 @@ final class KeyboardView: UIView {
         if leftSpace?.contains(p) == true || rightSpace?.contains(p) == true { moveToward(p); return }
         let hit = findKey(p, strict: true)
         if hit == nil && cursorRect.contains(p) {
-            let t = Tracker(kind: .cursor, pk: nil); t.x0 = p.x; trackers[id] = t
+            let t = Tracker(kind: .cursor, pk: nil); t.x0 = p.x; t.lastX = p.x; t.lastTime = CACurrentMediaTime(); trackers[id] = t
             setNeedsDisplay()
             return
         }
@@ -1200,7 +1216,7 @@ final class KeyboardView: UIView {
         guard t.glideEligible, !t.consumed || glideID == id else { return false }
         if let active = glideID, active != id { return true }
         t.points.append(GlidePoint(position: p, time: time))
-        if glideID == nil && hypot(p.x - t.x0, p.y - t.y0) > 0.6 * t.glideWidth {
+        if glideID == nil && hypot(p.x - t.x0, p.y - t.y0) > 1.0 * t.glideWidth {
             chordTouches.cancel()
             glideID = id
             t.stop(); t.consumed = true
@@ -1245,12 +1261,18 @@ final class KeyboardView: UIView {
             if abs(p.x - t.x0) > 8 { t.moved = true }
         case .cursor:
             // UITextDocumentProxy has no API to select text.
-            let steps = Int((p.x - t.x0) / 9)
+            // Mouse-style acceleration: 9 pt per character when moving slowly, down to ~2 pt when flicking,
+            // so a long move doesn't run the finger into the keys.
+            let now = CACurrentMediaTime()
+            let speed = abs(p.x - t.lastX) / CGFloat(Swift.max(0.001, now - t.lastTime) * 1000)
+            t.lastX = p.x; t.lastTime = now
+            let step = 9 / (1 + Swift.min(3.5, speed * 3))
+            let steps = Int((p.x - t.x0) / step)
             if steps != 0 {
                 invalidatePressAccents()
                 delegate?.moveCursor(steps)
-                t.x0 += CGFloat(steps) * 9
-                for _ in 0..<abs(steps) { click() }
+                t.x0 += CGFloat(steps) * step
+                for _ in 0..<Swift.min(abs(steps), 3) { click() }
             }
         case .stack:
             // One swipe moves exactly one face; the rest of the gesture is ignored.
@@ -1446,7 +1468,7 @@ final class KeyboardView: UIView {
             for pk in placed where pk.item !== skip && isLetter(pk) {
                 let local = p.applying(pk.inv)
                 let r = pk.rect
-                if r.insetBy(dx: r.width * 0.3, dy: r.height * 0.3).contains(local) { return pk }
+                if r.insetBy(dx: r.width * 0.15, dy: r.height * 0.15).contains(local) { return pk }
                 if !r.insetBy(dx: -r.width * 0.35, dy: -r.height * 0.35).contains(local) { continue }
                 let dx = Double((local.x - r.midX) / r.width)
                 let dy = Double((local.y - r.midY) / r.height)
