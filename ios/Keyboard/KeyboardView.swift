@@ -104,6 +104,10 @@ final class KeyboardView: UIView {
     private let wheels = [Wheel(side: 0), Wheel(side: 1)]
     private var handleRect = CGRect.zero
     private var cursorRect = CGRect.zero
+    /// The visible split's two sides: each row's innermost key edge, top to bottom, following tilt and curve.
+    private var gapLeft: [CGPoint] = []
+    private var gapRight: [CGPoint] = []
+    private var gapPath = UIBezierPath()
     private var gearRect = CGRect.zero
     private var globeRect = CGRect.zero
     /// Set by the controller from `needsInputModeSwitchKey` (iPhones with a home button).
@@ -470,21 +474,38 @@ final class KeyboardView: UIView {
         moreRect = CGRect(x: doneRect.minX - 44, y: 0, width: 44, height: strip)
         hintRect = CGRect(x: undoRect.maxX, y: 0, width: Swift.max(0, moreRect.minX - undoRect.maxX), height: strip)
         handleRect = CGRect(x: areaLeft, y: y0 + hc, width: areaW, height: handleH)
-        // The cursor strip covers the whole empty gap you can see between the halves, which is wider than the nominal
-        // gap because keys are sized for the full tilt range. Keys still win where a touch lands on one.
+        // The cursor gap is exactly the empty split you can see: each row's innermost key edges, following tilt and
+        // curve, from the strip down to the handle. Gaps between other keys are not part of it.
+        gapLeft = []
+        gapRight = []
+        gapPath = UIBezierPath()
+        cursorRect = .zero
         if split && !editMode {
-            func edge(_ pk: Placed, rightmost: Bool) -> CGFloat {
-                let xs = [CGPoint(x: pk.rect.minX, y: pk.rect.minY), CGPoint(x: pk.rect.maxX, y: pk.rect.minY),
-                          CGPoint(x: pk.rect.minX, y: pk.rect.maxY), CGPoint(x: pk.rect.maxX, y: pk.rect.maxY)].map { $0.applying(pk.t).x }
-                return rightmost ? xs.max()! : xs.min()!
+            func side(_ left: Bool) -> [CGPoint] {
+                func mapX(_ pk: Placed, _ x: CGFloat) -> CGFloat { CGPoint(x: x, y: pk.rect.midY).applying(pk.t).x }
+                let keys = placed.filter { left ? $0.item.c < KeyGrid.center : $0.item.c > KeyGrid.center }
+                var points: [CGPoint] = []
+                for row in Dictionary(grouping: keys, by: { $0.item.r }).values {
+                    guard let pk = left ? row.max(by: { mapX($0, $0.rect.maxX) < mapX($1, $1.rect.maxX) })
+                                        : row.min(by: { mapX($0, $0.rect.minX) < mapX($1, $1.rect.minX) }) else { continue }
+                    let x = left ? pk.rect.maxX : pk.rect.minX
+                    points += [CGPoint(x: x, y: pk.rect.minY).applying(pk.t), CGPoint(x: x, y: pk.rect.maxY).applying(pk.t)]
+                }
+                points.sort { $0.y < $1.y }
+                guard let first = points.first, let last = points.last else { return [] }
+                return [CGPoint(x: first.x, y: stripH)] + points + [CGPoint(x: last.x, y: handleRect.minY)]
             }
-            let leftInner = placed.filter { $0.item.c < KeyGrid.center }.map { edge($0, rightmost: true) }.min() ?? innerLeft + half
-            let rightInner = placed.filter { $0.item.c > KeyGrid.center }.map { edge($0, rightmost: false) }.max() ?? innerLeft + half + gapPx
-            let x0 = Swift.min(leftInner, innerLeft + half)
-            let x1 = Swift.max(rightInner, innerLeft + half + gapPx)
-            cursorRect = CGRect(x: x0, y: stripH, width: x1 - x0, height: handleRect.minY - stripH)
-        } else {
-            cursorRect = .zero
+            let l = side(true), r = side(false)
+            if !l.isEmpty && !r.isEmpty {
+                gapLeft = l
+                gapRight = r
+                gapPath.move(to: l[0])
+                for p in l { gapPath.addLine(to: p) }
+                for p in r.reversed() { gapPath.addLine(to: p) }
+                gapPath.close()
+                let x0 = l.map(\.x).min()!, x1 = r.map(\.x).max()!
+                cursorRect = CGRect(x: x0, y: stripH, width: x1 - x0, height: handleRect.minY - stripH)
+            }
         }
         leftSpace = areaLeft >= 40 ? CGRect(x: 0, y: strip, width: areaLeft, height: y0 + hc - strip) : nil
         rightSpace = width - (areaLeft + areaW) >= 40 ? CGRect(x: areaLeft + areaW, y: strip, width: width - areaLeft - areaW, height: y0 + hc - strip) : nil
@@ -912,23 +933,45 @@ final class KeyboardView: UIView {
 
     /// While the centre gap is held: a ring marks where the finger pressed (inside it the cursor stops) and a soft
     /// glow follows the finger.
-    /// While the centre gap is held, the whole gap shades toward the side the cursor is moving: faint on the trailing
-    /// edge, strongest on the leading edge, and stronger the faster it goes. Inside the dead zone it is an even faint tint.
+    /// X of one side of the split at height `y`, between that side's row edge points.
+    private func gapEdge(_ side: [CGPoint], at y: CGFloat) -> CGFloat {
+        guard let first = side.first, y > first.y else { return side.first?.x ?? 0 }
+        for i in 1..<side.count where y <= side[i].y {
+            let a = side[i - 1], b = side[i]
+            return b.y - a.y < 0.5 ? b.x : a.x + (b.x - a.x) * (y - a.y) / (b.y - a.y)
+        }
+        return side[side.count - 1].x
+    }
+
+    private func inGap(_ p: CGPoint) -> Bool {
+        !gapLeft.isEmpty && cursorRect.contains(p) && p.x >= gapEdge(gapLeft, at: p.y) && p.x <= gapEdge(gapRight, at: p.y)
+    }
+
+    /// While the centre gap is held, the split gets a faint tint, and while the cursor moves, vertical stripes scroll
+    /// through it the same way, in step with the cursor: faster and brighter the faster it goes. Each stripe has a sharp
+    /// leading edge and a fading tail, so the direction reads even at a glance.
     private func drawCursorIndicator(_ ctx: CGContext) {
         guard let t = trackers.values.first(where: { $0.kind == .cursor }), !cursorRect.isEmpty else { return }
-        let speed = t.joystick.speed
-        let idle = palette.hint.withAlphaComponent(0.11)
         ctx.saveGState()
-        UIBezierPath(roundedRect: cursorRect, cornerRadius: CGFloat(settings.int(Prefs.cornerRadius))).addClip()
-        if speed == 0 {
-            idle.setFill()
-            ctx.fill(cursorRect)
-        } else {
-            let peak = palette.hint.withAlphaComponent(0.24 + 0.66 * CGFloat(Swift.min(1, abs(speed) / CursorJoystick.maxSpeed)))
-            let colors = [idle.cgColor, peak.cgColor] as CFArray
-            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) {
-                let (from, to) = speed < 0 ? (cursorRect.maxX, cursorRect.minX) : (cursorRect.minX, cursorRect.maxX)
-                ctx.drawLinearGradient(gradient, start: CGPoint(x: from, y: 0), end: CGPoint(x: to, y: 0), options: [])
+        gapPath.addClip()
+        palette.hint.withAlphaComponent(0.11).setFill()
+        ctx.fill(cursorRect)
+        let speed = t.joystick.speed
+        if speed != 0 {
+            let period: CGFloat = 28
+            let phase = CGFloat(t.joystick.travel * 3).truncatingRemainder(dividingBy: period)
+            let peak = palette.hint.withAlphaComponent(0.2 + 0.62 * CGFloat(Swift.min(1, abs(speed) / CursorJoystick.maxSpeed)))
+            let clear = palette.hint.withAlphaComponent(0)
+            let locations: [CGFloat] = speed > 0 ? [0, 0.85, 1] : [0, 0.15, 1]
+            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: [clear.cgColor, peak.cgColor, clear.cgColor] as CFArray, locations: locations) {
+                var s = cursorRect.minX - period + (phase - cursorRect.minX).truncatingRemainder(dividingBy: period)
+                while s < cursorRect.maxX {
+                    ctx.saveGState()
+                    ctx.clip(to: CGRect(x: s, y: cursorRect.minY, width: period, height: cursorRect.height))
+                    ctx.drawLinearGradient(gradient, start: CGPoint(x: s, y: 0), end: CGPoint(x: s + period, y: 0), options: [])
+                    ctx.restoreGState()
+                    s += period
+                }
             }
         }
         ctx.restoreGState()
@@ -1264,10 +1307,10 @@ final class KeyboardView: UIView {
         }
         if leftSpace?.contains(p) == true || rightSpace?.contains(p) == true { moveToward(p); return }
         let hit = findKey(p, strict: true)
-        if hit == nil && cursorRect.contains(p) {
+        if hit == nil && inGap(p) {
             guard !trackers.values.contains(where: { $0.kind == .cursor }) else { return }
             let t = Tracker(kind: .cursor, pk: nil); t.x0 = p.x; t.y0 = p.y; t.lastX = p.x; t.lastY = p.y; trackers[id] = t
-            t.joystick.reach(left: p.x - cursorRect.minX, right: cursorRect.maxX - p.x)
+            t.joystick.reach(left: p.x - gapEdge(gapLeft, at: p.y), right: gapEdge(gapRight, at: p.y) - p.x)
             setNeedsDisplay()
             return
         }
@@ -1807,9 +1850,11 @@ private final class CursorJoystick {
     private static let minSpeed = 3.0
     private static let deadZone = 4.0
     /// A press right beside the gap's edge still gets this much room before top speed.
-    private static let minReach = 12.0
+    private static let minReach = 8.0
     /// Current signed speed in characters per second (also drives the gap's direction gradient).
     private(set) var speed = 0.0
+    /// Characters travelled so far, fractional and signed; scrolls the gap's stripes in step with the cursor.
+    private(set) var travel = 0.0
     private var fraction = 0.0
     private var lastTime: TimeInterval?
     private var reachLeft = CursorJoystick.minReach
@@ -1840,7 +1885,9 @@ private final class CursorJoystick {
         let previous = lastTime
         lastTime = now
         guard let previous = previous else { return 0 }
-        fraction += speed * max(0, now - previous)
+        let moved = speed * max(0, now - previous)
+        travel += moved
+        fraction += moved
         // Avoid losing a whole character to floating-point error at an exact boundary.
         let steps = Int(fraction + (fraction > 0 ? 1e-9 : -1e-9))
         fraction -= Double(steps)

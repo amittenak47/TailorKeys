@@ -27,6 +27,9 @@ internal class CursorJoystick {
     /** Current signed speed in characters per second (also drives the gap's direction gradient). */
     var speed = 0.0
         private set
+    /** Characters travelled so far, fractional and signed; scrolls the gap's stripes in step with the cursor. */
+    var travel = 0.0
+        private set
     private var fraction = 0.0
     private var lastTime: Long? = null
     private var reachLeft = MIN_REACH
@@ -59,7 +62,9 @@ internal class CursorJoystick {
         val previous = lastTime
         lastTime = now
         if (previous == null) return 0
-        fraction += speed * (now - previous).coerceAtLeast(0) / 1000.0
+        val moved = speed * (now - previous).coerceAtLeast(0) / 1000.0
+        travel += moved
+        fraction += moved
         // Avoid losing a whole character to floating-point error at an exact boundary.
         val steps = (fraction + if (fraction > 0) 1e-9 else -1e-9).toInt()
         fraction -= steps
@@ -71,7 +76,7 @@ internal class CursorJoystick {
         private const val MIN_SPEED = 3.0
         private const val DEAD_ZONE = 4.0
         /** A press right beside the gap's edge still gets this much room before top speed. */
-        private const val MIN_REACH = 12.0
+        private const val MIN_REACH = 8.0
     }
 }
 

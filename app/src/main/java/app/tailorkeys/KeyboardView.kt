@@ -10,7 +10,9 @@ import android.graphics.DashPathEffect
 import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.CornerPathEffect
 import android.graphics.Path
+import android.graphics.PointF
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
@@ -137,6 +139,12 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val wheels = listOf(Wheel(0), Wheel(1))
     private val handleRect = RectF()
     private val cursorRect = RectF()
+    /** The visible split's two sides: each row's innermost key edge, top to bottom, following tilt and curve. */
+    private val gapLeft = ArrayList<PointF>()
+    private val gapRight = ArrayList<PointF>()
+    private val gapPath = Path()
+    private var gapCorners: CornerPathEffect? = null
+    private var gapCornerRadius = -1f
     private val gearRect = RectF()
     private val undoRect = RectF()
     private val hintRect = RectF()
@@ -488,26 +496,42 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             hintRect.set(undoRect.right, 0f, right - undoRect.width(), stripH)
         }
         handleRect.set(areaLeft, y0 + hc, areaLeft + areaW, y0 + hc + handleH)
-        // The cursor strip covers the whole empty gap you can see between the halves, which is wider than the nominal
-        // gap because keys are sized for the full tilt range. Keys still win where a touch lands on one.
+        // The cursor gap is exactly the empty split you can see: each row's innermost key edges, following tilt and
+        // curve, from the strip down to the handle. Gaps between other keys are not part of it.
+        gapLeft.clear()
+        gapRight.clear()
+        gapPath.reset()
+        cursorRect.setEmpty()
         if (split && !editMode) {
             val pt = FloatArray(2)
-            // Horizontal extent of a placed key after its tilt/curve transform.
-            fun edge(pk: Placed, rightmost: Boolean): Float {
-                var e = if (rightmost) Float.NEGATIVE_INFINITY else Float.POSITIVE_INFINITY
-                for (cx in floatArrayOf(pk.rect.left, pk.rect.right)) for (cy in floatArrayOf(pk.rect.top, pk.rect.bottom)) {
-                    pt[0] = cx; pt[1] = cy
-                    pk.matrix.mapPoints(pt)
-                    e = if (rightmost) max(e, pt[0]) else min(e, pt[0])
+            fun mapX(pk: Placed, x: Float): Float { pt[0] = x; pt[1] = pk.rect.centerY(); pk.matrix.mapPoints(pt); return pt[0] }
+            for (left in booleanArrayOf(true, false)) {
+                val side = if (left) gapLeft else gapRight
+                placed.filter { if (left) it.item.c < KeyGrid.CENTER else it.item.c > KeyGrid.CENTER }.groupBy { it.item.r }.values.forEach { row ->
+                    val pk = if (left) row.maxBy { mapX(it, it.rect.right) } else row.minBy { mapX(it, it.rect.left) }
+                    for (y in floatArrayOf(pk.rect.top, pk.rect.bottom)) {
+                        pt[0] = if (left) pk.rect.right else pk.rect.left; pt[1] = y
+                        pk.matrix.mapPoints(pt)
+                        side += PointF(pt[0], pt[1])
+                    }
                 }
-                return e
+                side.sortBy { it.y }
+                if (side.isNotEmpty()) {
+                    side.add(0, PointF(side.first().x, stripH))
+                    side += PointF(side.last().x, handleRect.top)
+                }
             }
-            // From the left half's least-inner right edge to the right half's least-inner left edge: every row's
-            // visible gap is inside, and a strict key hit is checked first anyway.
-            val leftInner = placed.filter { it.item.c < KeyGrid.CENTER }.minOfOrNull { edge(it, true) } ?: (innerLeft + half)
-            val rightInner = placed.filter { it.item.c > KeyGrid.CENTER }.maxOfOrNull { edge(it, false) } ?: (innerLeft + half + gapPx)
-            cursorRect.set(min(leftInner, innerLeft + half), stripH, max(rightInner, innerLeft + half + gapPx), handleRect.top)
-        } else cursorRect.setEmpty()
+            if (gapLeft.isNotEmpty() && gapRight.isNotEmpty()) {
+                gapPath.moveTo(gapLeft[0].x, gapLeft[0].y)
+                for (p in gapLeft) gapPath.lineTo(p.x, p.y)
+                for (p in gapRight.asReversed()) gapPath.lineTo(p.x, p.y)
+                gapPath.close()
+                cursorRect.set(gapLeft.minOf { it.x }, stripH, gapRight.maxOf { it.x }, handleRect.top)
+            } else {
+                gapLeft.clear()
+                gapRight.clear()
+            }
+        }
         val minSpace = 40 * d
         leftSpace = if (areaLeft >= minSpace) RectF(0f, stripH, areaLeft, y0 + hc) else null
         rightSpace = if (width - (areaLeft + areaW) >= minSpace) RectF(areaLeft + areaW, stripH, width.toFloat(), y0 + hc) else null
@@ -665,7 +689,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     accessibilityIds().firstOrNull { it >= A_WHEEL_LEFT && accessibilityRect(it).contains(x, y) } ?: A_NONE
                 } else {
                     findKey(x, y, strict = true)?.let { placed.indexOf(it) }
-                        ?: if (!editMode && cursorRect.contains(x, y)) A_CURSOR else A_NONE
+                        ?: if (!editMode && inGap(x, y)) A_CURSOR else A_NONE
                 }
                 updateHoveredView(id)
             }
@@ -1052,25 +1076,43 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         canvas.drawPath(shape(area.centerX(), area.centerY(), s, false, 0.25f * dir, -0.5f, -0.25f * dir, 0f, 0.25f * dir, 0.5f), strokeIn(palette.hint, s * 1.5f, 255))
     }
 
+    /** X of one side of the split at height [y], between that side's row edge points. */
+    private fun gapEdgeAt(side: List<PointF>, y: Float): Float {
+        if (y <= side.first().y) return side.first().x
+        for (i in 1 until side.size) {
+            val a = side[i - 1]
+            val b = side[i]
+            if (y <= b.y) return if (b.y - a.y < 0.5f) b.x else a.x + (b.x - a.x) * (y - a.y) / (b.y - a.y)
+        }
+        return side.last().x
+    }
+
+    private fun inGap(x: Float, y: Float) =
+        gapLeft.isNotEmpty() && cursorRect.contains(x, y) && x >= gapEdgeAt(gapLeft, y) && x <= gapEdgeAt(gapRight, y)
+
     /**
-     * While the centre gap is held, the whole gap shades toward the side the cursor is moving: faint on the trailing
-     * edge, strongest on the leading edge, and stronger the faster it goes. Inside the dead zone it is an even faint
-     * tint. Selecting uses the accent colour; moving the cursor uses the hint colour.
+     * While the centre gap is held, the split gets a faint tint, and while the cursor moves, vertical stripes scroll
+     * through it the same way, in step with the cursor: faster and brighter the faster it goes. Each stripe has a sharp
+     * leading edge and a fading tail, so the direction reads even at a glance. Selecting uses the accent colour.
      */
     private fun drawCursor(canvas: Canvas, radius: Float) {
         val t = trackers.values.firstOrNull { it.kind == K_CURSOR } ?: return
         val rgb = (if (t.select) palette.accent else palette.hint) and 0x00FFFFFF
+        if (radius != gapCornerRadius) { gapCornerRadius = radius; gapCorners = if (radius > 0) CornerPathEffect(radius) else null }
+        fill.pathEffect = gapCorners
+        fill.color = rgb or ((if (t.select) 46 else 28) shl 24)
+        canvas.drawPath(gapPath, fill)
         val speed = t.joystick.speed
-        val idle = rgb or ((if (t.select) 46 else 28) shl 24)
-        if (speed == 0.0) {
-            fill.color = idle
-        } else {
-            val peak = rgb or ((60 + 170 * min(1.0, abs(speed) / CursorJoystick.MAX_SPEED)).toInt() shl 24)
-            val (from, to) = if (speed < 0) cursorRect.right to cursorRect.left else cursorRect.left to cursorRect.right
-            fill.shader = LinearGradient(from, 0f, to, 0f, idle, peak, Shader.TileMode.CLAMP)
+        if (speed != 0.0) {
+            val period = 28 * density
+            val phase = (t.joystick.travel * 3 * density % period).toFloat()
+            val peak = rgb or ((50 + 160 * min(1.0, abs(speed) / CursorJoystick.MAX_SPEED)).toInt() shl 24)
+            val stops = if (speed > 0) floatArrayOf(0f, 0.85f, 1f) else floatArrayOf(0f, 0.15f, 1f)
+            fill.shader = LinearGradient(phase, 0f, phase + period, 0f, intArrayOf(rgb, peak, rgb), stops, Shader.TileMode.REPEAT)
+            canvas.drawPath(gapPath, fill)
+            fill.shader = null
         }
-        canvas.drawRoundRect(cursorRect, radius, radius, fill)
-        fill.shader = null
+        fill.pathEffect = null
     }
 
     private fun drawHandle(canvas: Canvas) {
@@ -1373,11 +1415,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             return
         }
         val hit = findKey(x, y, strict = true)
-        if (hit == null && cursorRect.contains(x, y)) {
+        if (hit == null && inGap(x, y)) {
             if (trackers.values.any { it.kind == K_CURSOR }) return
             trackers[id] = Tracker(K_CURSOR, null).also {
                 it.x0 = x; it.y0 = y; it.fx = x; it.fy = y
-                it.joystick.reach((x - cursorRect.left) / density, (cursorRect.right - x) / density)
+                it.joystick.reach((x - gapEdgeAt(gapLeft, y)) / density, (gapEdgeAt(gapRight, y) - x) / density)
                 it.select = gapPresses.isSelection(time, x / density, y / density)
                 if (it.select) {
                     listener?.onSelectMode(true)
