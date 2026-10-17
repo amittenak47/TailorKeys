@@ -10,7 +10,6 @@ final class QuickOptions: UIView {
     var onChange: (() -> Void)?
     private let settings: KeyboardSettings
     private let stripHeight: () -> CGFloat
-    private let titleLabel = UILabel()
     private let closeButton = UIButton(type: .system)
     private var headerHeight: NSLayoutConstraint!
     private var landscape: Bool { UIScreen.main.bounds.width > UIScreen.main.bounds.height }
@@ -70,16 +69,13 @@ final class QuickOptions: UIView {
         self.stripHeight = stripHeight
         super.init(frame: .zero)
         accessibilityViewIsModal = true
-        titleLabel.text = "Quick options"
-        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-        titleLabel.accessibilityTraits = .header
-        closeButton.setTitle("Done", for: .normal)
+        // The strip holds just a back button; the tiles below say what this is.
+        closeButton.setTitle("‹  Back", for: .normal)
         closeButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
-        closeButton.accessibilityLabel = "Close quick options"
+        closeButton.accessibilityLabel = "Back to keyboard"
         closeButton.addAction(UIAction { [weak self] _ in self?.onClose?() }, for: .touchUpInside)
-        let header = UIStackView(arrangedSubviews: [titleLabel, closeButton])
+        let header = UIStackView(arrangedSubviews: [closeButton, UIView()])
         header.alignment = .center
-        closeButton.widthAnchor.constraint(equalToConstant: 64).isActive = true
         let scroll = UIScrollView()
         scroll.alwaysBounceVertical = false
         scroll.showsVerticalScrollIndicator = false
@@ -98,8 +94,12 @@ final class QuickOptions: UIView {
             scroll.topAnchor.constraint(equalTo: header.bottomAnchor), scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
             rows.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 8),
             rows.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -8),
-            rows.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 2),
-            rows.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -8),
+            // Centred vertically in whatever height the keyboard has; scrolls only if it doesn't fit.
+            rows.centerYAnchor.constraint(equalTo: scroll.contentLayoutGuide.centerYAnchor),
+            rows.topAnchor.constraint(greaterThanOrEqualTo: scroll.contentLayoutGuide.topAnchor, constant: 2),
+            scroll.contentLayoutGuide.heightAnchor.constraint(greaterThanOrEqualTo: rows.heightAnchor, constant: 10),
+            scroll.contentLayoutGuide.heightAnchor.constraint(greaterThanOrEqualTo: scroll.frameLayoutGuide.heightAnchor),
+            { let fit = scroll.contentLayoutGuide.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor); fit.priority = .defaultLow; return fit }(),
             rows.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -16),
         ])
         func row() -> UIStackView {
@@ -160,7 +160,6 @@ final class QuickOptions: UIView {
     func refresh() {
         let p = Palette.of(settings.theme, dark: traitCollection.userInterfaceStyle == .dark)
         backgroundColor = p.background
-        titleLabel.textColor = p.text
         closeButton.tintColor = p.accent
         headerHeight.constant = stripHeight()
         func state(_ t: Tile, _ value: String, on: Bool = false, enabled: Bool = true) {

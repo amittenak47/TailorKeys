@@ -169,7 +169,7 @@ class KeyboardSettings(context: Context) {
         setFor(landscape, Prefs::height, int(Prefs.height(landscape)) + delta)
 
     fun cycleQuickTheme() {
-        val themes = listOf(ThemeName.SYSTEM, ThemeName.LIGHT, ThemeName.DARK, ThemeName.HIGH_CONTRAST)
+        val themes = ThemeName.entries // every theme, Warm and Midnight included
         setTheme(themes[(themes.indexOf(theme()) + 1) % themes.size])
     }
 

@@ -85,7 +85,6 @@ class QuickOptions(
 ) : LinearLayout(context) {
     private val d = resources.displayMetrics.density
     private fun dp(n: Int) = (n * d).toInt()
-    private val title = TextView(context)
     private val header = LinearLayout(context)
     private val closeButton = TextView(context)
 
@@ -119,22 +118,19 @@ class QuickOptions(
     init {
         orientation = VERTICAL
         isClickable = true
-        title.text = "Quick options"
-        title.textSize = 15f
-        title.gravity = Gravity.CENTER_VERTICAL
-        title.setPadding(dp(14), 0, 0, 0)
-        if (android.os.Build.VERSION.SDK_INT >= 28) title.isAccessibilityHeading = true
-        closeButton.text = "Done"
+        // The strip holds just a back button; the tiles below say what this is.
+        closeButton.text = "‹  Back"
         closeButton.textSize = 15f
-        closeButton.gravity = Gravity.CENTER
-        closeButton.contentDescription = "Close quick options"
+        closeButton.gravity = Gravity.CENTER_VERTICAL
+        closeButton.setPadding(dp(14), 0, dp(14), 0)
+        closeButton.contentDescription = "Back to keyboard"
         closeButton.setOnClickListener { close() }
         header.gravity = Gravity.CENTER_VERTICAL
-        header.addView(title, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
-        header.addView(closeButton, LayoutParams(dp(72), LayoutParams.MATCH_PARENT))
+        header.addView(closeButton, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
         addView(header, LayoutParams(LayoutParams.MATCH_PARENT, stripHeight()))
         val scroll = ScrollView(context).apply { isFillViewport = true; isVerticalScrollBarEnabled = false }
-        val grid = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(6), dp(2), dp(6), dp(6)) }
+        // Centred vertically in whatever height the keyboard has, instead of leaving a gap at the bottom.
+        val grid = LinearLayout(context).apply { orientation = VERTICAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(6), dp(2), dp(6), dp(6)) }
         scroll.addView(grid)
         addView(scroll, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
         fun row(): LinearLayout = LinearLayout(context).also {
@@ -176,7 +172,6 @@ class QuickOptions(
         val p = Palette.of(context, settings.theme())
         val radius = settings.int(Prefs.CORNER_RADIUS) * d
         setBackgroundColor(p.background)
-        title.setTextColor(p.text)
         closeButton.setTextColor(p.accent)
         closeButton.setTypeface(closeButton.typeface, Typeface.BOLD)
         header.layoutParams = header.layoutParams.apply { height = stripHeight() }

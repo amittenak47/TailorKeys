@@ -164,7 +164,7 @@ final class KeyboardSettings {
     func adjustQuickHeight(_ l: Bool, _ delta: Int) { setFor(l, Prefs.height, int(Prefs.height(l)) + delta) }
 
     func cycleQuickTheme() {
-        let themes: [ThemeName] = [.system, .light, .dark, .highContrast]
+        let themes = ThemeName.allCases // every theme, Warm and Midnight included
         theme = themes[((themes.firstIndex(of: theme) ?? -1) + 1) % themes.count]
     }
 
