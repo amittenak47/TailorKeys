@@ -6,9 +6,68 @@ struct GlidePoint {
     let time: TimeInterval
 }
 
+/// Reusable tap costs, mirrored in Android's ComposingTaps. Kept here for the app preview.
+final class ComposingTaps {
+    static let letters = 256
+    static let maxLength = 64
+    private var costs = [UInt8](repeating: 10, count: ComposingTaps.maxLength * ComposingTaps.letters)
+    private var known = [Bool](repeating: false, count: ComposingTaps.maxLength)
+    private var count = 0
+    private(set) var word = ""
+    private(set) var revision: UInt64 = 0
+
+    func clear() { sync(""); revision &+= 1 }
+    func sync(_ prefix: String) {
+        if word == prefix { return }
+        for i in known.indices { known[i] = false }
+        count = 0
+        word = prefix
+        revision &+= 1
+    }
+    func append(_ prefix: String, _ letter: String, _ distances: [Float]?) {
+        sync(prefix)
+        let index = word.count
+        word += letter
+        if index < Self.maxLength, letter.count == 1, let distances = distances {
+            // -log Gaussian, sigma 0.5 widths, two tenths per nat. Boundary credit
+            // is capped so a point far from every letter never makes a letter free.
+            let origin = min(0.25, distances.min() ?? 0)
+            let offset = index * Self.letters
+            for c in 0..<Self.letters {
+                costs[offset + c] = UInt8(min(10, max(0, Int((4 * (distances[c] - origin)).rounded()))))
+            }
+            known[index] = true
+            count += 1
+        }
+        revision &+= 1
+    }
+    func backspace() {
+        guard !word.isEmpty else { return }
+        let index = word.count - 1
+        if index < Self.maxLength && known[index] { known[index] = false; count -= 1 }
+        word.removeLast()
+        revision &+= 1
+    }
+    func hasTaps(_ prefix: String) -> Bool { word == prefix && count > 0 }
+    func hasTap(_ index: Int) -> Bool { index < Self.maxLength && known[index] }
+    func cost(_ index: Int, _ letter: Character) -> Int {
+        guard let code = letter.unicodeScalars.first?.value, code < UInt32(Self.letters) else { return 10 }
+        return Int(costs[index * Self.letters + Int(code)])
+    }
+    func prefix(_ before: String) -> String {
+        if word.contains(where: { $0.isNumber }) && before.hasSuffix(word) { return word }
+        var chars: [Character] = []
+        for ch in before.reversed() {
+            if ch.isLetter || ch == "'" { chars.append(ch) } else { break }
+        }
+        return String(chars.reversed())
+    }
+}
+
 protocol KeyboardViewDelegate: AnyObject {
     func chordTyped(_ word: String)
     func keyTapped(_ code: String)
+    func keyTapped(_ code: String, distances: [Float])
     func replacePressText(_ original: String, following: String, replacement: String)
     func longPressText(_ text: String)
     func stackFace(_ code: String)
@@ -26,6 +85,7 @@ protocol KeyboardViewDelegate: AnyObject {
 }
 
 extension KeyboardViewDelegate {
+    func keyTapped(_ code: String, distances: [Float]) { keyTapped(code) }
     func openQuickOptions() {}
     func wheelChosen() {}
     func choiceInterrupted() {}
@@ -100,6 +160,7 @@ final class KeyboardView: UIView {
     private final class Wheel { let side: Int; var rect = CGRect.zero; var index = 0; var dragDx: CGFloat = 0; init(side: Int) { self.side = side } }
 
     private var placed: [Placed] = []
+    private var tapDistances = [Float](repeating: 100, count: ComposingTaps.letters)
     private var cells: [Cell] = []
     private let wheels = [Wheel(side: 0), Wheel(side: 1)]
     private var handleRect = CGRect.zero
@@ -1172,6 +1233,7 @@ final class KeyboardView: UIView {
         var moved = false
         var x0: CGFloat = 0
         var y0: CGFloat = 0
+        var tapPoint = CGPoint.zero
         var lastX: CGFloat = 0
         var lastY: CGFloat = 0
         let joystick = CursorJoystick()
@@ -1273,6 +1335,7 @@ final class KeyboardView: UIView {
         for t in touches {
             if editMode { editEnded(t) } else {
                 let id = ObjectIdentifier(t)
+                trackers[id]?.tapPoint = t.location(in: self)
                 if let tracker = trackers[id] { _ = recordGlide(id, tracker, t.location(in: self), t.timestamp) }
                 if let tracker = trackers[id], popup?.owner === tracker || tracker.kind == .wheel || tracker.kind == .cursor || (tracker.pk?.item.isSpace == true && settings.languages.count > 1) {
                     move(id, t.location(in: self), t.timestamp)
@@ -1309,7 +1372,7 @@ final class KeyboardView: UIView {
         } else { chordKey = nil }
         for (otherID, other) in trackers {
             let code = other.pk?.item.keys[0]
-            chordTouches.update(otherID, code?.count == 1 ? code?.first : nil, other.consumed)
+            chordTouches.update(otherID, code?.count == 1 ? code?.first : nil, other.consumed, other.tapPoint)
         }
         let prepared = chordTouches.prepareDown(time, chordKey != nil)
         for otherID in prepared.rollover { trackers[otherID]?.stop(); trackers[otherID]?.consumed = true }
@@ -1341,7 +1404,7 @@ final class KeyboardView: UIView {
         guard let pk = chordKey ?? findKey(p) else { return }
         if chordKey == nil { click() }
         if pk.item.isStack {
-            let t = Tracker(kind: .stack, pk: pk); t.x0 = p.x; t.y0 = p.y; trackers[id] = t
+            let t = Tracker(kind: .stack, pk: pk); t.x0 = p.x; t.y0 = p.y; t.tapPoint = p; trackers[id] = t
             pressLetter(t)
             startLongPress(t)
             swipe = Swipe(item: pk.item)
@@ -1349,6 +1412,7 @@ final class KeyboardView: UIView {
             return
         }
         let t = Tracker(kind: .key, pk: pk)
+        t.tapPoint = p
         t.x0 = p.x; t.y0 = p.y; t.glideWidth = pk.rect.width
         t.glideEligible = glideAllowed && settings.swipeTyping && state.layer == .abc &&
             pk.item.keys[0].count == 1 && pk.item.keys[0].first!.isLetter
@@ -1356,7 +1420,7 @@ final class KeyboardView: UIView {
         trackers[id] = t
         if chordKey != nil {
             t.deferredClick = true
-            chordTouches.down(id, pk.item.keys[0].lowercased().first!, time)
+            chordTouches.down(id, pk.item.keys[0].lowercased().first!, time, p)
             if chordTouches.isCandidate(id) {
                 for (otherID, other) in trackers where chordTouches.isCandidate(otherID) { other.stop() }
             }
@@ -1399,6 +1463,7 @@ final class KeyboardView: UIView {
 
     private func move(_ id: ObjectIdentifier, _ p: CGPoint, _ time: TimeInterval) {
         guard let t = trackers[id] else { return }
+        t.tapPoint = p
         if let popup = popup, popup.owner === t {
             popup.selected = popup.rects.firstIndex(where: { $0.contains(p) })
             setNeedsDisplay()
@@ -1487,7 +1552,7 @@ final class KeyboardView: UIView {
             return
         }
         let code = t.pk?.item.keys[0]
-        chordTouches.update(id, code?.count == 1 ? code?.first : nil, t.consumed)
+        chordTouches.update(id, code?.count == 1 ? code?.first : nil, t.consumed, t.tapPoint)
         let chordRelease = chordTouches.release(id)
         if chordRelease.handled {
             finishChords(chordRelease.completions)
@@ -1517,7 +1582,7 @@ final class KeyboardView: UIView {
             if t.moved && abs(t.lastX - t.x0) > 36 { slide(left: t.lastX < t.x0) }
         case .stack:
             swipe = nil
-            if !t.moved, !t.consumed, let pk = t.pk { emitKey(pk.item.keys[shownIdx(pk.item)]) }
+            if !t.moved, !t.consumed, let pk = t.pk { emitKey(pk.item.keys[shownIdx(pk.item)], t.tapPoint) }
         case .key:
             if !t.consumed { commit(t) }
         case .gear:
@@ -1531,7 +1596,7 @@ final class KeyboardView: UIView {
     private func finishChords(_ completions: [ChordTouches<ObjectIdentifier>.Completion]) {
         for completion in completions {
             if completion.candidate { finishChord(completion.entries) }
-            else { for entry in completion.entries { click(); emitKey(String(entry.letter)) } }
+            else { for entry in completion.entries { click(); emitKey(String(entry.letter), entry.point) } }
         }
     }
 
@@ -1566,11 +1631,26 @@ final class KeyboardView: UIView {
         for t in trackers.values where t.pressedText != nil { t.pressedText = nil; t.stop() }
     }
 
-    private func emitKey(_ code: String) {
+    private func emitKey(_ code: String, _ tap: CGPoint? = nil) {
         if let output = KeyText.output(code, state) {
             for t in trackers.values where t.pressedText != nil { t.followingText += output }
         } else { invalidatePressAccents() }
-        delegate?.keyTapped(code)
+        if let tap = tap, let output = KeyText.output(code, state), output.count == 1,
+           let ch = output.first, ch.isLetter || ch.isNumber {
+            for i in tapDistances.indices { tapDistances[i] = 100 }
+            for pk in placed {
+                let point = tap.applying(pk.inv)
+                let width = max(1, pk.rect.width)
+                let dx = (point.x - pk.rect.midX) / width
+                let dy = (point.y - pk.rect.midY) / width
+                for text in pk.item.keys {
+                    guard text.count == 1, let letter = text.lowercased().first, letter.isLetter,
+                          let code = letter.unicodeScalars.first?.value, code < UInt32(ComposingTaps.letters) else { continue }
+                    tapDistances[Int(code)] = min(tapDistances[Int(code)], Float(dx * dx + dy * dy))
+                }
+            }
+            delegate?.keyTapped(code, distances: tapDistances)
+        } else { delegate?.keyTapped(code) }
     }
 
     private func pressLetter(_ t: Tracker) {
@@ -1579,7 +1659,7 @@ final class KeyboardView: UIView {
         guard settings.typeOnPress, state.layer == .abc, code.count == 1, code.first!.isLetter,
               let output = KeyText.output(code, state) else { return }
         t.pressChoices = KeyText.alternatives(code, state, settings.showHints)
-        emitKey(code)
+        emitKey(code, t.tapPoint)
         t.pressedText = output
         t.consumed = true
     }
@@ -1593,7 +1673,7 @@ final class KeyboardView: UIView {
     private func commit(_ t: Tracker) {
         if t.deferredClick { t.deferredClick = false; click() }
         guard let item = t.pk?.item else { return }
-        emitKey(item.keys[0])
+        emitKey(item.keys[0], t.tapPoint)
     }
 
     /// Holding a spacebar inserts the word centred in the suggestion wheel on its side (left spacebar → left wheel),

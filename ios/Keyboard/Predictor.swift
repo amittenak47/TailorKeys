@@ -41,6 +41,7 @@ final class Predictor {
     private var userPairs: [String: [String: Int]] = [:]
     private var userTriples: [String: [String: Int]] = [:]
     private var neighbours: [Character: Set<Character>] = [:]
+    private var gridCosts = [UInt8](repeating: 10, count: ComposingTaps.letters * ComposingTaps.letters)
     private let defaults = UserDefaults.standard
     let language: String
     private let userKey: String
@@ -50,6 +51,8 @@ final class Predictor {
     private var cachedPrev: String?
     private var cachedPrev2: String?
     private var cachedCandidates: [Candidate]?
+    private var cachedTaps: ComposingTaps?
+    private var cachedTapRevision: UInt64?
 
     init(_ language: String = "en", onReady: @escaping () -> Void = {}) {
         self.language = language
@@ -115,6 +118,23 @@ final class Predictor {
                 neighbours[a.keys[0].lowercased().first!, default: []].insert(b.keys[0].lowercased().first!)
             }
         } }
+        for i in gridCosts.indices { gridCosts[i] = 10 }
+        for c in 0..<ComposingTaps.letters { gridCosts[c * ComposingTaps.letters + c] = 0 }
+        for (a, adjacent) in neighbours { for b in adjacent {
+            if let first = a.unicodeScalars.first?.value, let second = b.unicodeScalars.first?.value,
+               first < UInt32(ComposingTaps.letters), second < UInt32(ComposingTaps.letters) {
+                gridCosts[Int(first) * ComposingTaps.letters + Int(second)] = 4
+            }
+        } }
+    }
+
+    private func gridCost(_ a: Character, _ b: Character) -> Int {
+        if a == b { return 0 }
+        if let first = a.unicodeScalars.first?.value, let second = b.unicodeScalars.first?.value,
+           first < UInt32(ComposingTaps.letters), second < UInt32(ComposingTaps.letters) {
+            return Int(gridCosts[Int(first) * ComposingTaps.letters + Int(second)])
+        }
+        return a == b ? 0 : (neighbours[a]?.contains(b) == true ? 4 : 10)
     }
 
     private func frequency(_ w: String, _ tables: SeedTables? = nil) -> Double {
@@ -157,11 +177,13 @@ final class Predictor {
 
     // Costs are tenths. Three bounded rows are reused for every dictionary entry in a lookup.
     private func cost(_ p: [Character], _ w: [Character], _ limit: Int,
-                      _ older: inout [Int], _ previous: inout [Int], _ current: inout [Int]) -> Int {
+                      _ older: inout [Int], _ previous: inout [Int], _ current: inout [Int], _ taps: ComposingTaps?) -> Int {
         guard let first = w.first else { return 1000 }
         let transposed = w.count > 1 && p[0] == w[1] && p[1] == w[0]
-        if p[0] != first && neighbours[p[0]]?.contains(first) != true && !transposed { return 1000 }
-        let extra = p[0] == first ? 0 : 3
+        let firstSpatial = taps?.hasTap(0) == true
+        let firstCost = firstSpatial ? taps!.cost(0, first) : 0
+        if !transposed && (firstSpatial ? firstCost > 6 : (p[0] != first && neighbours[p[0]]?.contains(first) != true)) { return 1000 }
+        let extra = firstSpatial ? (transposed ? min(3, firstCost) : firstCost) : (p[0] == first ? 0 : 3)
         let bound = limit - extra
         let band = bound / 8
         let prefixLength = min(p.count, w.count)
@@ -180,7 +202,9 @@ final class Predictor {
             if to < p.count { current[to + 1] = 1000 }
             var rowMin = current[0]
             for j in from...to {
-                let substitution = p[j - 1] == w[i - 1] ? 0 : (neighbours[p[j - 1]]?.contains(w[i - 1]) == true ? 4 : 10)
+                let substitution: Int
+                if let taps = taps, taps.hasTap(j - 1) { substitution = taps.cost(j - 1, w[i - 1]) }
+                else { substitution = gridCost(p[j - 1], w[i - 1]) }
                 var value = min(previous[j] + 8, min(current[j - 1] + 8, previous[j - 1] + substitution))
                 if i > 1 && j > 1 && p[j - 1] == w[i - 2] && p[j - 2] == w[i - 1] {
                     value = min(value, older[j - 2] + 6)
@@ -198,12 +222,15 @@ final class Predictor {
         return best + extra
     }
 
-    private func candidates(_ prefix: String, _ prev: String?, _ prev2: String?) -> [Candidate] {
+    private func candidates(_ prefix: String, _ prev: String?, _ prev2: String?, _ input: ComposingTaps?) -> [Candidate] {
         let p = prefix.lowercased()
+        let taps = input?.hasTaps(prefix) == true ? input : nil
+        let tapRevision = taps?.revision
         tableLock.lock()
         let tables = seedTables
         tableLock.unlock()
-        if cachedPrefix == p && cachedPrev == prev && cachedPrev2 == prev2 && cachedTables === tables,
+        if cachedPrefix == p && cachedPrev == prev && cachedPrev2 == prev2 && cachedTables === tables &&
+           cachedTaps === taps && cachedTapRevision == tapRevision,
            let cached = cachedCandidates { return cached }
         let pairs = prev.flatMap { rank[$0] }.flatMap { tables?.pairs[UInt64($0)] } ?? []
         var triples: [UInt64] = []
@@ -213,17 +240,18 @@ final class Predictor {
         let learnedPairs = prev.flatMap { userPairs[$0] } ?? [:]
         let learnedTriples = prev2.flatMap { first in prev.flatMap { userTriples[first + "\t" + $0] } } ?? [:]
         let letters = Array(p)
-        let limit = letters.count <= 4 ? 9 : 13
+        let legacyLimit = letters.count <= 4 ? 9 : 13
+        let limit = taps != nil ? min(22, max(legacyLimit, 3 * letters.count + 3)) : legacyLimit
         var older = [Int](repeating: 1000, count: letters.count + 1)
         var previous = older
         var current = older
         var all: [Candidate] = []
         func add(_ w: String, _ chars: [Character]) {
-            if w == p { return }
+            if w == p && taps == nil { return }
             let completion = w.hasPrefix(p)
             let distance: Int
             if completion { distance = 0 }
-            else if letters.count >= 2 { distance = cost(letters, chars, limit, &older, &previous, &current) }
+            else if letters.count >= 2 { distance = cost(letters, chars, limit, &older, &previous, &current, taps) }
             else { return }
             if distance > limit { return }
             let id = rank[w]
@@ -251,6 +279,7 @@ final class Predictor {
             for (i, w) in base.enumerated() where user[w.text] == nil && rank[w.text] == i { add(w.text, w.letters) }
         }
         let result = all.sorted {
+            if taps != nil && ($0.word == p) != ($1.word == p) { return $0.word == p }
             if p.isEmpty, prev != nil {
                 // Trigram followers, then remaining bigram followers, then frequency fallback.
                 let aTier = $0.tripleCount > 0 ? 2 : ($0.pairCount > 0 ? 1 : 0)
@@ -266,14 +295,16 @@ final class Predictor {
         cachedPrev = prev
         cachedPrev2 = prev2
         cachedTables = tables
+        cachedTaps = taps
+        cachedTapRevision = tapRevision
         cachedCandidates = result
         return result
     }
 
-    func nextLetters(_ prefix: String, _ prev: String?, _ prev2: String? = nil) -> [Character: Double] {
+    func nextLetters(_ prefix: String, _ prev: String?, _ prev2: String? = nil, taps: ComposingTaps? = nil) -> [Character: Double] {
         let length = prefix.count
         var weights: [Character: Double] = [:]
-        for candidate in candidates(prefix, prev, prev2) where !candidate.correction {
+        for candidate in candidates(prefix, prev, prev2, taps) where !candidate.correction {
             guard let letter = candidate.word.dropFirst(length).first else { continue }
             weights[letter, default: 0] += exp(candidate.score)
         }
@@ -286,8 +317,8 @@ final class Predictor {
         return prefix.count >= 2 && !user.keys.contains { $0.hasPrefix(p) } && !base.contains { $0.text.hasPrefix(p) }
     }
 
-    func closest(_ prefix: String, _ prev: String? = nil, _ prev2: String? = nil, _ n: Int = 8) -> [String] {
-        let c = candidates(prefix, prev, prev2)
+    func closest(_ prefix: String, _ prev: String? = nil, _ prev2: String? = nil, _ n: Int = 8, taps: ComposingTaps? = nil) -> [String] {
+        let c = candidates(prefix, prev, prev2, taps)
         let maxCorrections = c.reduce(0) { $0 + ($1.correction ? 0 : 1) } < 5 ? n : 3
         var corrections = 0
         var result: [String] = []
@@ -302,8 +333,8 @@ final class Predictor {
         return result
     }
 
-    func explore(_ prefix: String, _ prev: String? = nil, _ prev2: String? = nil, _ n: Int = 8) -> [String] {
-        let c = candidates(prefix, prev, prev2)
+    func explore(_ prefix: String, _ prev: String? = nil, _ prev2: String? = nil, _ n: Int = 8, taps: ComposingTaps? = nil) -> [String] {
+        let c = candidates(prefix, prev, prev2, taps)
         let seed = prefix.lowercased() + "\t" + (prev ?? "") + "\t" + (prev2 ?? "")
         var rng = SplitMix(seed: seed.utf8.reduce(5381) { ($0 &* 33) &+ UInt64($1) })
         // Weighted sampling without replacement. Temperature 2.5 flattens the ranking.

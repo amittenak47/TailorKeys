@@ -28,7 +28,7 @@ class Chords(rankedWords: List<String>) {
 
 /** Touch IDs stay in press order. Admission closes on the first lift or after 60 ms. */
 class ChordTouches<ID> {
-    data class Entry<ID>(val id: ID, val letter: Char)
+    data class Entry<ID>(val id: ID, val letter: Char, val x: Float = Float.NaN, val y: Float = Float.NaN)
     data class Completion<ID>(val entries: List<Entry<ID>>, val candidate: Boolean)
     data class Prepared<ID>(val rollover: List<ID>, val completions: List<Completion<ID>>)
     data class Release<ID>(val handled: Boolean, val completions: List<Completion<ID>> = emptyList())
@@ -52,19 +52,19 @@ class ChordTouches<ID> {
         return Prepared(rollover, drain())
     }
 
-    fun down(id: ID, letter: Char, time: Long) {
+    fun down(id: ID, letter: Char, time: Long, x: Float = Float.NaN, y: Float = Float.NaN) {
         val group = groups.lastOrNull()?.takeIf { !it.complete && !it.lifted && time - it.time <= WINDOW_MS }
             ?: Group<ID>(time).also { groups.add(it) }
-        group.entries.add(Entry(id, letter))
+        group.entries.add(Entry(id, letter, x, y))
         group.held.add(id)
     }
 
     fun contains(id: ID): Boolean = groups.any { id in it.held }
     fun isCandidate(id: ID): Boolean = groups.any { id in it.held && !it.complete && it.entries.size >= 2 }
-    fun update(id: ID, letter: Char?, consumed: Boolean) {
+    fun update(id: ID, letter: Char?, consumed: Boolean, x: Float = Float.NaN, y: Float = Float.NaN) {
         val group = groups.firstOrNull { id in it.held } ?: return
         if (group.entries.size == 1 && !group.complete) {
-            if (letter != null) group.entries[0] = Entry(id, letter)
+            if (letter != null) group.entries[0] = Entry(id, letter, x, y)
             group.suppressed = consumed
         }
     }

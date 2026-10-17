@@ -3,6 +3,7 @@ package app.tailorkeys
 import android.content.Context
 import app.tailorkeys.layout.KeyGrid
 import java.io.File
+import java.io.InputStream
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.ln
@@ -16,7 +17,15 @@ import kotlin.random.Random
  * Explore (left wheel): a weighted random draw from further down the same completions, so less obvious
  * words show up. The draw is seeded by the prefix and context, so it stays steady on redraw.
  */
-class Predictor(context: Context, val language: String = "en", private val onReady: () -> Unit = {}) {
+class Predictor internal constructor(
+    private val openAsset: (String) -> InputStream,
+    filesDir: File,
+    val language: String = "en",
+    asynchronous: Boolean = false,
+    onReady: () -> Unit = {},
+) {
+    constructor(context: Context, language: String = "en", onReady: () -> Unit = {}) :
+        this({ context.assets.open(it) }, context.filesDir, language, true, onReady)
     private val base: List<String>
     private val rank = HashMap<String, Int>()
     private val user = HashMap<String, Int>()
@@ -29,18 +38,21 @@ class Predictor(context: Context, val language: String = "en", private val onRea
     private val userPairs = HashMap<String, MutableMap<String, Int>>()
     private val userTriples = HashMap<String, MutableMap<String, Int>>()
     private val neighbours = HashMap<Char, MutableSet<Char>>()
+    private val gridCosts = ByteArray(ComposingTaps.LETTERS * ComposingTaps.LETTERS) { 10 }
     private val suffix = if (language == "en") "" else "_$language"
-    private val userFile = File(context.filesDir, "user_words${suffix}.txt")
-    private val pairFile = File(context.filesDir, "user_bigrams${suffix}.txt")
-    private val tripleFile = File(context.filesDir, "user_trigrams${suffix}.txt")
+    private val userFile = File(filesDir, "user_words${suffix}.txt")
+    private val pairFile = File(filesDir, "user_bigrams${suffix}.txt")
+    private val tripleFile = File(filesDir, "user_trigrams${suffix}.txt")
     private var dirty = false
     private var cachedPrefix: String? = null
     private var cachedPrev: String? = null
     private var cachedPrev2: String? = null
     private var cachedCandidates: List<Candidate>? = null
+    private var cachedTaps: ComposingTaps? = null
+    private var cachedTapRevision = -1L
 
     init {
-        val words = context.assets.open("words${suffix}.txt").bufferedReader().use { it.readLines() }
+        val words = openAsset("words${suffix}.txt").bufferedReader().use { it.readLines() }
             .map { it.trim().lowercase() }.filter { it.isNotEmpty() }
         words.forEachIndexed { i, w -> rank.putIfAbsent(w, i) }
         base = words.distinct()
@@ -61,10 +73,10 @@ class Predictor(context: Context, val language: String = "en", private val onRea
         // Only these base words and learned words can enter the frequency top 300.
         topWords = (base.take(300) + user.keys).distinct()
             .sortedWith(compareByDescending<String> { frequency(it) }.thenBy { it }).take(300)
-        Thread({
+        val loadTables = {
             val tables = try {
-                val pairs = loadCounts(context, "bigrams${suffix}.txt", 2)
-                val triples = loadCounts(context, "trigrams${suffix}.txt", 3)
+                val pairs = loadCounts("bigrams${suffix}.txt", 2)
+                val triples = loadCounts("trigrams${suffix}.txt", 3)
                 // Conversation counts complement AOSP ranks in the new languages (e.g. danke).
                 // English retains its original ranking exactly.
                 val frequencies = if (language == "en") doubleArrayOf() else DoubleArray(base.size).apply {
@@ -84,7 +96,9 @@ class Predictor(context: Context, val language: String = "en", private val onRea
             // Publish both immutable tables together. UI-owned caches notice the new snapshot.
             seedTables = tables
             onReady()
-        }, "TailorKeys-ngrams").apply { isDaemon = true; start() }
+        }
+        if (asynchronous) Thread(loadTables, "TailorKeys-ngrams").apply { isDaemon = true; start() }
+        else loadTables()
     }
 
     fun setLayout(grid: KeyGrid) {
@@ -99,6 +113,20 @@ class Predictor(context: Context, val language: String = "en", private val onRea
                 neighbours.getOrPut(a.keys[0][0].lowercaseChar()) { HashSet() }.add(b.keys[0][0].lowercaseChar())
             }
         }
+        gridCosts.fill(10)
+        for (c in 0 until ComposingTaps.LETTERS) gridCosts[c * ComposingTaps.LETTERS + c] = 0
+        for ((a, adjacent) in neighbours) for (b in adjacent) {
+            if (a.code < ComposingTaps.LETTERS && b.code < ComposingTaps.LETTERS) {
+                gridCosts[a.code * ComposingTaps.LETTERS + b.code] = 4
+            }
+        }
+    }
+
+    private fun gridCost(a: Char, b: Char): Int = when {
+        a == b -> 0
+        a.code < ComposingTaps.LETTERS && b.code < ComposingTaps.LETTERS -> gridCosts[a.code * ComposingTaps.LETTERS + b.code].toInt()
+        neighbours[a]?.contains(b) == true -> 4
+        else -> 10
     }
 
     private fun frequency(w: String, tables: SeedTables? = seedTables): Double {
@@ -107,9 +135,9 @@ class Predictor(context: Context, val language: String = "en", private val onRea
     }
     private fun contextId(first: Int, second: Int) = (first.toLong() shl 32) or second.toLong()
 
-    private fun loadCounts(context: Context, name: String, n: Int): Map<Long, LongArray> {
+    private fun loadCounts(name: String, n: Int): Map<Long, LongArray> {
         val rows = HashMap<Long, MutableList<Long>>()
-        context.assets.open(name).bufferedReader().useLines { lines -> lines.forEach { line ->
+        openAsset(name).bufferedReader().useLines { lines -> lines.forEach { line ->
             val parts = line.split(' ')
             if (parts.size != n + 1) return@forEach
             val first = rank[parts[0]] ?: return@forEach
@@ -140,11 +168,14 @@ class Predictor(context: Context, val language: String = "en", private val onRea
                                  val pairCount: Int, val tripleCount: Int)
 
     // Costs are tenths. Three bounded rows are reused for every dictionary entry in a lookup.
-    private fun cost(p: String, w: String, limit: Int, rows: Array<IntArray>): Int {
+    private fun cost(p: String, w: String, limit: Int, rows: Array<IntArray>, taps: ComposingTaps?): Int {
         if (w.isEmpty()) return 1000
         val transposed = w.length > 1 && p[0] == w[1] && p[1] == w[0]
-        if (p[0] != w[0] && neighbours[p[0]]?.contains(w[0]) != true && !transposed) return 1000
-        val extra = if (p[0] == w[0]) 0 else 3
+        val firstSpatial = taps?.hasTap(0) == true
+        val firstCost = if (firstSpatial) taps!!.cost(0, w[0]) else 0
+        if (!transposed && if (firstSpatial) firstCost > 6
+            else p[0] != w[0] && neighbours[p[0]]?.contains(w[0]) != true) return 1000
+        val extra = if (firstSpatial) (if (transposed) minOf(3, firstCost) else firstCost) else if (p[0] == w[0]) 0 else 3
         val bound = limit - extra
         val band = bound / 8
         val prefixLength = minOf(p.length, w.length)
@@ -169,9 +200,8 @@ class Predictor(context: Context, val language: String = "en", private val onRea
             var rowMin = current[0]
             for (j in from..to) {
                 val substitution = when {
-                    p[j - 1] == w[i - 1] -> 0
-                    neighbours[p[j - 1]]?.contains(w[i - 1]) == true -> 4
-                    else -> 10
+                    taps?.hasTap(j - 1) == true -> taps.cost(j - 1, w[i - 1])
+                    else -> gridCost(p[j - 1], w[i - 1])
                 }
                 var value = minOf(previous[j] + 8, current[j - 1] + 8, previous[j - 1] + substitution)
                 if (i > 1 && j > 1 && p[j - 1] == w[i - 2] && p[j - 2] == w[i - 1]) {
@@ -192,11 +222,14 @@ class Predictor(context: Context, val language: String = "en", private val onRea
         return best + extra
     }
 
-    private fun candidates(prefix: String, prev: String?, prev2: String?): List<Candidate> {
+    private fun candidates(prefix: String, prev: String?, prev2: String?, input: ComposingTaps?): List<Candidate> {
         val p = prefix.lowercase()
+        val taps = input?.takeIf { it.hasTaps(prefix) }
+        val tapRevision = taps?.revision ?: -1L
         val tables = seedTables
         cachedCandidates?.let {
-            if (cachedPrefix == p && cachedPrev == prev && cachedPrev2 == prev2 && cachedTables === tables) return it
+            if (cachedPrefix == p && cachedPrev == prev && cachedPrev2 == prev2 && cachedTables === tables &&
+                cachedTaps === taps && cachedTapRevision == tapRevision) return it
         }
         val prevId = rank[prev]
         val prev2Id = rank[prev2]
@@ -204,13 +237,14 @@ class Predictor(context: Context, val language: String = "en", private val onRea
         val triples = if (prevId != null && prev2Id != null) tables?.triples?.get(contextId(prev2Id, prevId)) else null
         val learnedPairs = userPairs[prev]
         val learnedTriples = if (prev2 != null && prev != null) userTriples["$prev2\t$prev"] else null
-        val limit = if (p.length <= 4) 9 else 13
+        val legacyLimit = if (p.length <= 4) 9 else 13
+        val limit = if (taps != null) minOf(22, maxOf(legacyLimit, 3 * p.length + 3)) else legacyLimit
         val rows = Array(3) { IntArray(p.length + 1) }
         val all = ArrayList<Candidate>()
         fun add(w: String) {
-            if (w == p) return
+            if (w == p && taps == null) return
             val completion = w.startsWith(p)
-            val cost = if (completion) 0 else if (p.length >= 2) cost(p, w, limit, rows) else return
+            val cost = if (completion) 0 else if (p.length >= 2) cost(p, w, limit, rows, taps) else return
             if (cost > limit) return
             val id = rank[w]
             val seedPair = count(pairs, id)
@@ -243,19 +277,22 @@ class Predictor(context: Context, val language: String = "en", private val onRea
                 .thenByDescending { if (it.tripleCount > 0) it.tripleCount else it.pairCount }
                 .thenByDescending { it.score }.thenBy { it.word })
         } else {
-            all.sortedWith(compareByDescending<Candidate> { it.score }.thenBy { it.word })
+            all.sortedWith(compareByDescending<Candidate> { taps != null && it.word == p }
+                .thenByDescending { it.score }.thenBy { it.word })
         }
         cachedPrefix = p
         cachedPrev = prev
         cachedPrev2 = prev2
         cachedTables = tables
+        cachedTaps = taps
+        cachedTapRevision = tapRevision
         cachedCandidates = result
         return result
     }
 
-    fun nextLetters(prefix: String, prev: String?, prev2: String? = null): Map<Char, Double> {
+    fun nextLetters(prefix: String, prev: String?, prev2: String? = null, taps: ComposingTaps? = null): Map<Char, Double> {
         val weights = HashMap<Char, Double>()
-        for (candidate in candidates(prefix, prev, prev2)) {
+        for (candidate in candidates(prefix, prev, prev2, taps)) {
             if (candidate.correction || candidate.word.length <= prefix.length) continue
             val letter = candidate.word[prefix.length]
             weights[letter] = (weights[letter] ?: 0.0) + exp(candidate.score)
@@ -269,16 +306,16 @@ class Predictor(context: Context, val language: String = "en", private val onRea
         return prefix.length >= 2 && user.keys.none { it.startsWith(p) } && base.none { it.startsWith(p) }
     }
 
-    fun closest(prefix: String, prev: String? = null, prev2: String? = null, n: Int = 8): List<String> {
-        val c = candidates(prefix, prev, prev2)
+    fun closest(prefix: String, prev: String? = null, prev2: String? = null, n: Int = 8, taps: ComposingTaps? = null): List<String> {
+        val c = candidates(prefix, prev, prev2, taps)
         val maxCorrections = if (c.count { !it.correction } < 5) n else 3
         var corrections = 0
         return c.asSequence().filter { !it.correction || corrections++ < maxCorrections }
             .take(n).map { matchCase(it.word, prefix) }.toList()
     }
 
-    fun explore(prefix: String, prev: String? = null, prev2: String? = null, n: Int = 8): List<String> {
-        val c = candidates(prefix, prev, prev2)
+    fun explore(prefix: String, prev: String? = null, prev2: String? = null, n: Int = 8, taps: ComposingTaps? = null): List<String> {
+        val c = candidates(prefix, prev, prev2, taps)
         val seed = prefix.lowercase() + "\t${prev.orEmpty()}\t${prev2.orEmpty()}"
         val rnd = Random(seed.hashCode())
         // Weighted sampling without replacement. Temperature 2.5 flattens the ranking.

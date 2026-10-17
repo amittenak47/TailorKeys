@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 enum Align: String, CaseIterable { case left, center, right }
 
@@ -252,7 +253,7 @@ struct Chords {
 
 /// Admission closes on the first lift or 60 ms after the first press. Results retain press order.
 final class ChordTouches<ID: Hashable> {
-    struct Entry { let id: ID; let letter: Character }
+    struct Entry { let id: ID; let letter: Character; var point: CGPoint? = nil }
     struct Completion { let entries: [Entry]; let candidate: Bool }
     struct Prepared { let rollover: [ID]; let completions: [Completion] }
     struct Release { let handled: Bool; let completions: [Completion] }
@@ -274,18 +275,18 @@ final class ChordTouches<ID: Hashable> {
         }
         return Prepared(rollover: rollover, completions: drain())
     }
-    func down(_ id: ID, _ letter: Character, _ time: TimeInterval) {
+    func down(_ id: ID, _ letter: Character, _ time: TimeInterval, _ point: CGPoint? = nil) {
         let group: Group
         if let last = groups.last, !last.complete, !last.lifted, time - last.time <= 0.060 { group = last }
         else { group = Group(time); groups.append(group) }
-        group.entries.append(Entry(id: id, letter: letter))
+        group.entries.append(Entry(id: id, letter: letter, point: point))
         group.held.insert(id)
     }
     func contains(_ id: ID) -> Bool { groups.contains { $0.held.contains(id) } }
     func isCandidate(_ id: ID) -> Bool { groups.contains { $0.held.contains(id) && !$0.complete && $0.entries.count >= 2 } }
-    func update(_ id: ID, _ letter: Character?, _ consumed: Bool) {
+    func update(_ id: ID, _ letter: Character?, _ consumed: Bool, _ point: CGPoint? = nil) {
         guard let group = groups.first(where: { $0.held.contains(id) }), group.entries.count == 1, !group.complete else { return }
-        if let letter = letter { group.entries[0] = Entry(id: id, letter: letter) }
+        if let letter = letter { group.entries[0] = Entry(id: id, letter: letter, point: point) }
         group.suppressed = consumed
     }
     func release(_ id: ID) -> Release {

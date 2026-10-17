@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.gradle.api.tasks.testing.Test
 
 plugins {
     id("com.android.application")
@@ -44,7 +45,14 @@ kotlin {
     }
 }
 
+tasks.withType<Test>().configureEach {
+    maxHeapSize = "256m"
+    maxParallelForks = 1
+    inputs.property("spatialBenchmark", providers.environmentVariable("SPATIAL_BENCHMARK").orElse("0"))
+}
+
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     // Last stable Compose line compatible with compileSdk 36 / AGP 8.11.
     val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
     implementation(composeBom)

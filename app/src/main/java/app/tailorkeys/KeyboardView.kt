@@ -61,6 +61,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     interface Listener {
         fun onChord(word: String) {}
         fun onKey(code: String)
+        fun onTapKey(code: String, distances: FloatArray) { onKey(code) }
         fun onReplacePressText(original: String, following: String, replacement: String) {}
         fun onLongPressText(text: String)
         fun onStackFace(code: String)
@@ -137,6 +138,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private class Wheel(val side: Int) { val rect = RectF(); var index = 0; var dragDx = 0f }
 
     private val placed = ArrayList<Placed>()
+    private val tapDistances = FloatArray(ComposingTaps.LETTERS)
+    private val tapPoint = FloatArray(2)
     private val cells = ArrayList<Cell>()
     private val wheels = listOf(Wheel(0), Wheel(1))
     private val handleRect = RectF()
@@ -1297,6 +1300,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         var moved = false
         var x0 = 0f
         var y0 = 0f
+        var tapX = 0f
+        var tapY = 0f
         var lastX = 0f
         val joystick = CursorJoystick()
         var lastCursorHaptic = Long.MIN_VALUE
@@ -1389,6 +1394,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 val i = e.actionIndex
+                trackers[e.getPointerId(i)]?.let { it.tapX = e.getX(i); it.tapY = e.getY(i) }
                 trackers[e.getPointerId(i)]?.let { recordGlide(e.getPointerId(i), it, e.getX(i), e.getY(i), e.eventTime) }
                 trackers[e.getPointerId(i)]?.let { t ->
                     if (popup?.owner === t || t.kind == K_WHEEL || t.kind == K_CURSOR || t.pk?.item?.isSpace == true && settings.languages().size > 1)
@@ -1412,7 +1418,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             leftSpace?.contains(x, y) != true && rightSpace?.contains(x, y) != true) findKey(x, y)?.takeIf {
                 !it.item.isStack && it.item.keys[0].let { k -> k.length == 1 && k[0].isLetter() }
             } else null
-        for ((otherId, other) in trackers) chordTouches.update(otherId, other.pk?.item?.keys?.firstOrNull()?.singleOrNull(), other.consumed)
+        for ((otherId, other) in trackers) chordTouches.update(otherId, other.pk?.item?.keys?.firstOrNull()?.singleOrNull(), other.consumed, other.tapX, other.tapY)
         val prepared = chordTouches.prepareDown(time, chordKey != null)
         for (otherId in prepared.rollover) trackers[otherId]?.let { stopTimers(it); it.consumed = true }
         finishChords(prepared.completions)
@@ -1460,12 +1466,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val pk = chordKey ?: findKey(x, y) ?: return
         if (chordKey == null) haptic(HapticFeedbackConstants.KEYBOARD_TAP)
         if (pk.item.isStack) {
-            trackers[id] = Tracker(K_STACK, pk).also { it.x0 = x; it.y0 = y; pressLetter(it); timers.postDelayed(it.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong()) }
+            trackers[id] = Tracker(K_STACK, pk).also { it.x0 = x; it.y0 = y; it.tapX = x; it.tapY = y; pressLetter(it); timers.postDelayed(it.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong()) }
             swipe = Swipe(pk.item)
             invalidate()
             return
         }
         val t = Tracker(K_KEY, pk)
+        t.tapX = x; t.tapY = y
         t.x0 = x; t.y0 = y; t.glideWidth = pk.rect.width()
         t.glideEligible = !settings.bool(Prefs.TYPE_ON_PRESS) && glideAllowed && settings.bool(Prefs.SWIPE_TYPING) && state.layer == Layer.ABC &&
             pk.item.keys[0].let { it.length == 1 && it[0].isLetter() }
@@ -1473,7 +1480,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         trackers[id] = t
         if (chordKey != null) {
             t.deferredHaptic = true
-            chordTouches.down(id, pk.item.keys[0][0].lowercaseChar(), time)
+            chordTouches.down(id, pk.item.keys[0][0].lowercaseChar(), time, x, y)
             if (chordTouches.isCandidate(id)) trackers.filterKeys { chordTouches.isCandidate(it) }.values.forEach { stopTimers(it) }
         }
         if (pk.item.keys[0] == Keys.BACKSPACE) {
@@ -1510,6 +1517,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     private fun pointerMove(id: Int, x: Float, y: Float, time: Long) {
         val t = trackers[id] ?: return
+        t.tapX = x; t.tapY = y
         popup?.takeIf { it.owner === t }?.let {
             it.selected = it.rects.indexOfFirst { r -> r.contains(x, y) }
             invalidate()
@@ -1601,7 +1609,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             invalidate()
             return
         }
-        chordTouches.update(id, t.pk?.item?.keys?.firstOrNull()?.singleOrNull(), t.consumed)
+        chordTouches.update(id, t.pk?.item?.keys?.firstOrNull()?.singleOrNull(), t.consumed, t.tapX, t.tapY)
         val chordRelease = chordTouches.release(id)
         if (chordRelease.handled) {
             finishChords(chordRelease.completions)
@@ -1632,7 +1640,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             K_HANDLE -> if (t.moved && abs(t.lastX - t.x0) > 36 * density) slideKeyboard(t.lastX < t.x0)
             K_STACK -> {
                 swipe = null
-                if (!t.moved && !t.consumed) emitKey(t.pk!!.item.keys[shownIdx(t.pk!!.item)])
+                if (!t.moved && !t.consumed) emitKey(t.pk!!.item.keys[shownIdx(t.pk!!.item)], t.tapX, t.tapY)
             }
             K_KEY -> if (!t.consumed) commit(t)
             K_GEAR -> listener?.onQuickOptions()
@@ -1650,7 +1658,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             if (completion.candidate) finishChord(completion.entries)
             else for (entry in completion.entries) {
                 haptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                emitKey(entry.letter.toString())
+                emitKey(entry.letter.toString(), entry.x, entry.y)
             }
         }
     }
@@ -1685,11 +1693,28 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         for (t in trackers.values) if (t.pressedText != null) { t.pressedText = null; stopTimers(t) }
     }
 
-    private fun emitKey(code: String) {
+    private fun emitKey(code: String, tapX: Float = Float.NaN, tapY: Float = Float.NaN) {
         val output = KeyText.output(code, state)
         if (output == null) invalidatePressAccents()
         else for (t in trackers.values) if (t.pressedText != null) t.followingText += output
-        listener?.onKey(code)
+        if (!tapX.isNaN() && !tapY.isNaN() && output?.singleOrNull()?.isLetterOrDigit() == true) {
+            tapDistances.fill(100f)
+            for (pk in placed) {
+                tapPoint[0] = tapX; tapPoint[1] = tapY
+                // Each candidate's inverse removes its own tilt/curve transform.
+                pk.inverse.mapPoints(tapPoint)
+                val width = pk.rect.width().coerceAtLeast(1f)
+                val dx = (tapPoint[0] - pk.rect.centerX()) / width
+                val dy = (tapPoint[1] - pk.rect.centerY()) / width
+                for (key in pk.item.keys) {
+                    val letter = key.singleOrNull()?.lowercaseChar() ?: continue
+                    if (letter.isLetter() && letter.code < ComposingTaps.LETTERS) {
+                        tapDistances[letter.code] = minOf(tapDistances[letter.code], dx * dx + dy * dy)
+                    }
+                }
+            }
+            listener?.onTapKey(code, tapDistances)
+        } else listener?.onKey(code)
     }
 
     private fun pressLetter(t: Tracker) {
@@ -1698,7 +1723,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         if (!settings.bool(Prefs.TYPE_ON_PRESS) || state.layer != Layer.ABC || code.singleOrNull()?.isLetter() != true) return
         val output = KeyText.output(code, state) ?: return
         t.pressChoices = KeyText.alternatives(code, state, settings.bool(Prefs.SHOW_HINTS))
-        emitKey(code)
+        emitKey(code, t.tapX, t.tapY)
         t.pressedText = output
         t.consumed = true
     }
@@ -1712,7 +1737,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private fun commit(t: Tracker) {
         if (t.deferredHaptic) { t.deferredHaptic = false; haptic(HapticFeedbackConstants.KEYBOARD_TAP) }
         val item = t.pk?.item ?: return
-        emitKey(item.keys[0])
+        emitKey(item.keys[0], t.tapX, t.tapY)
     }
 
     /**
