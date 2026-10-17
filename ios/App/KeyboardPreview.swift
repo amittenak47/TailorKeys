@@ -131,7 +131,7 @@ private struct KeyboardPreviewView: UIViewRepresentable {
         func longPressText(_ text: String) {}
         func stackFace(_ code: String) {}
         func suggestionPicked(_ text: String) {}
-        func spaceLongPressed() {}
+        func switchKeyboard() {}
         func openSettings() {}
         func moveCursor(_ steps: Int) {}
     }

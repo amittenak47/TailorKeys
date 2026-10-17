@@ -806,7 +806,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 AccessibilityNodeInfo.ACTION_DISMISS -> { dismissPopup(); true }
                 AccessibilityNodeInfo.ACTION_LONG_CLICK -> {
                     val pk = placed.getOrNull(virtualViewId) ?: return false
-                    if (pk.item.isSpace) { listener?.onPickIme(); true }
+                    if (pk.item.isSpace) pickSideSuggestion(pk.item)
                     else openPopup(pk, null)
                 }
                 AccessibilityNodeInfo.ACTION_CLICK -> activateAccessibleView(virtualViewId)
@@ -1619,6 +1619,18 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         emitKey(item.keys[0])
     }
 
+    /**
+     * Holding a spacebar inserts the word centred in the suggestion wheel on its side (left spacebar → left wheel),
+     * including a word chosen by spinning. Keyboard switching lives in the system navigation bar instead.
+     */
+    private fun pickSideSuggestion(item: GridKey): Boolean {
+        val wheel = wheels[if (item.c < KeyGrid.CENTER) 0 else 1]
+        val list = words(wheel)
+        if (list.isEmpty()) return false
+        listener?.onSuggestion(wordAt(list, wheel.index))
+        return true
+    }
+
     private fun onLongPress(t: Tracker) {
         if (t.kind == K_CURSOR) {
             t.select = true
@@ -1630,7 +1642,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val item = t.pk?.item ?: return
         val code = item.keys[shownIdx(item)]
         if (code == Keys.SPACE) {
-            listener?.onPickIme()
+            // Nothing to pick: let the lift type a normal space.
+            if (!pickSideSuggestion(item)) return
         } else {
             if (!openPopup(t.pk ?: return, t)) return
         }

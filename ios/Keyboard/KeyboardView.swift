@@ -16,7 +16,8 @@ protocol KeyboardViewDelegate: AnyObject {
     func choiceInterrupted()
     func suggestionPicked(_ text: String)
     func switchLanguage(_ direction: Int)
-    func spaceLongPressed()
+    /// The globe in the suggestion bar (only on iPhones that need one).
+    func switchKeyboard()
     func openSettings()
     func moveCursor(_ steps: Int)
     func gridEdited()
@@ -102,6 +103,9 @@ final class KeyboardView: UIView {
     private var handleRect = CGRect.zero
     private var cursorRect = CGRect.zero
     private var gearRect = CGRect.zero
+    private var globeRect = CGRect.zero
+    /// Set by the controller from `needsInputModeSwitchKey` (iPhones with a home button).
+    var showGlobe = false { didSet { if showGlobe != oldValue { relayout() } } }
     private var undoRect = CGRect.zero
     private var hintRect = CGRect.zero
     private var moreRect = CGRect.zero
@@ -448,6 +452,13 @@ final class KeyboardView: UIView {
             wheels[1].rect = CGRect(x: innerLeft + innerW / 2 + 18, y: 0, width: innerW / 2 - 18, height: strip)
             gearRect = CGRect(x: innerLeft + innerW / 2 - 18, y: 0, width: 36, height: strip)
         }
+        // iPhones with a home button need the keyboard's own switch key: a globe at the left end of the bar.
+        if showGlobe && !editMode {
+            globeRect = CGRect(x: innerLeft, y: 0, width: 36, height: strip)
+            wheels[0].rect = CGRect(x: globeRect.maxX, y: 0, width: Swift.max(0, wheels[0].rect.maxX - globeRect.maxX), height: strip)
+        } else {
+            globeRect = .zero
+        }
         // Toolbar while rearranging: undo, hint, settings, Done.
         let right = innerLeft + innerW
         undoRect = CGRect(x: innerLeft, y: 0, width: 48, height: strip)
@@ -555,10 +566,16 @@ final class KeyboardView: UIView {
                 }]
             }
             if pk.item.isSpace {
-                e.accessibilityCustomActions = [UIAccessibilityCustomAction(name: "Switch keyboards") { [weak self] _ in
-                    self?.delegate?.spaceLongPressed()
-                    return true
+                var actions = [UIAccessibilityCustomAction(name: "Insert suggestion") { [weak self] _ in
+                    self?.pickSideSuggestion(pk.item) ?? false
                 }]
+                if showGlobe {
+                    actions.append(UIAccessibilityCustomAction(name: "Switch keyboards") { [weak self] _ in
+                        self?.delegate?.switchKeyboard()
+                        return true
+                    })
+                }
+                e.accessibilityCustomActions = actions
                 if settings.languages.count > 1 {
                     e.accessibilityTraits.insert(.adjustable)
                     e.increment = { [weak self] in self?.delegate?.switchLanguage(1) }
@@ -681,6 +698,7 @@ final class KeyboardView: UIView {
         } else {
             drawWheels(ctx)
             drawGear()
+            drawSymbol("globe", in: globeRect, color: palette.hint)
         }
         let radius = CGFloat(settings.int(Prefs.cornerRadius))
         let pressed = Set(trackers.values.compactMap { $0.pk?.item.id })
@@ -1159,6 +1177,7 @@ final class KeyboardView: UIView {
             t.stop(); t.consumed = true; commit(t)
         }
         if gearRect.contains(p) { trackers[id] = Tracker(kind: .gear, pk: nil); return }
+        if globeRect.contains(p) { click(); delegate?.switchKeyboard(); return }
         if let wh = wheels.first(where: { $0.rect.contains(p) && !words($0).isEmpty }) {
             let t = Tracker(kind: .wheel, pk: nil); t.wheel = wh; t.x0 = p.x; trackers[id] = t
             return
@@ -1439,11 +1458,23 @@ final class KeyboardView: UIView {
         emitKey(item.keys[0])
     }
 
+    /// Holding a spacebar inserts the word centred in the suggestion wheel on its side (left spacebar → left wheel),
+    /// including a word chosen by spinning.
+    @discardableResult
+    private func pickSideSuggestion(_ item: GridKey) -> Bool {
+        let wheel = wheels[item.c < KeyGrid.center ? 0 : 1]
+        let list = words(wheel)
+        guard !list.isEmpty else { return false }
+        delegate?.suggestionPicked(wordAt(list, wheel.index))
+        return true
+    }
+
     private func longPress(_ t: Tracker) {
         guard let item = t.pk?.item else { return }
         let code = item.keys[shownIdx(item)]
         if code == Keys.space {
-            delegate?.spaceLongPressed()
+            // Nothing to pick: let the lift type a normal space.
+            guard pickSideSuggestion(item) else { return }
         } else {
             guard let pk = t.pk, openPopup(pk, t) else { return }
         }

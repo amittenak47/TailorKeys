@@ -197,6 +197,8 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         loadKeyboardIfNeeded()
+        // Holding a spacebar picks a suggestion, so iPhones that need a keyboard switch key get a globe instead.
+        keyboard.showGlobe = needsInputModeSwitchKey
         choiceInterrupted()
         if hasFullAccess, let group = UserDefaults(suiteName: KeyboardSettings.groupID) {
             group.set(Date(), forKey: KeyboardSettings.fullAccessSeenKey)
@@ -430,7 +432,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         if currentGlide() && suggestAllowed && modelReady { predictor.learn(glideWord!, previousWord(textDocumentProxy.documentContextBeforeInput ?? "")) }
     }
 
-    func spaceLongPressed() { choiceInterrupted(); advanceToNextInputMode() }
+    func switchKeyboard() { choiceInterrupted(); advanceToNextInputMode() }
 
     func switchLanguage(_ direction: Int) {
         choiceInterrupted()
