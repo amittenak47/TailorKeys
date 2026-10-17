@@ -11,6 +11,7 @@ import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PorterDuff
+import android.graphics.Color
 import android.graphics.ComposeShader
 import android.graphics.Path
 import android.graphics.PointF
@@ -1102,17 +1103,27 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     /**
-     * While the centre gap is held, a soft vertical glow in the theme's accent colour sits under the keys and moves out
+     * While the centre gap is held, a soft vertical glow in a pale complement of the theme's accent sits under the keys and moves out
      * the way the cursor is pushed: a small push carries it a little past the split, a push to the split's edge carries
      * it to the keyboard's edge. It fades out on every side, gets stronger the harder the push, and is brighter and
      * wider while selecting.
      */
+    /** The accent's complementary hue, softened to a light pastel so the glow reads as a tint, never a dark smear. */
+    private fun waveColor(): Int {
+        val hsv = FloatArray(3)
+        Color.colorToHSV(palette.accent, hsv)
+        hsv[0] = (hsv[0] + 180f) % 360f
+        hsv[1] = min(hsv[1], 0.4f)
+        hsv[2] = if (Color.luminance(palette.background) > 0.5f) 0.92f else 0.85f
+        return Color.HSVToColor(hsv) and 0x00FFFFFF
+    }
+
     private fun drawWave(canvas: Canvas) {
         val t = trackers.values.firstOrNull { it.kind == K_CURSOR } ?: return
-        val rgb = palette.accent and 0x00FFFFFF
+        val rgb = waveColor()
         val strength = min(1.0, abs(t.joystick.push)).toFloat()
-        val peak = ((if (t.select) 90 else 45) + 45 * strength).toInt()
-        val half = (if (t.select) 32 else 26) * density
+        val peak = ((if (t.select) 85 else 55) + 35 * strength).toInt()
+        val half = (if (t.select) 52 else 44) * density
         // A bell-shaped falloff across, and a fade at the top and bottom, so no edge is ever hard.
         val across = LinearGradient(t.waveX - half, 0f, t.waveX + half, 0f,
             WAVE_FALLOFF.map { rgb or ((peak * it).toInt() shl 24) }.toIntArray(), WAVE_STOPS, Shader.TileMode.CLAMP)

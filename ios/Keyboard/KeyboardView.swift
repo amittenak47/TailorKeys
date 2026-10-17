@@ -957,17 +957,28 @@ final class KeyboardView: UIView {
         return abs(target - t.waveX) > 0.5 || abs(t.waveV) > 4
     }
 
-    /// While the centre gap is held, a soft vertical glow in the theme's accent colour sits under the keys and moves out
+    /// While the centre gap is held, a soft vertical glow in a pale complement of the theme's accent sits under the keys and moves out
     /// the way the cursor is pushed: a small push carries it a little past the split, a push to the split's edge carries
     /// it to the keyboard's edge. It fades out on every side and gets stronger the harder the push.
+    /// The accent's complementary hue, softened to a light pastel so the glow reads as a tint, never a dark smear.
+    private var waveColor: UIColor {
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        palette.accent.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+        var r: CGFloat = 0, g: CGFloat = 0, bl: CGFloat = 0
+        palette.background.getRed(&r, green: &g, blue: &bl, alpha: &a)
+        let light = 0.2126 * r + 0.7152 * g + 0.0722 * bl > 0.5
+        return UIColor(hue: (h + 0.5).truncatingRemainder(dividingBy: 1), saturation: Swift.min(s, 0.4), brightness: light ? 0.92 : 0.85, alpha: 1)
+    }
+
     private func drawWave(_ ctx: CGContext) {
         guard let t = trackers.values.first(where: { $0.kind == .cursor }), !cursorRect.isEmpty else { return }
-        let half: CGFloat = 26
-        let peak = 0.18 + 0.18 * CGFloat(Swift.min(1, abs(t.joystick.push)))
+        let half: CGFloat = 44
+        let peak = 0.22 + 0.14 * CGFloat(Swift.min(1, abs(t.joystick.push)))
+        let color = waveColor
         // A bell-shaped falloff across, and a fade at the top and bottom, so no edge is ever hard.
         let falloff: [CGFloat] = [0, 0.12, 0.5, 1, 0.5, 0.12, 0]
         let space = CGColorSpaceCreateDeviceRGB()
-        guard let across = CGGradient(colorsSpace: space, colors: falloff.map { palette.accent.withAlphaComponent(peak * $0).cgColor } as CFArray,
+        guard let across = CGGradient(colorsSpace: space, colors: falloff.map { color.withAlphaComponent(peak * $0).cgColor } as CFArray,
                                       locations: [0, 0.15, 0.3, 0.5, 0.7, 0.85, 1]),
               let down = CGGradient(colorsSpace: space, colors: [UIColor.clear.cgColor, UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor] as CFArray,
                                     locations: [0, 0.2, 0.8, 1]) else { return }
