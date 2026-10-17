@@ -10,7 +10,8 @@ import android.graphics.DashPathEffect
 import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
-import android.graphics.CornerPathEffect
+import android.graphics.PorterDuff
+import android.graphics.ComposeShader
 import android.graphics.Path
 import android.graphics.PointF
 import android.graphics.Rect
@@ -142,9 +143,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     /** The visible split's two sides: each row's innermost key edge, top to bottom, following tilt and curve. */
     private val gapLeft = ArrayList<PointF>()
     private val gapRight = ArrayList<PointF>()
-    private val gapPath = Path()
-    private var gapCorners: CornerPathEffect? = null
-    private var gapCornerRadius = -1f
     private val gearRect = RectF()
     private val undoRect = RectF()
     private val hintRect = RectF()
@@ -500,7 +498,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         // curve, from the strip down to the handle. Gaps between other keys are not part of it.
         gapLeft.clear()
         gapRight.clear()
-        gapPath.reset()
         cursorRect.setEmpty()
         if (split && !editMode) {
             val pt = FloatArray(2)
@@ -522,10 +519,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 }
             }
             if (gapLeft.isNotEmpty() && gapRight.isNotEmpty()) {
-                gapPath.moveTo(gapLeft[0].x, gapLeft[0].y)
-                for (p in gapLeft) gapPath.lineTo(p.x, p.y)
-                for (p in gapRight.asReversed()) gapPath.lineTo(p.x, p.y)
-                gapPath.close()
                 cursorRect.set(gapLeft.minOf { it.x }, stripH, gapRight.maxOf { it.x }, handleRect.top)
             } else {
                 gapLeft.clear()
@@ -859,7 +852,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             if (gearRect.width() >= 20 * density) drawGear(canvas, gearRect.centerX(), gearRect.centerY(), 20 * density, palette.hint)
         }
         val radius = settings.int(Prefs.CORNER_RADIUS) * density
-        if (!editMode && !cursorRect.isEmpty) drawCursor(canvas, radius)
+        // Under the keys, so it shows through the split and the spaces between keys.
+        if (!editMode) drawWave(canvas)
         val pressed = trackers.values.mapNotNull { it.pk?.item }.toSet()
         val now = SystemClock.uptimeMillis()
         for (pk in placed) {
@@ -875,7 +869,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         rightSpace?.let { drawMoveArrow(canvas, it, pointsLeft = false) }
         drag?.let { drawGhost(canvas, it, radius) }
         drawGlide(canvas, now)
-        if (!editMode) drawWave(canvas)
         drawPopup(canvas)
         if (editMode && !reducedMotion) postInvalidateOnAnimation()
     }
@@ -1091,17 +1084,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private fun inGap(x: Float, y: Float) =
         gapLeft.isNotEmpty() && cursorRect.contains(x, y) && x >= gapEdgeAt(gapLeft, y) && x <= gapEdgeAt(gapRight, y)
 
-    /** While the centre gap is held, the split gets a faint tint (accent while selecting). */
-    private fun drawCursor(canvas: Canvas, radius: Float) {
-        val t = trackers.values.firstOrNull { it.kind == K_CURSOR } ?: return
-        val rgb = (if (t.select) palette.accent else palette.hint) and 0x00FFFFFF
-        if (radius != gapCornerRadius) { gapCornerRadius = radius; gapCorners = if (radius > 0) CornerPathEffect(radius) else null }
-        fill.pathEffect = gapCorners
-        fill.color = rgb or ((if (t.select) 46 else 28) shl 24)
-        canvas.drawPath(gapPath, fill)
-        fill.pathEffect = null
-    }
-
     /**
      * Springs the keyboard-wide wave toward where the push points: from the press point out to the keyboard's edge as
      * the push reaches the gap's edge, eased so small pushes still travel visibly and a quick push overshoots a little.
@@ -1120,17 +1102,24 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     /**
-     * While the centre gap is held, a soft vertical band over the whole keyboard sweeps out the way the cursor is
-     * pushed: a small push moves it a little past the split, a push to the split's edge carries it to the keyboard's
-     * edge. It is stronger the harder the push, and accent-coloured while selecting.
+     * While the centre gap is held, a soft vertical glow in the theme's accent colour sits under the keys and moves out
+     * the way the cursor is pushed: a small push carries it a little past the split, a push to the split's edge carries
+     * it to the keyboard's edge. It fades out on every side, gets stronger the harder the push, and is brighter and
+     * wider while selecting.
      */
     private fun drawWave(canvas: Canvas) {
         val t = trackers.values.firstOrNull { it.kind == K_CURSOR } ?: return
-        val rgb = (if (t.select) palette.accent else palette.hint) and 0x00FFFFFF
-        val half = 36 * density
-        val peak = rgb or ((50 + 80 * min(1.0, abs(t.joystick.push))).toInt() shl 24)
-        fill.shader = LinearGradient(t.waveX - half, 0f, t.waveX + half, 0f, intArrayOf(rgb, peak, rgb), null, Shader.TileMode.CLAMP)
-        canvas.drawRect(max(handleRect.left, t.waveX - half), cursorRect.top, min(handleRect.right, t.waveX + half), cursorRect.bottom, fill)
+        val rgb = palette.accent and 0x00FFFFFF
+        val strength = min(1.0, abs(t.joystick.push)).toFloat()
+        val peak = ((if (t.select) 150 else 70) + 70 * strength).toInt()
+        val half = (if (t.select) 72 else 56) * density
+        // A bell-shaped falloff across, and a fade at the top and bottom, so no edge is ever hard.
+        val across = LinearGradient(t.waveX - half, 0f, t.waveX + half, 0f,
+            WAVE_FALLOFF.map { rgb or ((peak * it).toInt() shl 24) }.toIntArray(), WAVE_STOPS, Shader.TileMode.CLAMP)
+        val down = LinearGradient(0f, cursorRect.top, 0f, cursorRect.bottom,
+            intArrayOf(0, -0x1000000, -0x1000000, 0), floatArrayOf(0f, 0.2f, 0.8f, 1f), Shader.TileMode.CLAMP)
+        fill.shader = ComposeShader(across, down, PorterDuff.Mode.DST_IN)
+        canvas.drawRect(t.waveX - half, cursorRect.top, t.waveX + half, cursorRect.bottom, fill)
         fill.shader = null
     }
 
@@ -1996,6 +1985,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private companion object {
+        /** Bell-shaped opacity across the cursor glow, centre brightest. */
+        val WAVE_STOPS = floatArrayOf(0f, 0.15f, 0.3f, 0.5f, 0.7f, 0.85f, 1f)
+        val WAVE_FALLOFF = floatArrayOf(0f, 0.12f, 0.5f, 1f, 0.5f, 0.12f, 0f)
         const val A_POPUP = 20000
         const val A_NONE = Int.MIN_VALUE
         const val A_WHEEL_LEFT = 10000

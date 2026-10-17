@@ -107,7 +107,6 @@ final class KeyboardView: UIView {
     /// The visible split's two sides: each row's innermost key edge, top to bottom, following tilt and curve.
     private var gapLeft: [CGPoint] = []
     private var gapRight: [CGPoint] = []
-    private var gapPath = UIBezierPath()
     private var gearRect = CGRect.zero
     private var globeRect = CGRect.zero
     /// Set by the controller from `needsInputModeSwitchKey` (iPhones with a home button).
@@ -478,7 +477,6 @@ final class KeyboardView: UIView {
         // curve, from the strip down to the handle. Gaps between other keys are not part of it.
         gapLeft = []
         gapRight = []
-        gapPath = UIBezierPath()
         cursorRect = .zero
         if split && !editMode {
             func side(_ left: Bool) -> [CGPoint] {
@@ -499,10 +497,6 @@ final class KeyboardView: UIView {
             if !l.isEmpty && !r.isEmpty {
                 gapLeft = l
                 gapRight = r
-                gapPath.move(to: l[0])
-                for p in l { gapPath.addLine(to: p) }
-                for p in r.reversed() { gapPath.addLine(to: p) }
-                gapPath.close()
                 let x0 = l.map(\.x).min()!, x1 = r.map(\.x).max()!
                 cursorRect = CGRect(x: x0, y: stripH, width: x1 - x0, height: handleRect.minY - stripH)
             }
@@ -724,7 +718,8 @@ final class KeyboardView: UIView {
             drawWheels(ctx)
             drawGear()
             drawSymbol("globe", in: globeRect, color: palette.hint)
-            drawCursorIndicator(ctx)
+            // Under the keys, so it shows through the split and the spaces between keys.
+            drawWave(ctx)
         }
         let radius = CGFloat(settings.int(Prefs.cornerRadius))
         let pressed = Set(trackers.values.compactMap { $0.pk?.item.id })
@@ -746,7 +741,6 @@ final class KeyboardView: UIView {
         if let r = rightSpace { drawArrow(r, pointsLeft: false) }
         if let d = drag { drawGhost(ctx, d, radius) }
         drawGlide(ctx, now)
-        if !editMode { drawWave(ctx) }
         drawPopup()
     }
 
@@ -948,13 +942,6 @@ final class KeyboardView: UIView {
         !gapLeft.isEmpty && cursorRect.contains(p) && p.x >= gapEdge(gapLeft, at: p.y) && p.x <= gapEdge(gapRight, at: p.y)
     }
 
-    /// While the centre gap is held, the split gets a faint tint.
-    private func drawCursorIndicator(_ ctx: CGContext) {
-        guard trackers.values.contains(where: { $0.kind == .cursor }), !cursorRect.isEmpty else { return }
-        palette.hint.withAlphaComponent(0.11).setFill()
-        gapPath.fill()
-    }
-
     /// Springs the keyboard-wide wave toward where the push points: from the press point out to the keyboard's edge as
     /// the push reaches the gap's edge, eased so small pushes still travel visibly and a quick push overshoots a little.
     /// Returns whether it is still moving.
@@ -970,20 +957,28 @@ final class KeyboardView: UIView {
         return abs(target - t.waveX) > 0.5 || abs(t.waveV) > 4
     }
 
-    /// While the centre gap is held, a soft vertical band over the whole keyboard sweeps out the way the cursor is
-    /// pushed: a small push moves it a little past the split, a push to the split's edge carries it to the keyboard's
-    /// edge. It is stronger the harder the push.
+    /// While the centre gap is held, a soft vertical glow in the theme's accent colour sits under the keys and moves out
+    /// the way the cursor is pushed: a small push carries it a little past the split, a push to the split's edge carries
+    /// it to the keyboard's edge. It fades out on every side and gets stronger the harder the push.
     private func drawWave(_ ctx: CGContext) {
         guard let t = trackers.values.first(where: { $0.kind == .cursor }), !cursorRect.isEmpty else { return }
-        let half: CGFloat = 36
-        let peak = palette.hint.withAlphaComponent(0.2 + 0.31 * CGFloat(Swift.min(1, abs(t.joystick.push))))
-        let clear = palette.hint.withAlphaComponent(0)
-        guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: [clear.cgColor, peak.cgColor, clear.cgColor] as CFArray, locations: [0, 0.5, 1]) else { return }
-        let x0 = Swift.max(handleRect.minX, t.waveX - half), x1 = Swift.min(handleRect.maxX, t.waveX + half)
-        guard x1 > x0 else { return }
+        let half: CGFloat = 56
+        let peak = 0.27 + 0.27 * CGFloat(Swift.min(1, abs(t.joystick.push)))
+        // A bell-shaped falloff across, and a fade at the top and bottom, so no edge is ever hard.
+        let falloff: [CGFloat] = [0, 0.12, 0.5, 1, 0.5, 0.12, 0]
+        let space = CGColorSpaceCreateDeviceRGB()
+        guard let across = CGGradient(colorsSpace: space, colors: falloff.map { palette.accent.withAlphaComponent(peak * $0).cgColor } as CFArray,
+                                      locations: [0, 0.15, 0.3, 0.5, 0.7, 0.85, 1]),
+              let down = CGGradient(colorsSpace: space, colors: [UIColor.clear.cgColor, UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor] as CFArray,
+                                    locations: [0, 0.2, 0.8, 1]) else { return }
+        let box = CGRect(x: t.waveX - half, y: cursorRect.minY, width: half * 2, height: cursorRect.height)
         ctx.saveGState()
-        ctx.clip(to: CGRect(x: x0, y: cursorRect.minY, width: x1 - x0, height: cursorRect.height))
-        ctx.drawLinearGradient(gradient, start: CGPoint(x: t.waveX - half, y: 0), end: CGPoint(x: t.waveX + half, y: 0), options: [])
+        ctx.clip(to: box)
+        ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+        ctx.drawLinearGradient(across, start: CGPoint(x: box.minX, y: 0), end: CGPoint(x: box.maxX, y: 0), options: [])
+        ctx.setBlendMode(.destinationIn)
+        ctx.drawLinearGradient(down, start: CGPoint(x: 0, y: box.minY), end: CGPoint(x: 0, y: box.maxY), options: [])
+        ctx.endTransparencyLayer()
         ctx.restoreGState()
     }
 
