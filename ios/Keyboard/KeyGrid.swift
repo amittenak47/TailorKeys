@@ -1,4 +1,5 @@
 import Foundation
+import Compression
 
 enum Keys {
     static let space = "space"
@@ -56,6 +57,12 @@ final class KeyGrid {
         self.rows = rows; self.items = items; self.nextId = nextId
     }
 
+    func copy() -> KeyGrid {
+        KeyGrid(rows: rows, items: items.map {
+            GridKey(id: $0.id, r: $0.r, c: $0.c, w: $0.w, keys: $0.keys, idx: $0.idx)
+        }, nextId: nextId)
+    }
+
     static func region(_ c: Int) -> Int { c < 5 ? 0 : (c == 5 ? 1 : 2) }
 
     static func bounds(_ c: Int) -> ClosedRange<Int> {
@@ -73,7 +80,9 @@ final class KeyGrid {
     private func occupied(_ r: Int, _ c: Int, _ skip: GridKey?) -> Bool { itemAt(r, c, skip: skip) != nil }
 
     func valid(_ k: GridKey) -> Bool {
-        if k.c < 0 || k.c + k.w > KeyGrid.cols || k.r < 0 || k.r >= rows { return false }
+        // Check each operand before adding: decoded Int values may be Int.max/Int.min.
+        guard (0..<KeyGrid.cols).contains(k.c), (1...KeyGrid.cols).contains(k.w),
+              k.w <= KeyGrid.cols - k.c, (0..<rows).contains(k.r) else { return false }
         if KeyGrid.region(k.c) != KeyGrid.region(k.c + k.w - 1) { return false }
         for i in 0..<k.w where occupied(k.r, k.c + i, k) { return false }
         return true
@@ -200,12 +209,19 @@ final class KeyGrid {
 
     /// True when every key fits on the grid without overlapping. Imported layouts must pass this.
     var isSound: Bool {
-        (4...5).contains(rows) && !items.isEmpty && items.allSatisfy { !$0.keys.isEmpty && $0.w >= 1 && valid($0) }
+        guard (4...5).contains(rows), (1...55).contains(items.count), items.allSatisfy({
+            (0..<rows).contains($0.r) && (0..<KeyGrid.cols).contains($0.c) &&
+            (1...KeyGrid.cols).contains($0.w) && $0.w <= KeyGrid.cols - $0.c &&
+            (1...64).contains($0.keys.count) && $0.idx >= 0 && $0.idx < $0.keys.count &&
+            $0.keys.allSatisfy { !$0.isEmpty && $0.utf8.count <= 64 }
+        }) else { return false }
+        return items.allSatisfy { valid($0) }
     }
 
     // MARK: - Sharing
 
     private static let codePrefix = "TK1-"
+    private static let maxLayoutBytes = 65_536
 
     /// A short text code for sharing the layout: the JSON, raw-deflated and base64url-encoded.
     /// Android reads and writes the same codes.
@@ -220,14 +236,43 @@ final class KeyGrid {
     /// Finds a layout code anywhere in `text`, so a whole pasted message works. Nil if there's none or it's broken.
     static func fromCode(_ text: String) -> KeyGrid? {
         guard let start = text.range(of: codePrefix) else { return nil }
-        let allowed = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
-        var b64 = String(text[start.upperBound...].prefix { allowed.contains($0) })
+        let encoded = text[start.upperBound...].utf8.prefix(maxLayoutBytes * 2 + 1).prefix(while: {
+            (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95
+        })
+        guard !encoded.isEmpty, encoded.count <= maxLayoutBytes * 2 else { return nil }
+        var b64 = String(decoding: encoded, as: UTF8.self)
             .replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         while b64.count % 4 != 0 { b64 += "=" }
         guard let packed = Data(base64Encoded: b64),
-              let raw = try? (packed as NSData).decompressed(using: .zlib) as Data,
-              let g = fromJSON(String(decoding: raw, as: UTF8.self)), g.isSound else { return nil }
+              packed.count <= maxLayoutBytes, let raw = inflate(packed),
+              let json = String(data: raw, encoding: .utf8), let g = fromJSON(json) else { return nil }
         return g
+    }
+
+    /// Raw DEFLATE, like Android. END is required; exhausted input alone is not success.
+    private static func inflate(_ packed: Data) -> Data? {
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        return packed.withUnsafeBytes { source -> Data? in
+            guard let base = source.bindMemory(to: UInt8.self).baseAddress else { return nil }
+            var output = Data()
+            return buffer.withUnsafeMutableBufferPointer { target -> Data? in
+                var stream = compression_stream(dst_ptr: target.baseAddress!, dst_size: target.count,
+                                                src_ptr: base, src_size: packed.count, state: nil)
+                guard compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) != COMPRESSION_STATUS_ERROR else { return nil }
+                defer { compression_stream_destroy(&stream) }
+                stream.src_ptr = base; stream.src_size = packed.count
+                while true {
+                    stream.dst_ptr = target.baseAddress!; stream.dst_size = target.count
+                    let remaining = stream.src_size
+                    let status = compression_stream_process(&stream, Int32(COMPRESSION_STREAM_FINALIZE.rawValue))
+                    let written = target.count - stream.dst_size
+                    guard written <= maxLayoutBytes - output.count else { return nil }
+                    output.append(target.baseAddress!, count: written)
+                    if status == COMPRESSION_STATUS_END { return stream.src_size == 0 ? output : nil }
+                    if status == COMPRESSION_STATUS_ERROR || (written == 0 && stream.src_size == remaining) { return nil }
+                }
+            }
+        }
     }
 
     private func mapLetters(_ lang: String) {
@@ -304,9 +349,19 @@ final class KeyGrid {
     }
 
     static func fromJSON(_ s: String?) -> KeyGrid? {
-        guard let s = s, let data = s.data(using: .utf8), let dto = try? JSONDecoder().decode(GridDTO.self, from: data) else { return nil }
+        guard let s = s, s.utf8.count <= maxLayoutBytes, let data = s.data(using: .utf8),
+              let dto = try? JSONDecoder().decode(GridDTO.self, from: data),
+              (4...5).contains(dto.rows), (1...55).contains(dto.items.count) else { return nil }
+        // Validate geometry before itemAt/valid can inspect another item's arithmetic.
+        guard dto.items.allSatisfy({ item in
+            (0..<dto.rows).contains(item.r) && (0..<cols).contains(item.c) &&
+            (1...cols).contains(item.w) && item.w <= cols - item.c &&
+            (1...64).contains(item.k.count) && item.i >= 0 && item.i < item.k.count &&
+            item.k.allSatisfy { !$0.isEmpty && $0.utf8.count <= 64 }
+        }) else { return nil }
         let items = dto.items.enumerated().map { GridKey(id: $0.offset, r: $0.element.r, c: $0.element.c, w: $0.element.w, keys: $0.element.k, idx: $0.element.i) }
-        return KeyGrid(rows: dto.rows, items: items, nextId: items.count)
+        let grid = KeyGrid(rows: dto.rows, items: items, nextId: items.count)
+        return grid.isSound ? grid : nil
     }
 
     static func makeDefault(_ lang: String = "en") -> KeyGrid {

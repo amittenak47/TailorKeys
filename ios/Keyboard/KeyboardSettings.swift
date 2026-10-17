@@ -62,6 +62,22 @@ enum Prefs {
     static let currentLanguage = "current_language"
     static let languageCodes = ["en", "es", "de", "fr"]
     static let languageNames = ["en": "English", "es": "Español", "de": "Deutsch", "fr": "Français"]
+
+    static let booleanDefaults: [String: Bool] = [
+        followSystemText: true, typeOnPress: false, numberRow: true, showHints: true,
+        spaceAccepts: true, autoCap: true, doubleSpace: true, clicks: true, keyTint: true,
+        swipeTyping: true, chording: false, smartTargets: true, lockSize: false, sameOrientations: false,
+    ]
+    /// Registry for reset; device-dependent defaults are still resolved by their getters.
+    static var settingKeys: [String] {
+        var keys = Array(booleanDefaults.keys) + [cursorControl, emptySide, theme, layout, languages, currentLanguage]
+        keys += [curve, keyGap, cornerRadius, keyRepeatGuard, touchSlack, textScale, longPressMs].map { $0.key }
+        for l in [false, true] {
+            keys += [height(l), width(l), bottomPadding(l), splitGap(l), tilt(l), spaceTilt(l)].map { $0.key }
+            keys += [alignKey(l), splitKey(l)]
+        }
+        return keys
+    }
 }
 
 struct SizeProfile {
@@ -137,7 +153,7 @@ final class KeyboardSettings {
     func int(_ p: IntPref) -> Int { min(max(d.object(forKey: p.key) as? Int ?? p.def, p.min), p.max) }
     func set(_ p: IntPref, _ v: Int) { d.set(min(max(v, p.min), p.max), forKey: p.key) }
 
-    func bool(_ key: String, _ def: Bool) -> Bool { d.object(forKey: key) as? Bool ?? def }
+    func bool(_ key: String, _ def: Bool) -> Bool { d.object(forKey: key) as? Bool ?? Prefs.booleanDefaults[key] ?? def }
     func set(_ key: String, _ v: Bool) { d.set(v, forKey: key) }
 
     var followSystemText: Bool { bool(Prefs.followSystemText, true) }
@@ -228,16 +244,7 @@ final class KeyboardSettings {
 
     func resetAll() {
         // Leave learned words, migration and setup metadata intact in either store.
-        var keys = [Prefs.curve.key, Prefs.keyGap.key, Prefs.cornerRadius.key, Prefs.textScale.key,
-                    Prefs.longPressMs.key, Prefs.cursorControl, Prefs.emptySide, Prefs.numberRow, Prefs.showHints, Prefs.spaceAccepts, Prefs.autoCap, Prefs.doubleSpace,
-                    Prefs.clicks, Prefs.keyTint, Prefs.smartTargets, Prefs.swipeTyping, Prefs.lockSize, Prefs.sameOrientations,
-                    Prefs.theme, Prefs.layout, Prefs.languages, Prefs.currentLanguage]
-        for l in [false, true] {
-            keys += [Prefs.height(l).key, Prefs.width(l).key, Prefs.bottomPadding(l).key,
-                     Prefs.splitGap(l).key, Prefs.tilt(l).key, Prefs.spaceTilt(l).key,
-                     Prefs.alignKey(l), Prefs.splitKey(l)]
-        }
-        for key in keys { d.removeObject(forKey: key) }
+        for key in Prefs.settingKeys { d.removeObject(forKey: key) }
     }
 }
 

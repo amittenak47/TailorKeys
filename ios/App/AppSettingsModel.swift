@@ -19,7 +19,10 @@ final class AppSettingsModel: ObservableObject {
     @Published private(set) var showReady = false
     @Published private(set) var revision = 0
     var shareCode = ""
-    var importCode = ""
+    @Published var importCode = "" {
+        didSet { if importCode != oldValue { importedGrid = KeyGrid.fromCode(importCode) } }
+    }
+    private(set) var importedGrid: KeyGrid?
 
     private var chordLibraries: [String: Chords] = [:]
     /// Dictionaries ship in the embedded keyboard extension, so the app needs no Predictor target dependency.
@@ -157,7 +160,7 @@ final class AppSettingsModel: ObservableObject {
 
     func prepareImport() {
         let text = UIPasteboard.general.string ?? ""
-        importCode = KeyGrid.fromCode(text) != nil ? text : ""
+        importCode = text
         sheet = .importLayout
     }
 
