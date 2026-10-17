@@ -23,7 +23,7 @@ enum AppText {
         ], symbol: "gearshape"),
         Slide(title: "Switch to TailorKeys", lines: [
             "In any text field, hold the globe key and choose TailorKeys.",
-            "Use the globe or the system keyboard control to switch keyboards.",
+            "To switch back later, tap the globe.",
         ], symbol: "globe"),
         Slide(title: "Put keys where you want them", lines: [
             "Tap the gear above the keys, then Rearrange. Drag a key to move it.",
@@ -31,8 +31,8 @@ enum AppText {
         ], symbol: "square.grid.3x3"),
         Slide(title: "Swipe keys and suggestions", lines: [
             "Swipe a stacked key up or down to change it. Tap abc once for a capital, twice for caps lock.",
-            "Spin a suggestion wheel sideways, then tap a word. In split mode, slide along the center gap to move the cursor.",
-            "Hold a spacebar to pick that side's suggestion.",
+            "Spin a suggestion wheel sideways and tap a word, or hold a spacebar to pick that side's word.",
+            "To move the cursor, hold the empty space between the keys and push.",
         ], symbol: "hand.point.up.left"),
         Slide(title: "Try it", lines: [
             "Type a few words below. Size, split and tilt are in this app.",
