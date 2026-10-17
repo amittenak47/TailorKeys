@@ -27,8 +27,8 @@ internal class CursorJoystick {
     /** Current signed speed in characters per second (also drives the gap's direction gradient). */
     var speed = 0.0
         private set
-    /** Characters travelled so far, fractional and signed; scrolls the gap's stripes in step with the cursor. */
-    var travel = 0.0
+    /** How far the push reaches toward the gap's edge, signed, from -1 to 1; drives the keyboard-wide wave. */
+    var push = 0.0
         private set
     private var fraction = 0.0
     private var lastTime: Long? = null
@@ -50,6 +50,7 @@ internal class CursorJoystick {
         var steps = advance(now)
         val magnitude = abs(dx.toDouble())
         val reach = if (dx < 0) reachLeft else reachRight
+        push = min(1.0, magnitude / reach) * if (dx < 0) -1 else 1
         val u = ((magnitude - DEAD_ZONE) / (reach - DEAD_ZONE)).coerceIn(0.0, 1.0)
         val next = if (magnitude <= DEAD_ZONE) 0.0 else (MIN_SPEED + (MAX_SPEED - MIN_SPEED) * u * Math.sqrt(u)) * if (dx < 0) -1 else 1
         if (next == 0.0 || next * speed < 0) fraction = 0.0
@@ -62,9 +63,7 @@ internal class CursorJoystick {
         val previous = lastTime
         lastTime = now
         if (previous == null) return 0
-        val moved = speed * (now - previous).coerceAtLeast(0) / 1000.0
-        travel += moved
-        fraction += moved
+        fraction += speed * (now - previous).coerceAtLeast(0) / 1000.0
         // Avoid losing a whole character to floating-point error at an exact boundary.
         val steps = (fraction + if (fraction > 0) 1e-9 else -1e-9).toInt()
         fraction -= steps

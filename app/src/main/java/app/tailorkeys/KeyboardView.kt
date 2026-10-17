@@ -875,6 +875,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         rightSpace?.let { drawMoveArrow(canvas, it, pointsLeft = false) }
         drag?.let { drawGhost(canvas, it, radius) }
         drawGlide(canvas, now)
+        if (!editMode) drawWave(canvas)
         drawPopup(canvas)
         if (editMode && !reducedMotion) postInvalidateOnAnimation()
     }
@@ -1090,11 +1091,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private fun inGap(x: Float, y: Float) =
         gapLeft.isNotEmpty() && cursorRect.contains(x, y) && x >= gapEdgeAt(gapLeft, y) && x <= gapEdgeAt(gapRight, y)
 
-    /**
-     * While the centre gap is held, the split gets a faint tint, and while the cursor moves, vertical stripes scroll
-     * through it the same way, in step with the cursor: faster and brighter the faster it goes. Each stripe has a sharp
-     * leading edge and a fading tail, so the direction reads even at a glance. Selecting uses the accent colour.
-     */
+    /** While the centre gap is held, the split gets a faint tint (accent while selecting). */
     private fun drawCursor(canvas: Canvas, radius: Float) {
         val t = trackers.values.firstOrNull { it.kind == K_CURSOR } ?: return
         val rgb = (if (t.select) palette.accent else palette.hint) and 0x00FFFFFF
@@ -1102,17 +1099,39 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         fill.pathEffect = gapCorners
         fill.color = rgb or ((if (t.select) 46 else 28) shl 24)
         canvas.drawPath(gapPath, fill)
-        val speed = t.joystick.speed
-        if (speed != 0.0) {
-            val period = 28 * density
-            val phase = (t.joystick.travel * 3 * density % period).toFloat()
-            val peak = rgb or ((50 + 160 * min(1.0, abs(speed) / CursorJoystick.MAX_SPEED)).toInt() shl 24)
-            val stops = if (speed > 0) floatArrayOf(0f, 0.85f, 1f) else floatArrayOf(0f, 0.15f, 1f)
-            fill.shader = LinearGradient(phase, 0f, phase + period, 0f, intArrayOf(rgb, peak, rgb), stops, Shader.TileMode.REPEAT)
-            canvas.drawPath(gapPath, fill)
-            fill.shader = null
-        }
         fill.pathEffect = null
+    }
+
+    /**
+     * Springs the keyboard-wide wave toward where the push points: from the press point out to the keyboard's edge as
+     * the push reaches the gap's edge, eased so small pushes still travel visibly and a quick push overshoots a little.
+     * Returns whether it is still moving.
+     */
+    private fun stepWave(t: Tracker, now: Long): Boolean {
+        val dt = (now - t.waveTime).coerceIn(0L, 40L) / 1000f
+        t.waveTime = now
+        val push = t.joystick.push
+        val reach = if (push < 0) t.x0 - handleRect.left else handleRect.right - t.x0
+        val target = t.x0 + (Math.signum(push) * Math.pow(abs(push), 0.75)).toFloat() * reach
+        if (reducedMotion) { t.waveX = target; t.waveV = 0f; return false }
+        t.waveV += (110f * (target - t.waveX) - 14f * t.waveV) * dt
+        t.waveX += t.waveV * dt
+        return abs(target - t.waveX) > 0.5f * density || abs(t.waveV) > 4 * density
+    }
+
+    /**
+     * While the centre gap is held, a soft vertical band over the whole keyboard sweeps out the way the cursor is
+     * pushed: a small push moves it a little past the split, a push to the split's edge carries it to the keyboard's
+     * edge. It is stronger the harder the push, and accent-coloured while selecting.
+     */
+    private fun drawWave(canvas: Canvas) {
+        val t = trackers.values.firstOrNull { it.kind == K_CURSOR } ?: return
+        val rgb = (if (t.select) palette.accent else palette.hint) and 0x00FFFFFF
+        val half = 36 * density
+        val peak = rgb or ((50 + 80 * min(1.0, abs(t.joystick.push))).toInt() shl 24)
+        fill.shader = LinearGradient(t.waveX - half, 0f, t.waveX + half, 0f, intArrayOf(rgb, peak, rgb), null, Shader.TileMode.CLAMP)
+        canvas.drawRect(max(handleRect.left, t.waveX - half), cursorRect.top, min(handleRect.right, t.waveX + half), cursorRect.bottom, fill)
+        fill.shader = null
     }
 
     private fun drawHandle(canvas: Canvas) {
@@ -1281,6 +1300,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         var lastX = 0f
         val joystick = CursorJoystick()
         var lastCursorHaptic = Long.MIN_VALUE
+        /** The keyboard-wide wave's position and velocity (px, px/s), sprung toward where the push points. */
+        var waveX = 0f
+        var waveV = 0f
+        var waveTime = 0L
         var fx = 0f
         var fy = 0f
         var select = false
@@ -1314,12 +1337,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val cursorFrame = object : Runnable {
         override fun run() {
             val now = SystemClock.uptimeMillis()
+            var again = false
             for (t in trackers.values.toList()) if (t.kind == K_CURSOR) {
                 moveCursor(t, t.joystick.advance(now), now)
+                if (stepWave(t, now) || t.joystick.speed != 0.0) again = true
             }
-            // Redraw every frame so the gap's gradient follows the speed as holding boosts it.
             invalidate()
-            if (trackers.values.any { it.kind == K_CURSOR && it.joystick.speed != 0.0 }) postOnAnimation(this)
+            if (again) postOnAnimation(this)
         }
     }
 
@@ -1419,6 +1443,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             if (trackers.values.any { it.kind == K_CURSOR }) return
             trackers[id] = Tracker(K_CURSOR, null).also {
                 it.x0 = x; it.y0 = y; it.fx = x; it.fy = y
+                it.waveX = x; it.waveTime = SystemClock.uptimeMillis()
                 it.joystick.reach((x - gapEdgeAt(gapLeft, y)) / density, (gapEdgeAt(gapRight, y) - x) / density)
                 it.select = gapPresses.isSelection(time, x / density, y / density)
                 if (it.select) {
@@ -1512,7 +1537,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 val now = SystemClock.uptimeMillis()
                 moveCursor(t, t.joystick.displace((x - t.x0) / density, now), now)
                 removeCallbacks(cursorFrame)
-                if (t.joystick.speed != 0.0) postOnAnimation(cursorFrame)
+                postOnAnimation(cursorFrame)
                 invalidate()
             }
             K_STACK -> {

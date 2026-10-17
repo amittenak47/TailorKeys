@@ -746,6 +746,7 @@ final class KeyboardView: UIView {
         if let r = rightSpace { drawArrow(r, pointsLeft: false) }
         if let d = drag { drawGhost(ctx, d, radius) }
         drawGlide(ctx, now)
+        if !editMode { drawWave(ctx) }
         drawPopup()
     }
 
@@ -947,33 +948,42 @@ final class KeyboardView: UIView {
         !gapLeft.isEmpty && cursorRect.contains(p) && p.x >= gapEdge(gapLeft, at: p.y) && p.x <= gapEdge(gapRight, at: p.y)
     }
 
-    /// While the centre gap is held, the split gets a faint tint, and while the cursor moves, vertical stripes scroll
-    /// through it the same way, in step with the cursor: faster and brighter the faster it goes. Each stripe has a sharp
-    /// leading edge and a fading tail, so the direction reads even at a glance.
+    /// While the centre gap is held, the split gets a faint tint.
     private func drawCursorIndicator(_ ctx: CGContext) {
-        guard let t = trackers.values.first(where: { $0.kind == .cursor }), !cursorRect.isEmpty else { return }
-        ctx.saveGState()
-        gapPath.addClip()
+        guard trackers.values.contains(where: { $0.kind == .cursor }), !cursorRect.isEmpty else { return }
         palette.hint.withAlphaComponent(0.11).setFill()
-        ctx.fill(cursorRect)
-        let speed = t.joystick.speed
-        if speed != 0 {
-            let period: CGFloat = 28
-            let phase = CGFloat(t.joystick.travel * 3).truncatingRemainder(dividingBy: period)
-            let peak = palette.hint.withAlphaComponent(0.2 + 0.62 * CGFloat(Swift.min(1, abs(speed) / CursorJoystick.maxSpeed)))
-            let clear = palette.hint.withAlphaComponent(0)
-            let locations: [CGFloat] = speed > 0 ? [0, 0.85, 1] : [0, 0.15, 1]
-            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: [clear.cgColor, peak.cgColor, clear.cgColor] as CFArray, locations: locations) {
-                var s = cursorRect.minX - period + (phase - cursorRect.minX).truncatingRemainder(dividingBy: period)
-                while s < cursorRect.maxX {
-                    ctx.saveGState()
-                    ctx.clip(to: CGRect(x: s, y: cursorRect.minY, width: period, height: cursorRect.height))
-                    ctx.drawLinearGradient(gradient, start: CGPoint(x: s, y: 0), end: CGPoint(x: s + period, y: 0), options: [])
-                    ctx.restoreGState()
-                    s += period
-                }
-            }
-        }
+        gapPath.fill()
+    }
+
+    /// Springs the keyboard-wide wave toward where the push points: from the press point out to the keyboard's edge as
+    /// the push reaches the gap's edge, eased so small pushes still travel visibly and a quick push overshoots a little.
+    /// Returns whether it is still moving.
+    private func stepWave(_ t: Tracker, _ now: TimeInterval) -> Bool {
+        let dt = CGFloat(Swift.min(0.04, Swift.max(0, now - t.waveTime)))
+        t.waveTime = now
+        let push = t.joystick.push
+        let reach = push < 0 ? t.x0 - handleRect.minX : handleRect.maxX - t.x0
+        let target = t.x0 + CGFloat((push < 0 ? -1 : 1) * pow(abs(push), 0.75)) * reach
+        if UIAccessibility.isReduceMotionEnabled { t.waveX = target; t.waveV = 0; return false }
+        t.waveV += (110 * (target - t.waveX) - 14 * t.waveV) * dt
+        t.waveX += t.waveV * dt
+        return abs(target - t.waveX) > 0.5 || abs(t.waveV) > 4
+    }
+
+    /// While the centre gap is held, a soft vertical band over the whole keyboard sweeps out the way the cursor is
+    /// pushed: a small push moves it a little past the split, a push to the split's edge carries it to the keyboard's
+    /// edge. It is stronger the harder the push.
+    private func drawWave(_ ctx: CGContext) {
+        guard let t = trackers.values.first(where: { $0.kind == .cursor }), !cursorRect.isEmpty else { return }
+        let half: CGFloat = 36
+        let peak = palette.hint.withAlphaComponent(0.2 + 0.31 * CGFloat(Swift.min(1, abs(t.joystick.push))))
+        let clear = palette.hint.withAlphaComponent(0)
+        guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: [clear.cgColor, peak.cgColor, clear.cgColor] as CFArray, locations: [0, 0.5, 1]) else { return }
+        let x0 = Swift.max(handleRect.minX, t.waveX - half), x1 = Swift.min(handleRect.maxX, t.waveX + half)
+        guard x1 > x0 else { return }
+        ctx.saveGState()
+        ctx.clip(to: CGRect(x: x0, y: cursorRect.minY, width: x1 - x0, height: cursorRect.height))
+        ctx.drawLinearGradient(gradient, start: CGPoint(x: t.waveX - half, y: 0), end: CGPoint(x: t.waveX + half, y: 0), options: [])
         ctx.restoreGState()
     }
 
@@ -1159,6 +1169,11 @@ final class KeyboardView: UIView {
         var lastX: CGFloat = 0
         var lastY: CGFloat = 0
         let joystick = CursorJoystick()
+        /// The keyboard-wide wave's position and velocity (pt, pt/s), sprung toward where the push points.
+        var waveX: CGFloat = 0
+        var waveV: CGFloat = 0
+        var waveTime: TimeInterval = 0
+        var waveMoving = false
         var lastCursorClick: TimeInterval = -.infinity
         var deferredClick = false
         var glideEligible = false
@@ -1190,7 +1205,7 @@ final class KeyboardView: UIView {
     }
 
     private func updateCursorLink() {
-        guard trackers.values.contains(where: { $0.kind == .cursor && $0.joystick.speed != 0 }) else {
+        guard trackers.values.contains(where: { $0.kind == .cursor && ($0.joystick.speed != 0 || $0.waveMoving) }) else {
             cursorDisplayLink?.invalidate(); cursorDisplayLink = nil
             return
         }
@@ -1203,8 +1218,10 @@ final class KeyboardView: UIView {
 
     @objc private func cursorTick() {
         let now = CACurrentMediaTime()
-        for t in Array(trackers.values) where t.kind == .cursor { moveCursor(t, t.joystick.advance(now), now) }
-        // Redraw every frame so the gap's gradient follows the speed as holding boosts it.
+        for t in Array(trackers.values) where t.kind == .cursor {
+            moveCursor(t, t.joystick.advance(now), now)
+            t.waveMoving = stepWave(t, now)
+        }
         setNeedsDisplay()
         updateCursorLink()
     }
@@ -1310,6 +1327,7 @@ final class KeyboardView: UIView {
         if hit == nil && inGap(p) {
             guard !trackers.values.contains(where: { $0.kind == .cursor }) else { return }
             let t = Tracker(kind: .cursor, pk: nil); t.x0 = p.x; t.y0 = p.y; t.lastX = p.x; t.lastY = p.y; trackers[id] = t
+            t.waveX = p.x; t.waveTime = CACurrentMediaTime()
             t.joystick.reach(left: p.x - gapEdge(gapLeft, at: p.y), right: gapEdge(gapRight, at: p.y) - p.x)
             setNeedsDisplay()
             return
@@ -1404,6 +1422,7 @@ final class KeyboardView: UIView {
             let now = CACurrentMediaTime()
             t.lastX = p.x; t.lastY = p.y
             moveCursor(t, t.joystick.displace(p.x - t.x0, now), now)
+            t.waveMoving = true
             updateCursorLink()
             setNeedsDisplay()
         case .stack:
@@ -1853,8 +1872,8 @@ private final class CursorJoystick {
     private static let minReach = 8.0
     /// Current signed speed in characters per second (also drives the gap's direction gradient).
     private(set) var speed = 0.0
-    /// Characters travelled so far, fractional and signed; scrolls the gap's stripes in step with the cursor.
-    private(set) var travel = 0.0
+    /// How far the push reaches toward the gap's edge, signed, from -1 to 1; drives the keyboard-wide wave.
+    private(set) var push = 0.0
     private var fraction = 0.0
     private var lastTime: TimeInterval?
     private var reachLeft = CursorJoystick.minReach
@@ -1873,6 +1892,7 @@ private final class CursorJoystick {
         var steps = advance(now)
         let magnitude = abs(Double(dx))
         let reach = dx < 0 ? reachLeft : reachRight
+        push = Swift.min(1, magnitude / reach) * (dx < 0 ? -1 : 1)
         let u = Swift.min(1, Swift.max(0, (magnitude - Self.deadZone) / (reach - Self.deadZone)))
         let next = magnitude <= Self.deadZone ? 0 : (Self.minSpeed + (Self.maxSpeed - Self.minSpeed) * u * u.squareRoot()) * (dx < 0 ? -1.0 : 1.0)
         if next == 0 || next * speed < 0 { fraction = 0 }
@@ -1885,9 +1905,7 @@ private final class CursorJoystick {
         let previous = lastTime
         lastTime = now
         guard let previous = previous else { return 0 }
-        let moved = speed * max(0, now - previous)
-        travel += moved
-        fraction += moved
+        fraction += speed * max(0, now - previous)
         // Avoid losing a whole character to floating-point error at an exact boundary.
         let steps = Int(fraction + (fraction > 0 ? 1e-9 : -1e-9))
         fraction -= Double(steps)
