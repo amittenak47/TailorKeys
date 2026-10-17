@@ -943,16 +943,16 @@ final class KeyboardView: UIView {
     }
 
     /// Springs the keyboard-wide wave toward where the push points: from the press point out to the keyboard's edge as
-    /// the push reaches the gap's edge, eased so small pushes still travel visibly and a quick push overshoots a little.
+    /// the push reaches the gap's edge, in proportion, gliding smoothly without overshoot so it stays easy on the eyes.
     /// Returns whether it is still moving.
     private func stepWave(_ t: Tracker, _ now: TimeInterval) -> Bool {
         let dt = CGFloat(Swift.min(0.04, Swift.max(0, now - t.waveTime)))
         t.waveTime = now
         let push = t.joystick.push
         let reach = push < 0 ? t.x0 - handleRect.minX : handleRect.maxX - t.x0
-        let target = t.x0 + CGFloat((push < 0 ? -1 : 1) * pow(abs(push), 0.75)) * reach
+        let target = t.x0 + CGFloat(push) * reach
         if UIAccessibility.isReduceMotionEnabled { t.waveX = target; t.waveV = 0; return false }
-        t.waveV += (110 * (target - t.waveX) - 14 * t.waveV) * dt
+        t.waveV += (60 * (target - t.waveX) - 16 * t.waveV) * dt
         t.waveX += t.waveV * dt
         return abs(target - t.waveX) > 0.5 || abs(t.waveV) > 4
     }
@@ -962,8 +962,8 @@ final class KeyboardView: UIView {
     /// it to the keyboard's edge. It fades out on every side and gets stronger the harder the push.
     private func drawWave(_ ctx: CGContext) {
         guard let t = trackers.values.first(where: { $0.kind == .cursor }), !cursorRect.isEmpty else { return }
-        let half: CGFloat = 56
-        let peak = 0.27 + 0.27 * CGFloat(Swift.min(1, abs(t.joystick.push)))
+        let half: CGFloat = 26
+        let peak = 0.18 + 0.18 * CGFloat(Swift.min(1, abs(t.joystick.push)))
         // A bell-shaped falloff across, and a fade at the top and bottom, so no edge is ever hard.
         let falloff: [CGFloat] = [0, 0.12, 0.5, 1, 0.5, 0.12, 0]
         let space = CGColorSpaceCreateDeviceRGB()

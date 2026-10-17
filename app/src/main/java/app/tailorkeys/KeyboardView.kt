@@ -1086,7 +1086,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     /**
      * Springs the keyboard-wide wave toward where the push points: from the press point out to the keyboard's edge as
-     * the push reaches the gap's edge, eased so small pushes still travel visibly and a quick push overshoots a little.
+     * the push reaches the gap's edge, in proportion, gliding smoothly without overshoot so it stays easy on the eyes.
      * Returns whether it is still moving.
      */
     private fun stepWave(t: Tracker, now: Long): Boolean {
@@ -1094,9 +1094,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         t.waveTime = now
         val push = t.joystick.push
         val reach = if (push < 0) t.x0 - handleRect.left else handleRect.right - t.x0
-        val target = t.x0 + (Math.signum(push) * Math.pow(abs(push), 0.75)).toFloat() * reach
+        val target = t.x0 + push.toFloat() * reach
         if (reducedMotion) { t.waveX = target; t.waveV = 0f; return false }
-        t.waveV += (110f * (target - t.waveX) - 14f * t.waveV) * dt
+        t.waveV += (60f * (target - t.waveX) - 16f * t.waveV) * dt
         t.waveX += t.waveV * dt
         return abs(target - t.waveX) > 0.5f * density || abs(t.waveV) > 4 * density
     }
@@ -1111,8 +1111,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val t = trackers.values.firstOrNull { it.kind == K_CURSOR } ?: return
         val rgb = palette.accent and 0x00FFFFFF
         val strength = min(1.0, abs(t.joystick.push)).toFloat()
-        val peak = ((if (t.select) 150 else 70) + 70 * strength).toInt()
-        val half = (if (t.select) 72 else 56) * density
+        val peak = ((if (t.select) 90 else 45) + 45 * strength).toInt()
+        val half = (if (t.select) 32 else 26) * density
         // A bell-shaped falloff across, and a fade at the top and bottom, so no edge is ever hard.
         val across = LinearGradient(t.waveX - half, 0f, t.waveX + half, 0f,
             WAVE_FALLOFF.map { rgb or ((peak * it).toInt() shl 24) }.toIntArray(), WAVE_STOPS, Shader.TileMode.CLAMP)
