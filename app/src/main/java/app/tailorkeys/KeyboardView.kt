@@ -1524,7 +1524,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             K_CURSOR -> {
                 t.fx = x; t.fy = y
                 val now = SystemClock.uptimeMillis()
-                moveCursor(t, t.joystick.displace((x - t.x0) / density, now), now)
+                // Selecting is 15% less sensitive; the push itself is scaled, so the glow follows the same curve.
+                val sensitivity = if (t.select) 0.85f else 1f
+                moveCursor(t, t.joystick.displace((x - t.x0) / density * sensitivity, now), now)
                 removeCallbacks(cursorFrame)
                 postOnAnimation(cursorFrame)
                 invalidate()
