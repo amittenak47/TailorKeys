@@ -1,6 +1,7 @@
 package app.tailorkeys
 
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
@@ -115,6 +116,9 @@ class QuickOptions(
     private fun dp(n: Int) = (n * d).toInt()
     private val header = LinearLayout(context)
     private val closeButton = TextView(context)
+    private val scroll = ScrollView(context).apply { isFillViewport = true; isVerticalScrollBarEnabled = false }
+    private var rendered: QuickOptionsState? = null
+    private var palette: Palette? = null
 
     /** One grid cell: icon over label over a muted state line. */
     private inner class Tile(val icon: Int?, val glyph: String?, val label: String) {
@@ -123,25 +127,24 @@ class QuickOptions(
         val glyphView = TextView(context).apply { textSize = 15f; gravity = Gravity.CENTER; setTypeface(typeface, Typeface.BOLD) }
         val labelView = TextView(context).apply { textSize = 12f; gravity = Gravity.CENTER; maxLines = 1 }
         val stateView = TextView(context).apply { textSize = 11f; gravity = Gravity.CENTER; maxLines = 1 }
-        var on = false
+        val tileBackground = GradientDrawable()
+        var rendered: QuickTileState? = null
         init {
+            box.background = tileBackground
+            if (icon != null) iconView.setImageResource(icon)
             if (icon != null) box.addView(iconView, LayoutParams(dp(20), dp(20)).apply { bottomMargin = dp(2) })
-            else box.addView(glyphView, LayoutParams(LayoutParams.WRAP_CONTENT, dp(20)).apply { bottomMargin = dp(2) })
+            else box.addView(glyphView, LayoutParams(LayoutParams.MATCH_PARENT, dp(20)).apply { bottomMargin = dp(2) })
             labelView.text = label
-            box.addView(labelView)
-            box.addView(stateView)
+            // A fixed width lets TextView replace a single line without relaying out the grid.
+            box.addView(labelView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+            box.addView(stateView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         }
     }
 
     private val tiles = ArrayList<Tile>()
-    private val split: Tile
-    private val oneHand: Tile
     private val size: Tile
     private val smaller = TextView(context)
     private val larger = TextView(context)
-    private val theme: Tile
-    private val lang: Tile
-    private val swipe: Tile
 
     init {
         orientation = VERTICAL
@@ -149,6 +152,7 @@ class QuickOptions(
         // The strip holds just a back button; the tiles below say what this is.
         closeButton.text = "‹  Back"
         closeButton.textSize = 15f
+        closeButton.setTypeface(closeButton.typeface, Typeface.BOLD)
         closeButton.gravity = Gravity.CENTER_VERTICAL
         closeButton.setPadding(dp(14), 0, dp(14), 0)
         closeButton.contentDescription = "Back to keyboard"
@@ -156,7 +160,6 @@ class QuickOptions(
         header.gravity = Gravity.CENTER_VERTICAL
         header.addView(closeButton, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
         addView(header, LayoutParams(LayoutParams.MATCH_PARENT, stripHeight()))
-        val scroll = ScrollView(context).apply { isFillViewport = true; isVerticalScrollBarEnabled = false }
         // Centred vertically in whatever height the keyboard has, instead of leaving a gap at the bottom.
         val grid = LinearLayout(context).apply { orientation = VERTICAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(6), dp(2), dp(6), dp(6)) }
         scroll.addView(grid)
@@ -173,8 +176,8 @@ class QuickOptions(
             }
         val first = row()
         tile(first, R.drawable.ic_settings_edit, null, "Rearrange") { rearrange() }
-        split = tile(first, R.drawable.ic_settings_layout, null, "Split") { val l = landscape(); settings.setSplitFor(l, !settings.split(l)) }
-        oneHand = tile(first, R.drawable.ic_settings_expand, null, "One hand") { settings.cycleQuickOneHand(landscape()) }
+        tile(first, R.drawable.ic_settings_layout, null, "Split") { val l = landscape(); settings.setSplitFor(l, !settings.split(l)) }
+        tile(first, R.drawable.ic_settings_expand, null, "One hand") { settings.cycleQuickOneHand(landscape()) }
         size = tile(first, R.drawable.ic_settings_size, null, "Size", null)
         // Size keeps its − / + as two halves of its state line.
         size.box.removeView(size.stateView)
@@ -188,52 +191,78 @@ class QuickOptions(
         }
         size.box.addView(steps)
         val second = row()
-        theme = tile(second, R.drawable.ic_settings_look, null, "Theme") { settings.cycleQuickTheme() }
-        lang = tile(second, null, "", "Language") { language() }
-        swipe = tile(second, R.drawable.ic_settings_typing, null, "Swipe") { settings.set(Prefs.SWIPE_TYPING, !settings.bool(Prefs.SWIPE_TYPING)) }
+        tile(second, R.drawable.ic_settings_look, null, "Theme") { settings.cycleQuickTheme() }
+        tile(second, null, "", "Language") { language() }
+        tile(second, R.drawable.ic_settings_typing, null, "Swipe") { settings.set(Prefs.SWIPE_TYPING, !settings.bool(Prefs.SWIPE_TYPING)) }
         tile(second, null, "⚙", "Settings") { allSettings() }
         refresh()
     }
 
-    fun refresh() {
+    /** Called after measuring the keyboard, including while this attached panel is invisible. */
+    fun updateStripHeight() {
+        val height = stripHeight()
+        if (header.layoutParams.height != height) {
+            header.layoutParams = header.layoutParams.apply { this.height = height }
+        }
+    }
+
+    fun refresh(resetScroll: Boolean = false) {
+        if (resetScroll) scroll.scrollTo(0, 0)
+        updateStripHeight()
         val l = landscape()
-        val p = Palette.of(context, settings.theme())
-        val radius = settings.int(Prefs.CORNER_RADIUS) * d
-        setBackgroundColor(p.background)
-        closeButton.setTextColor(p.accent)
-        closeButton.setTypeface(closeButton.typeface, Typeface.BOLD)
-        header.layoutParams = header.layoutParams.apply { height = stripHeight() }
-        fun state(tile: Tile, value: String, on: Boolean = false, enabled: Boolean = true) {
-            tile.stateView.text = value
-            tile.on = on
-            tile.box.isEnabled = enabled
-            tile.box.contentDescription = "${tile.labelView.text}, $value"
+        val next = QuickOptionsState(settings.theme(),
+            resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK,
+            settings.int(Prefs.CORNER_RADIUS), settings.split(l), settings.quickOneHand(l),
+            settings.int(Prefs.height(l)), settings.currentLanguage(), settings.languages().size > 1,
+            settings.bool(Prefs.SWIPE_TYPING))
+        val previous = rendered
+        if (next == previous) return
+        val paletteChanged = previous == null || previous.theme != next.theme || previous.nightMode != next.nightMode
+        val radiusChanged = previous == null || previous.radius != next.radius
+        if (paletteChanged) {
+            palette = Palette.of(context, next.theme)
+            setBackgroundColor(palette!!.background)
+            closeButton.setTextColor(palette!!.accent)
         }
-        state(split, if (settings.split(l)) "On" else "Off", settings.split(l))
-        val hand = when (settings.quickOneHand(l)) { Align.CENTER -> "Off"; Align.LEFT -> "Left"; Align.RIGHT -> "Right" }
-        state(oneHand, hand, hand != "Off")
-        val height = settings.int(Prefs.height(l))
-        size.labelView.text = "Size $height%"
-        size.box.contentDescription = "Size, $height percent"
-        smaller.contentDescription = "Size, decrease, $height percent"
-        larger.contentDescription = "Size, increase, $height percent"
-        smaller.isEnabled = height > Prefs.height(l).min
-        larger.isEnabled = height < Prefs.height(l).max
-        state(theme, if (settings.theme() == ThemeName.SYSTEM) "System" else settings.theme().title)
-        lang.glyphView.text = settings.currentLanguage().uppercase()
-        state(lang, if (settings.languages().size > 1) "Tap to switch" else "Only one", enabled = settings.languages().size > 1)
-        state(swipe, if (settings.bool(Prefs.SWIPE_TYPING)) "On" else "Off", settings.bool(Prefs.SWIPE_TYPING))
-        tiles.last().stateView.text = "All"
-        for (t in tiles) {
-            t.box.alpha = if (t.box.isEnabled) 1f else 0.45f
-            t.box.background = GradientDrawable().apply { cornerRadius = radius; setColor(p.key) }
-            val ink = if (t.on) p.accent else p.text
-            t.iconView.setImageResource(t.icon ?: 0)
-            t.iconView.setColorFilter(ink)
-            t.glyphView.setTextColor(ink)
-            t.labelView.setTextColor(ink)
-            t.stateView.setTextColor(if (t.on) p.accent else p.hint)
+        val p = palette!!
+        val states = next.tiles()
+        for ((index, t) in tiles.withIndex()) {
+            if (paletteChanged) t.tileBackground.setColor(p.key)
+            if (radiusChanged) t.tileBackground.cornerRadius = next.radius * d
+            val value = states[index]
+            val old = t.rendered
+            if (value != old) {
+                if (value.label != old?.label) t.labelView.text = value.label
+                if (value.state != old?.state) t.stateView.text = value.state
+                if (value.glyph != old?.glyph) t.glyphView.text = value.glyph
+                if (value.description != old?.description) t.box.contentDescription = value.description
+                if (value.enabled != old?.enabled) {
+                    t.box.isEnabled = value.enabled
+                    t.box.alpha = if (value.enabled) 1f else 0.45f
+                }
+                t.rendered = value
+            }
+            if (paletteChanged || value.on != old?.on) {
+                val ink = if (value.on) p.accent else p.text
+                if (t.icon != null) t.iconView.setColorFilter(ink)
+                t.glyphView.setTextColor(ink)
+                t.labelView.setTextColor(ink)
+                t.stateView.setTextColor(if (value.on) p.accent else p.hint)
+            }
         }
-        for (v in listOf(smaller, larger)) { v.setTextColor(p.text); v.alpha = if (v.isEnabled) 1f else 0.35f }
+        if (previous == null || previous.height != next.height) {
+            smaller.contentDescription = "Size, decrease, ${next.height} percent"
+            larger.contentDescription = "Size, increase, ${next.height} percent"
+        }
+        fun step(view: TextView, enabled: Boolean) {
+            if (paletteChanged) view.setTextColor(p.text)
+            if (previous == null || view.isEnabled != enabled) {
+                view.isEnabled = enabled
+                view.alpha = if (enabled) 1f else 0.35f
+            }
+        }
+        step(smaller, next.height > Prefs.height(l).min)
+        step(larger, next.height < Prefs.height(l).max)
+        rendered = next
     }
 }

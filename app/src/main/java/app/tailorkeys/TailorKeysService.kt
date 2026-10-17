@@ -78,7 +78,6 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private var glideCandidates = emptyList<String>()
     private var glideExplore = emptyList<String>()
     private var keyboardView: KeyboardView? = null
-    private var keyboardContainer: android.widget.FrameLayout? = null
     private var quickOptions: QuickOptions? = null
     private val state = InputState()
     private var grid: KeyGrid = KeyGrid.default()
@@ -308,39 +307,52 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
                 keyboard.measure(widthMeasureSpec, heightMeasureSpec)
                 setMeasuredDimension(keyboard.measuredWidth, keyboard.measuredHeight)
+                // Measure the invisible panel up front. INVISIBLE/VISIBLE never changes the layout;
+                // unchanged keyboard measure specs use View's existing measurement cache.
+                quickOptions?.updateStripHeight()
                 for (i in 1 until childCount) getChildAt(i).measure(
                     View.MeasureSpec.makeMeasureSpec(measuredWidth, View.MeasureSpec.EXACTLY),
                     View.MeasureSpec.makeMeasureSpec(measuredHeight, View.MeasureSpec.EXACTLY))
             }
         }.also {
-            keyboardContainer = it
             it.addView(keyboard, android.widget.FrameLayout.LayoutParams(-1, -2))
+            val panel = QuickOptions(this, settings,
+                landscape = { resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE },
+                stripHeight = { keyboard.suggestionStripHeight },
+                close = { closeQuickOptions() },
+                rearrange = { closeQuickOptions(); keyboard.editMode = true },
+                language = { onSwitchLanguage(1) },
+                allSettings = { closeQuickOptions(); onOpenSettings() }).apply {
+                visibility = View.INVISIBLE
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            }
+            // The IME recreates its input view for configuration/density changes. Theme colours are
+            // refreshed in place, so neither a gear tap nor a theme tap constructs a view hierarchy.
+            quickOptions = panel
+            it.addView(panel, android.widget.FrameLayout.LayoutParams(-1, -1))
         }
     }
 
     override fun onQuickOptions() {
-        val container = keyboardContainer ?: return
         val keyboard = keyboardView ?: return
-        if (quickOptions != null) return
+        val panel = quickOptions ?: return
+        if (panel.visibility == View.VISIBLE) return
         onChoiceInterrupted()
         keyboard.cancelTouches()
         keyboard.setOptionsCovered(true)
         keyboard.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-        val panel = QuickOptions(this, settings,
-            landscape = { resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE },
-            stripHeight = { keyboard.suggestionStripHeight },
-            close = { closeQuickOptions() },
-            rearrange = { closeQuickOptions(); keyboard.editMode = true },
-            language = { onSwitchLanguage(1) },
-            allSettings = { closeQuickOptions(); onOpenSettings() })
-        quickOptions = panel
-        container.addView(panel, android.widget.FrameLayout.LayoutParams(-1, -1))
+        panel.refresh(resetScroll = true)
+        panel.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+        panel.visibility = View.VISIBLE
         panel.sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
     }
 
     private fun closeQuickOptions() {
-        quickOptions?.let { keyboardContainer?.removeView(it) }
-        quickOptions = null
+        quickOptions?.let {
+            it.clearFocus()
+            it.visibility = View.INVISIBLE
+            it.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        }
         keyboardView?.setOptionsCovered(false)
         keyboardView?.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
     }

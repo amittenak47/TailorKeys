@@ -126,7 +126,7 @@ private fun SizeControls(state: SettingsState, page: Boolean) {
     val p = state.profile(page)
     var ratio by remember { mutableFloatStateOf(1f) }
     val captureRatio = { ratio = state.int(Prefs.height(page)).toFloat() / state.int(Prefs.width(page)) }
-    val presets = sizePresets(page)
+    val presets = remember(page) { sizePresets(page) }
     val current = presets.firstOrNull {
         it.height == p.heightPercent && it.width == p.widthPercent && it.align == p.align && it.split == p.split
     }?.name ?: "Custom"
