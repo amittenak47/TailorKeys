@@ -53,6 +53,9 @@ final class Predictor {
     private var cachedCandidates: [Candidate]?
     private var cachedTaps: ComposingTaps?
     private var cachedTapRevision: UInt64?
+    private var english: EnglishContext?
+    private var cachedScores: EnglishContext.Scores?
+    private var cachedScoreVersion: UInt64?
 
     init(_ language: String = "en", onReady: @escaping () -> Void = {}) {
         self.language = language
@@ -67,6 +70,7 @@ final class Predictor {
             base = []
         }
         for (i, w) in base.enumerated() where rank[w.text] == nil { rank[w.text] = i }
+        if language == "en" { english = EnglishContext(base.map { $0.text }, onReady) }
         user = defaults.dictionary(forKey: userKey) as? [String: Int] ?? [:]
         for w in user.keys { userLetters[w] = Array(w) }
         userPairs = defaults.dictionary(forKey: pairKey) as? [String: [String: Int]] ?? [:]
@@ -127,6 +131,9 @@ final class Predictor {
             }
         } }
     }
+
+    func updateContext(_ before: String, _ prefix: String) { english?.update(before, prefix) }
+    func resetContext() { english?.reset() }
 
     private func gridCost(_ a: Character, _ b: Character) -> Int {
         if a == b { return 0 }
@@ -223,6 +230,11 @@ final class Predictor {
     }
 
     private func candidates(_ prefix: String, _ prev: String?, _ prev2: String?, _ input: ComposingTaps?) -> [Candidate] {
+        if let english = english { return english.withScores { candidates(prefix, prev, prev2, input, $0) } }
+        return candidates(prefix, prev, prev2, input, nil)
+    }
+
+    private func candidates(_ prefix: String, _ prev: String?, _ prev2: String?, _ input: ComposingTaps?, _ scores: EnglishContext.Scores?) -> [Candidate] {
         let p = prefix.lowercased()
         let taps = input?.hasTaps(prefix) == true ? input : nil
         let tapRevision = taps?.revision
@@ -230,7 +242,7 @@ final class Predictor {
         let tables = seedTables
         tableLock.unlock()
         if cachedPrefix == p && cachedPrev == prev && cachedPrev2 == prev2 && cachedTables === tables &&
-           cachedTaps === taps && cachedTapRevision == tapRevision,
+           cachedTaps === taps && cachedTapRevision == tapRevision && cachedScores === scores && cachedScoreVersion == scores?.version,
            let cached = cachedCandidates { return cached }
         let pairs = prev.flatMap { rank[$0] }.flatMap { tables?.pairs[UInt64($0)] } ?? []
         var triples: [UInt64] = []
@@ -247,7 +259,7 @@ final class Predictor {
         var current = older
         var all: [Candidate] = []
         func add(_ w: String, _ chars: [Character]) {
-            if w == p { return }
+            if w.hasPrefix("<") || (w == p && scores == nil) { return }
             let completion = w.hasPrefix(p)
             let distance: Int
             if completion { distance = 0 }
@@ -255,31 +267,39 @@ final class Predictor {
             else { return }
             if distance > limit { return }
             let id = rank[w]
-            let seedPair = count(pairs, id), userPair = learnedPairs[w] ?? 0
-            let seedTriple = count(triples, id), userTriple = learnedTriples[w] ?? 0
-            // User triples receive the same logarithmic personal weighting as pairs.
-            let context = log(1 + Double(seedPair)) + 1.5 * log(1 + Double(userPair)) +
-                1.2 * (log(1 + Double(seedTriple)) + 1.5 * log(1 + Double(userTriple)))
-            let score = log(frequency(w, tables)) + 1.5 * context - 2.5 * Double(distance) / 10.0
+            let seedPair = scores == nil ? count(pairs, id) : 0, userPair = learnedPairs[w] ?? 0
+            let seedTriple = scores == nil ? count(triples, id) : 0, userTriple = learnedTriples[w] ?? 0
+            let score: Double
+            if let scores = scores {
+                score = scores.probability(w, id) + personalScore(w, userPair, userTriple) - 32.0 * Double(distance) / 10.0
+            } else {
+                let context = log(1 + Double(seedPair)) + 1.5 * log(1 + Double(userPair)) +
+                    1.2 * (log(1 + Double(seedTriple)) + 1.5 * log(1 + Double(userTriple)))
+                score = log(frequency(w, tables)) + 1.5 * context - 2.5 * Double(distance) / 10.0
+            }
             all.append(Candidate(word: w, score: score, correction: !completion,
                                  pairCount: seedPair + userPair, tripleCount: seedTriple + userTriple))
         }
         if p.isEmpty {
             // No dictionary scan: only this context's followers plus the load-time top 300.
             var pool = Set<String>()
-            for row in triples { pool.insert(base[Int(row >> 32)].text) }
-            for row in pairs { pool.insert(base[Int(row >> 32)].text) }
+            if let scores = scores {
+                for id in scores.top { pool.insert(scores.model.vocabulary[id]) }
+            } else {
+                for row in triples { pool.insert(base[Int(row >> 32)].text) }
+                for row in pairs { pool.insert(base[Int(row >> 32)].text) }
+                pool.formUnion(topWords)
+                pool.formUnion(tables?.common ?? [])
+            }
             pool.formUnion(learnedTriples.keys)
             pool.formUnion(learnedPairs.keys)
-            pool.formUnion(topWords)
-            pool.formUnion(tables?.common ?? [])
             for w in pool { add(w, []) }
         } else {
             for (w, chars) in userLetters { add(w, chars) }
             for (i, w) in base.enumerated() where user[w.text] == nil && rank[w.text] == i { add(w.text, w.letters) }
         }
         let result = all.sorted {
-            if p.isEmpty, prev != nil {
+            if scores == nil, p.isEmpty, prev != nil {
                 // Trigram followers, then remaining bigram followers, then frequency fallback.
                 let aTier = $0.tripleCount > 0 ? 2 : ($0.pairCount > 0 ? 1 : 0)
                 let bTier = $1.tripleCount > 0 ? 2 : ($1.pairCount > 0 ? 1 : 0)
@@ -296,6 +316,8 @@ final class Predictor {
         cachedTables = tables
         cachedTaps = taps
         cachedTapRevision = tapRevision
+        cachedScores = scores
+        cachedScoreVersion = scores?.version
         cachedCandidates = result
         return result
     }
@@ -394,6 +416,10 @@ final class Predictor {
     }
     /// The previous-word part of the suggestion score, for ranking swiped words the same way.
     func contextScore(_ prev: String?, _ word: String) -> Double {
+        if let score = english?.withScores({ scores -> Double? in
+            guard let scores = scores else { return nil }
+            return scores.probability(word, rank[word]) + personalScore(word, prev, scores.previous2)
+        }) { return score }
         tableLock.lock()
         let tables = seedTables
         tableLock.unlock()
@@ -401,6 +427,17 @@ final class Predictor {
         let seedPair = count(pairs, rank[word])
         let userPair = prev.flatMap { userPairs[$0]?[word] } ?? 0
         return 1.5 * (log(1 + Double(seedPair)) + 1.5 * log(1 + Double(userPair)))
+    }
+
+    private func personalScore(_ word: String, _ prev: String?, _ prev2: String?) -> Double {
+        let pair = prev.flatMap { userPairs[$0]?[word] } ?? 0
+        let triple = prev2.flatMap { first in prev.flatMap { userTriples[first + "\t" + $0]?[word] } } ?? 0
+        return personalScore(word, pair, triple)
+    }
+
+    private func personalScore(_ word: String, _ pair: Int, _ triple: Int) -> Double {
+        let wordBoost = log(1 + Double(user[word] ?? 0) * 0.05 * Double((rank[word] ?? 5000) + 10))
+        return wordBoost + 2.25 * log(1 + Double(pair)) + 2.7 * log(1 + Double(triple))
     }
 }
 

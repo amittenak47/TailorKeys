@@ -32,8 +32,10 @@ internal object SplitTaps {
 
 class PredictorSpatialTest {
     companion object {
+        // Keep the frozen geometry/fallback suite independent of model readiness.
+        // PredictorModelTest also checks these near-miss taps with an active English context.
         private val dir = Files.createTempDirectory("predictor-test").toFile().apply { deleteOnExit() }
-        private val predictor = Predictor({ File("src/main/assets", it).inputStream() }, dir).apply { setLayout(SplitTaps.grid) }
+        private val predictor = Predictor({ File("src/main/assets", it).inputStream() }, dir, enableModel = false).apply { setLayout(SplitTaps.grid) }
     }
 
     @Test fun sevenNearMissesRankInTopThree() {

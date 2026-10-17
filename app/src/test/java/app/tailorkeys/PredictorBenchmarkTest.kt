@@ -20,7 +20,7 @@ class PredictorBenchmarkTest {
         val assets = File("src/main/assets")
         val dir = Files.createTempDirectory("predictor-benchmark").toFile()
         try {
-            val predictor = Predictor({ File(assets, it).inputStream() }, dir)
+            val predictor = Predictor({ File(assets, it).inputStream() }, dir, enableModel = false)
             predictor.setLayout(KeyGrid.template(Template.SPLIT))
             val prefixes = listOf("th", "the", "sev", "seven", "becau", "because", "people", "keyboard", "awvwn", "aivwn", "aeven", "zzzzz")
             val taps = prefixes.map { SplitTaps.word(it, slips = true) }

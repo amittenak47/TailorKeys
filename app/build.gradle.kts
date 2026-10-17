@@ -49,6 +49,10 @@ tasks.withType<Test>().configureEach {
     maxHeapSize = "256m"
     maxParallelForks = 1
     inputs.property("spatialBenchmark", providers.environmentVariable("SPATIAL_BENCHMARK").orElse("0"))
+    inputs.property("integratedLmEval", providers.environmentVariable("TK_LM_EVAL").orElse("0"))
+    inputs.property("integratedLmSamples", providers.environmentVariable("TK_LM_EVAL_SENTENCES").orElse("256"))
+    inputs.property("integratedLmData", providers.environmentVariable("TK_LM_DATA").orElse("../../tk-lm-data"))
+    inputs.property("integratedLmTuning", providers.environmentVariable("TK_LM_EVAL_TUNE").orElse("0"))
 }
 
 dependencies {

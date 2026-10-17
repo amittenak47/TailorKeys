@@ -295,6 +295,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         super.onStartInputView(info, restarting)
         onChoiceInterrupted()
         clearTaps()
+        models.values.forEach { it.predictor.resetContext() }
         val cls = info.inputType and InputType.TYPE_MASK_CLASS
         val variation = info.inputType and InputType.TYPE_MASK_VARIATION
         state.layer = if (cls == InputType.TYPE_CLASS_NUMBER || cls == InputType.TYPE_CLASS_PHONE || cls == InputType.TYPE_CLASS_DATETIME) Layer.NUM else Layer.ABC
@@ -547,6 +548,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         gestureDecoder.setKeys(keys, keyWidth)
         val before = ic.getTextBeforeCursor(64, 0)?.toString().orEmpty()
         val prev = previousWord(if (before.lastOrNull()?.isLetterOrDigit() == true) "$before " else before)
+        predictor.updateContext(ic.getTextBeforeCursor(16_384, 0) ?: "", "")
         val matches = gestureDecoder.decode(points, prev, predictor::gestureFrequency, predictor::contextScore)
         if (matches.isEmpty()) return
         ic.beginBatchEdit()
@@ -762,11 +764,13 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         }
         if (currentGlide()) {
             view.keyWeights = emptyMap()
+            predictor.updateContext(currentInputConnection?.getTextBeforeCursor(16_384, 0) ?: "", "")
             view.setSuggestions(glideExplore, glideCandidates.take(8), "")
             return
         }
         val prev = previousWord(before)
         val prev2 = previousWord2(before)
+        predictor.updateContext(if (predictor.language == "en") currentInputConnection?.getTextBeforeCursor(16_384, 0) ?: "" else before ?: "", prefix)
         view.keyWeights = if (settings.bool(Prefs.KEY_TINT) || settings.bool(Prefs.SMART_TARGETS)) predictor.nextLetters(prefix, prev, prev2, taps) else emptyMap()
         view.setSuggestions(predictor.explore(prefix, prev, prev2, taps = taps), predictor.closest(prefix, prev, prev2, taps = taps), prefix)
     }

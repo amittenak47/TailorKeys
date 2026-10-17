@@ -1,8 +1,12 @@
 # Built-in English next-word model
 
-This is a standalone training/export/runtime pipeline. It does not integrate the
-model into Predictor, the Android service or the iOS view controller. There are
-no mobile runtime dependencies: Kotlin uses primitive arrays and signed int8
+The English Predictor uses this model for context scoring on Android and iOS,
+with personal learning and spatial typo costs. A serial background worker loads
+the weights once per process and incrementally updates the current sentence plus
+up to two previous sentences. Letters reuse cached full-vocabulary scores;
+loading or changed context uses the original scorer until fresh scores arrive.
+Other languages retain their original scoring. There are no mobile runtime
+dependencies: Kotlin uses primitive arrays and signed int8
 matrix products; Swift uses preallocated arrays and Accelerate's int8 widening
 and float dot products. Both hold full recurrent state for the sentence so far.
 
@@ -84,7 +88,7 @@ commas as `<,>`, and feed sentence boundaries as `</s>`, `<s>`. Missing words ma
 to `<unk>`. `idOf` normalizes case/apostrophes but does not tokenize or identify
 numeric strings. `scoreCandidates` fills **unnormalized logits**, avoiding a full
 vocabulary scan when only candidate ordering is needed. Full `logProbs` includes
-special IDs; the eventual integration must exclude them from displayed words.
+special IDs; Predictor excludes them from displayed words.
 State buffers are allocated once, then `step`, `reset`, `logProbs` and
 `scoreCandidates` reuse storage. A state belongs to one model and one text stream;
 do not mutate the same state concurrently. Models can be shared across states.
@@ -115,6 +119,15 @@ normalization. A warmed timing loop reports median step and step+full-softmax in
 latency on an Android tablet. Re-running the final evaluation after JVM checks adds the
 asset-bound timing to RESULTS.md. Swift must still be compiled/tested on a Mac; no
 device installation is part of this pipeline.
+
+Set `TK_LM_EVAL=1` before the unit-test command to also run the integrated keyboard
+evaluation and context-cache allocation/timing checks. It streams held-out gzip
+JSONL from the documented data directory (`TK_LM_DATA` overrides it), selecting
+256 evenly spaced sentences per source after excluding the separate 256-sentence
+calibration set. `TK_LM_EVAL_SENTENCES` changes the final sample size;
+`TK_LM_EVAL_TUNE=1` selects calibration instead. Reports are written under
+`app/build/reports/integrated-lm-*.txt`. See the Integrated keyboard section in
+RESULTS.md for the scoring weights, sampling provenance and measured accuracy.
 
 Sources, licenses and attribution: [SOURCES.md](SOURCES.md). Binary layout and
 equations: [FORMAT.md](FORMAT.md). Measured quality and timings: [RESULTS.md](RESULTS.md).

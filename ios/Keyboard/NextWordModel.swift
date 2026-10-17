@@ -64,6 +64,7 @@ final class NextWordModel {
     }
 
     func initialState() -> State { State(self) }
+    func normalizedIdOf(_ word: String) -> Int { ids[word] ?? 2 }
 
     /// Mutates and returns state; all buffers are allocated by initialState().
     @discardableResult
