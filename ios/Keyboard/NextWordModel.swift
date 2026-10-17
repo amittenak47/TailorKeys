@@ -26,6 +26,8 @@ final class NextWordModel {
         fileprivate var input: [Float]
         fileprivate var projected: [Float]
         fileprivate var dotScratch: [Float]
+        fileprivate var inputGates: [Float]
+        fileprivate var recurrentGates: [Float]
 
         fileprivate init(_ owner: NextWordModel) {
             self.owner = owner
@@ -35,6 +37,8 @@ final class NextWordModel {
             input = [Float](repeating: 0, count: owner.embeddingSize)
             projected = [Float](repeating: 0, count: owner.embeddingSize)
             dotScratch = [Float](repeating: 0, count: max(owner.hiddenSize, owner.embeddingSize))
+            inputGates = [Float](repeating: 0, count: 3 * owner.hiddenSize)
+            recurrentGates = [Float](repeating: 0, count: 3 * owner.hiddenSize)
         }
 
         func reset() {
@@ -71,15 +75,14 @@ final class NextWordModel {
     func step(_ state: State, wordId: Int) -> State {
         precondition(state.owner === self && wordId >= 0 && wordId < vocabularySize)
         embeddings.row(wordId, into: &state.input)
+        inputWeights.multiply(state.input, into: &state.inputGates, scratch: &state.dotScratch)
+        recurrentWeights.multiply(state.hidden, into: &state.recurrentGates, scratch: &state.dotScratch)
         for j in 0..<hiddenSize {
-            let f = Self.sigmoid(inputWeights.dot(j, state.input, scratch: &state.dotScratch)
-                + recurrentWeights.dot(j, state.hidden, scratch: &state.dotScratch) + bias[j])
+            let f = Self.sigmoid(state.inputGates[j] + state.recurrentGates[j] + bias[j])
             let gRow = hiddenSize + j
-            let g = Float(tanh(Double(inputWeights.dot(gRow, state.input, scratch: &state.dotScratch)
-                + recurrentWeights.dot(gRow, state.hidden, scratch: &state.dotScratch) + bias[gRow])))
+            let g = Float(tanh(Double(state.inputGates[gRow] + state.recurrentGates[gRow] + bias[gRow])))
             let oRow = 2 * hiddenSize + j
-            let o = Self.sigmoid(inputWeights.dot(oRow, state.input, scratch: &state.dotScratch)
-                + recurrentWeights.dot(oRow, state.hidden, scratch: &state.dotScratch) + bias[oRow])
+            let o = Self.sigmoid(state.inputGates[oRow] + state.recurrentGates[oRow] + bias[oRow])
             let c = f * state.cell[j] + (1 - f) * g
             state.cell[j] = c
             state.spare[j] = o * Float(tanh(Double(c)))
@@ -88,18 +91,17 @@ final class NextWordModel {
         let previous = state.hidden
         state.hidden = state.spare
         state.spare = previous
-        for j in 0..<embeddingSize {
-            state.projected[j] = projection.dot(j, state.hidden, scratch: &state.dotScratch)
-        }
+        projection.multiply(state.hidden, into: &state.projected, scratch: &state.dotScratch)
         return state
     }
 
     /// Natural-log probabilities for every vocabulary entry. Reuse caller's out buffer.
     func logProbs(_ state: State, out: inout [Float]) {
         precondition(state.owner === self && out.count >= vocabularySize)
+        embeddings.multiply(state.projected, into: &out, scratch: &state.dotScratch)
         var maximum = -Float.infinity
         for i in 0..<vocabularySize {
-            let score = embeddings.dot(i, state.projected, scratch: &state.dotScratch) + outputBias[i]
+            let score = out[i] + outputBias[i]
             out[i] = score
             maximum = max(maximum, score)
         }
@@ -128,6 +130,26 @@ final class NextWordModel {
         let scales: [Float]
         let bytes: [Int8]
 
+        /// Hoist buffer access out of the row loop. Quantized weights stay compact; only
+        /// one row is widened at a time, with the same vDSP dot/scaling order as dot().
+        func multiply(_ x: [Float], into out: inout [Float], scratch: inout [Float]) {
+            bytes.withUnsafeBufferPointer { q in
+                x.withUnsafeBufferPointer { values in
+                    scratch.withUnsafeMutableBufferPointer { temp in
+                        out.withUnsafeMutableBufferPointer { result in
+                            for row in scales.indices {
+                                vDSP_vflt8(q.baseAddress!.advanced(by: row * columns), 1,
+                                           temp.baseAddress!, 1, vDSP_Length(columns))
+                                var sum: Float = 0
+                                vDSP_dotpr(temp.baseAddress!, 1, values.baseAddress!, 1, &sum, vDSP_Length(columns))
+                                result[row] = sum * scales[row]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         func dot(_ row: Int, _ x: [Float], scratch: inout [Float]) -> Float {
             var result: Float = 0
             bytes.withUnsafeBufferPointer { q in
@@ -145,9 +167,13 @@ final class NextWordModel {
         }
 
         func row(_ row: Int, into out: inout [Float]) {
-            let scale = scales[row]
-            let base = row * columns
-            for j in 0..<columns { out[j] = Float(bytes[base + j]) * scale }
+            var scale = scales[row]
+            bytes.withUnsafeBufferPointer { q in
+                out.withUnsafeMutableBufferPointer { target in
+                    vDSP_vflt8(q.baseAddress!.advanced(by: row * columns), 1, target.baseAddress!, 1, vDSP_Length(columns))
+                    vDSP_vsmul(target.baseAddress!, 1, &scale, target.baseAddress!, 1, vDSP_Length(columns))
+                }
+            }
         }
     }
 

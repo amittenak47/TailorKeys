@@ -9,6 +9,7 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
     var onRearrange: (() -> Void)?
     var onResetLayout: (() -> Void)?
     var onNumberRow: ((Bool) -> Bool)?
+    var onLanguageChange: (() -> Void)?
     var onTemplate: ((Template) -> Void)?
     /// Types the layout's share code into the text field.
     var onTypeCode: (() -> Void)?
@@ -261,6 +262,26 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
     }
 
     private func buildTypingTab() {
+        let languages = label("Languages")
+        languages.font = .boldSystemFont(ofSize: 15)
+        stack.addArrangedSubview(languages)
+        for code in Prefs.languageCodes {
+            stack.addArrangedSubview(switchRow(Prefs.languageNames[code] ?? code, settings.languages.contains(code)) { [weak self] on in
+                guard let self = self else { return }
+                var enabled = self.settings.languages
+                if on { enabled.append(code) } else { enabled.removeAll { $0 == code } }
+                self.settings.setLanguages(enabled)
+                self.onLanguageChange?()
+                self.build()
+            })
+        }
+        stack.addArrangedSubview(menuRow("Active language", current: Prefs.languageNames[settings.currentLanguage] ?? "",
+            options: settings.languages.map { Prefs.languageNames[$0] ?? $0 }) { [weak self] title in
+            guard let self = self, let code = Prefs.languageCodes.first(where: { Prefs.languageNames[$0] == title }) else { return }
+            self.settings.currentLanguage = code
+            self.onLanguageChange?()
+            self.build()
+        })
         stack.addArrangedSubview(switchRow("Capitalize sentences", settings.autoCap) { [weak self] on in self?.settings.set(Prefs.autoCap, on) })
         stack.addArrangedSubview(switchRow("Double space types a period", settings.doubleSpace) { [weak self] on in self?.settings.set(Prefs.doubleSpace, on) })
         stack.addArrangedSubview(switchRow("Key click sound", settings.clicks) { [weak self] on in self?.settings.set(Prefs.clicks, on) })
@@ -283,6 +304,8 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
         let assist = label("Assist")
         assist.font = .boldSystemFont(ofSize: 15)
         stack.addArrangedSubview(assist)
+        stack.addArrangedSubview(switchRow("Highlight likely keys", settings.keyTint) { [weak self] on in self?.settings.set(Prefs.keyTint, on); self?.changed() })
+        stack.addArrangedSubview(switchRow("Smart tap areas", settings.smartTargets) { [weak self] on in self?.settings.set(Prefs.smartTargets, on); self?.changed() })
         stack.addArrangedSubview(switchRow("Space accepts chosen word", settings.spaceAccepts) { [weak self] on in self?.settings.set(Prefs.spaceAccepts, on); self?.changed() })
         for (title, key, def) in [("Swipe typing", Prefs.swipeTyping, true), ("Chords", Prefs.chording, false)] {
             let row = switchRow(title, !settings.typeOnPress && settings.bool(key, def)) { [weak self] on in
@@ -299,6 +322,8 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
                 stack.addArrangedSubview(note)
             }
         }
+
+        addNote("The chord list is in the TailorKeys app, under Typing → Chord list.")
 
         stack.addArrangedSubview(linkButton("Reset all settings") { [weak self] in
             guard let self = self else { return }

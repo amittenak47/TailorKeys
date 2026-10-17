@@ -7,13 +7,15 @@ final class GestureDecoder {
     private struct Endpoints: Hashable { let first: Character; let last: Character }
     private final class Entry {
         let word: String
-        let letters: [Character]
+        let letters: CompactLetters
+        let length: Int
         var template: [CGPoint]?
         var shape: [CGPoint]?
-        init(_ word: String, _ letters: [Character]) { self.word = word; self.letters = letters }
+        init(_ word: String, _ letters: CompactLetters) { self.word = word; self.letters = letters; length = word.count }
     }
     private var buckets: [Endpoints: [Entry]] = [:]
     private var known = Set<String>()
+    private var learned: [String: Entry] = [:]
     private var keys: [Character: CGPoint] = [:]
     private var keyWidth: CGFloat = 1
     private var cached: [Entry] = []
@@ -21,16 +23,33 @@ final class GestureDecoder {
 
     init(_ words: [String]) { addWords(words) }
 
-    func addWords(_ words: [String]) {
+    private func addWords(_ words: [String], learning: Bool = false) {
         for word in words {
             guard !word.isEmpty, word.allSatisfy({ $0.isLetter || $0 == "'" }), known.insert(word).inserted else { continue }
-            var letters: [Character] = []
+            var letters = ""
             for letter in word where letter.isLetter {
                 if letters.last != letter { letters.append(letter) }
             }
             guard let first = letters.first, let last = letters.last else { continue }
-            buckets[Endpoints(first: first, last: last), default: []].append(Entry(word, letters))
+            let entry = Entry(word, CompactLetters(letters))
+            buckets[Endpoints(first: first, last: last), default: []].append(entry)
+            if learning { learned[word] = entry }
         }
+    }
+
+    func setUserWords(_ words: [String]) {
+        let wanted = Set(words)
+        let removed = learned.keys.filter { !wanted.contains($0) }
+        if !removed.isEmpty { clearTemplates() }
+        for word in removed {
+            guard let entry = learned.removeValue(forKey: word),
+                  let first = entry.letters.first, let last = entry.letters.last else { continue }
+            let endpoints = Endpoints(first: first, last: last)
+            buckets[endpoints]?.removeAll { $0 === entry }
+            if buckets[endpoints]?.isEmpty == true { buckets.removeValue(forKey: endpoints) }
+            known.remove(word)
+        }
+        addWords(words, learning: true)
     }
 
     func setKeys(_ map: [Character: CGPoint], _ width: CGFloat) {
@@ -40,7 +59,7 @@ final class GestureDecoder {
         clearTemplates()
     }
 
-    private func clearTemplates() {
+    func clearTemplates() {
         for entry in cached { entry.template = nil; entry.shape = nil }
         cached.removeAll(keepingCapacity: true)
     }
@@ -52,7 +71,6 @@ final class GestureDecoder {
                 context: (String?, String) -> Double) -> [Candidate] {
         guard path.count >= 2, !keys.isEmpty else { return [] }
         // Bound retained templates to a few MB in the keyboard extension; never retain a full 60k x 50 cache.
-        if cached.count >= 2048 { clearTemplates() }
         let input = resample(path.map { $0.position })
         let shape = normalize(input)
         let first = keys.filter { distance($0.value, path.first!.position) <= keyWidth * 1.1 }.keys.sorted()
@@ -65,8 +83,9 @@ final class GestureDecoder {
         }
         var top: [Candidate] = []
         for a in first { for b in last { for entry in buckets[Endpoints(first: a, last: b)] ?? [] {
-            guard (max(1, count / 8)...max(4, count * 2 + 2)).contains(entry.word.count) else { continue }
+            guard (max(1, count / 8)...max(4, count * 2 + 2)).contains(entry.length) else { continue }
             if entry.template == nil {
+                if cached.count >= 2048 { clearTemplates() }
                 let ideal = entry.letters.compactMap { keys[$0] }
                 guard ideal.count == entry.letters.count else { continue }
                 let template = resample(ideal)

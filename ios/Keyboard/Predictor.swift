@@ -8,7 +8,7 @@ import Foundation
 final class Predictor {
     private struct Word {
         let text: String
-        let letters: [Character]
+        let letters: CompactLetters
     }
     private struct Candidate {
         let word: String
@@ -20,7 +20,7 @@ final class Predictor {
     private let base: [Word]
     private var rank: [String: Int] = [:]
     private var user: [String: Int] = [:]
-    private var userLetters: [String: [Character]] = [:]
+    private var userLetters: [String: CompactLetters] = [:]
     // Context IDs -> sorted packed (word ID, count) rows. No retained n-gram strings.
     private final class SeedTables {
         let pairs: [UInt64: [UInt64]]
@@ -56,6 +56,26 @@ final class Predictor {
     private var english: EnglishContext?
     private var cachedScores: EnglishContext.Scores?
     private var cachedScoreVersion: UInt64?
+    private static let persistence = DispatchQueue(label: "app.tailorkeys.learning", qos: .utility)
+    private static let wordLimit = 2048, contextLimit = 256, followerLimit = 32
+    private var learningDirty = false
+    private var saveWork: DispatchWorkItem?
+
+    /// Loader-only barrier: a rapid return to a language must see its last queued snapshot.
+    static func waitForLearning() { persistence.sync {} }
+
+    private struct LearningSnapshot {
+        let words: [String: Int]
+        let pairs: [String: [String: Int]]
+        let triples: [String: [String: Int]]
+        let wordKey: String, pairKey: String, tripleKey: String
+        func write() {
+            let store = UserDefaults.standard
+            store.set(words, forKey: wordKey)
+            store.set(pairs, forKey: pairKey)
+            store.set(triples, forKey: tripleKey)
+        }
+    }
 
     init(_ language: String = "en", onReady: @escaping () -> Void = {}) {
         self.language = language
@@ -63,48 +83,46 @@ final class Predictor {
         userKey = "user_words" + suffix
         pairKey = "user_bigrams" + suffix
         tripleKey = "user_trigrams" + suffix
-        if let url = Bundle.main.url(forResource: "words" + suffix, withExtension: "txt"), let text = try? String(contentsOf: url, encoding: .utf8) {
-            base = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-                .filter { !$0.isEmpty }.map { Word(text: $0, letters: Array($0)) }
-        } else {
-            base = []
+        var words: [Word] = []
+        words.reserveCapacity(60_000)
+        if let url = Bundle.main.url(forResource: "words" + suffix, withExtension: "txt") {
+            ResourceLines.read(url) { line in
+                let word = line.trimmingCharacters(in: .whitespaces).lowercased()
+                if !word.isEmpty { words.append(Word(text: word, letters: CompactLetters(word))) }
+            }
         }
+        base = words
         for (i, w) in base.enumerated() where rank[w.text] == nil { rank[w.text] = i }
         if language == "en" { english = EnglishContext(base.map { $0.text }, onReady) }
         user = defaults.dictionary(forKey: userKey) as? [String: Int] ?? [:]
-        for w in user.keys { userLetters[w] = Array(w) }
         userPairs = defaults.dictionary(forKey: pairKey) as? [String: [String: Int]] ?? [:]
         userTriples = defaults.dictionary(forKey: tripleKey) as? [String: [String: Int]] ?? [:]
+        boundLearning()
         // Only these base words and learned words can enter the frequency top 300.
         topWords = Array(Set(base.prefix(300).map { $0.text } + Array(user.keys))).sorted {
             let a = frequency($0), b = frequency($1)
             return a == b ? $0 < $1 : a > b
         }.prefix(300).map { $0 }
-        let wordRanks = rank
-        let wordTexts = base.map { $0.text }
-        DispatchQueue(label: "app.tailorkeys.ngrams", qos: .utility).async { [weak self] in
-            let pairs = Self.loadCounts("bigrams" + suffix, 2, wordRanks)
-            let triples = Self.loadCounts("trigrams" + suffix, 3, wordRanks)
-            // Conversation counts complement AOSP ranks only in the new languages.
-            var frequencies: [Double] = []
-            if language != "en" {
-                frequencies = [Double](repeating: 0, count: wordTexts.count)
-                for (context, row) in pairs { for entry in row {
-                    let count = Double(entry & 0xFFFF_FFFF)
-                    frequencies[Int(context)] += count
-                    frequencies[Int(entry >> 32)] += count
-                } }
-                if let max = frequencies.max(), max > 0 { frequencies = frequencies.map { $0 / max } }
+        // The non-UIKit factory calls this initializer on its serial loader. Parse here so
+        // an obsolete request cannot leave a second language's n-gram worker alive.
+        let pairs = Self.loadCounts("bigrams" + suffix, 2, rank)
+        let triples = Self.loadCounts("trigrams" + suffix, 3, rank)
+        var frequencies: [Double] = []
+        if language != "en" {
+            frequencies = [Double](repeating: 0, count: base.count)
+            for (context, row) in pairs { for entry in row {
+                let count = Double(entry & 0xFFFF_FFFF)
+                frequencies[Int(context)] += count
+                frequencies[Int(entry >> 32)] += count
+            } }
+            if let maximum = frequencies.max(), maximum > 0 {
+                for i in frequencies.indices { frequencies[i] /= maximum }
             }
-            let common = frequencies.indices.sorted { frequencies[$0] == frequencies[$1] ? $0 < $1 : frequencies[$0] > frequencies[$1] }.prefix(300).map { wordTexts[$0] }
-            let tables = SeedTables(pairs, triples, frequencies, common)
-            guard let self = self else { return }
-            // Publish both immutable tables together; all cache mutation stays on the caller thread.
-            self.tableLock.lock()
-            self.seedTables = tables
-            self.tableLock.unlock()
-            onReady()
         }
+        let common = frequencies.indices.sorted {
+            frequencies[$0] == frequencies[$1] ? $0 < $1 : frequencies[$0] > frequencies[$1]
+        }.prefix(300).map { base[$0].text }
+        seedTables = SeedTables(pairs, triples, frequencies, common)
     }
 
     func setLayout(_ grid: KeyGrid) {
@@ -135,6 +153,17 @@ final class Predictor {
     func updateContext(_ before: String, _ prefix: String) { english?.update(before, prefix) }
     func resetContext() { english?.reset() }
 
+    func trimMemory() {
+        cachedCandidates = nil; cachedTables = nil; cachedScores = nil; cachedTaps = nil
+        english?.trimMemory()
+    }
+
+    func deactivate() {
+        flushLearning()
+        cachedCandidates = nil; cachedTables = nil; cachedScores = nil; cachedTaps = nil
+        english?.cancel()
+    }
+
     private func gridCost(_ a: Character, _ b: Character) -> Int {
         if a == b { return 0 }
         if let first = a.unicodeScalars.first?.value, let second = b.unicodeScalars.first?.value,
@@ -155,14 +184,13 @@ final class Predictor {
     }
 
     private static func loadCounts(_ name: String, _ n: Int, _ rank: [String: Int]) -> [UInt64: [UInt64]] {
-        guard let url = Bundle.main.url(forResource: name, withExtension: "txt"),
-              let text = try? String(contentsOf: url, encoding: .utf8) else { return [:] }
+        guard let url = Bundle.main.url(forResource: name, withExtension: "txt") else { return [:] }
         var rows: [UInt64: [UInt64]] = [:]
-        for line in text.split(whereSeparator: \.isNewline) {
+        ResourceLines.read(url) { line in
             let parts = line.split(separator: " ")
             guard parts.count == n + 1, let first = rank[String(parts[0])],
                   let second = rank[String(parts[1])], let word = rank[String(parts[n - 1])],
-                  let count = UInt32(parts[n]), count > 0 else { continue }
+                  let count = UInt32(parts[n]), count > 0 else { return }
             let key = n == 2 ? UInt64(first) : contextId(first, second)
             rows[key, default: []].append((UInt64(word) << 32) | UInt64(count))
         }
@@ -183,7 +211,7 @@ final class Predictor {
     }
 
     // Costs are tenths. Three bounded rows are reused for every dictionary entry in a lookup.
-    private func cost(_ p: [Character], _ w: [Character], _ limit: Int,
+    private func cost(_ p: [Character], _ w: CompactLetters, _ limit: Int,
                       _ older: inout [Int], _ previous: inout [Int], _ current: inout [Int], _ taps: ComposingTaps?) -> Int {
         guard let first = w.first else { return 1000 }
         let transposed = w.count > 1 && p[0] == w[1] && p[1] == w[0]
@@ -258,7 +286,7 @@ final class Predictor {
         var previous = older
         var current = older
         var all: [Candidate] = []
-        func add(_ w: String, _ chars: [Character]) {
+        func add(_ w: String, _ chars: CompactLetters) {
             if w.hasPrefix("<") || w == p { return }
             let completion = w.hasPrefix(p)
             let distance: Int
@@ -293,7 +321,8 @@ final class Predictor {
             }
             pool.formUnion(learnedTriples.keys)
             pool.formUnion(learnedPairs.keys)
-            for w in pool { add(w, []) }
+            let empty = CompactLetters("")
+            for w in pool { add(w, empty) }
         } else {
             for (w, chars) in userLetters { add(w, chars) }
             for (i, w) in base.enumerated() where user[w.text] == nil && rank[w.text] == i { add(w.text, w.letters) }
@@ -322,10 +351,24 @@ final class Predictor {
         return result
     }
 
-    func nextLetters(_ prefix: String, _ prev: String?, _ prev2: String? = nil, taps: ComposingTaps? = nil) -> [Character: Double] {
+    struct Suggestions {
+        let weights: [Character: Double]
+        let explore: [String]
+        let closest: [String]
+    }
+
+    func suggestions(_ prefix: String, _ prev: String?, _ prev2: String?, taps: ComposingTaps?, weights: Bool) -> Suggestions {
+        // Rank once against one English score version. A worker publication between calls
+        // must not make the wheels and key weights scan the dictionary again or disagree.
+        let ranked = candidates(prefix, prev, prev2, taps)
+        return Suggestions(weights: weights ? nextLetters(ranked, prefix) : [:],
+                           explore: explore(ranked, prefix, prev, prev2), closest: closest(ranked, prefix))
+    }
+
+    private func nextLetters(_ ranked: [Candidate], _ prefix: String) -> [Character: Double] {
         let length = prefix.count
         var weights: [Character: Double] = [:]
-        for candidate in candidates(prefix, prev, prev2, taps) where !candidate.correction {
+        for candidate in ranked where !candidate.correction {
             guard let letter = candidate.word.dropFirst(length).first else { continue }
             weights[letter, default: 0] += exp(candidate.score)
         }
@@ -338,8 +381,7 @@ final class Predictor {
         return prefix.count >= 2 && !user.keys.contains { $0.hasPrefix(p) } && !base.contains { $0.text.hasPrefix(p) }
     }
 
-    func closest(_ prefix: String, _ prev: String? = nil, _ prev2: String? = nil, _ n: Int = 8, taps: ComposingTaps? = nil) -> [String] {
-        let c = candidates(prefix, prev, prev2, taps)
+    private func closest(_ c: [Candidate], _ prefix: String, _ n: Int = 8) -> [String] {
         let maxCorrections = c.reduce(0) { $0 + ($1.correction ? 0 : 1) } < 5 ? n : 3
         var corrections = 0
         var result: [String] = []
@@ -354,8 +396,7 @@ final class Predictor {
         return result
     }
 
-    func explore(_ prefix: String, _ prev: String? = nil, _ prev2: String? = nil, _ n: Int = 8, taps: ComposingTaps? = nil) -> [String] {
-        let c = candidates(prefix, prev, prev2, taps)
+    private func explore(_ c: [Candidate], _ prefix: String, _ prev: String?, _ prev2: String?, _ n: Int = 8) -> [String] {
         let seed = prefix.lowercased() + "\t" + (prev ?? "") + "\t" + (prev2 ?? "")
         var rng = SplitMix(seed: seed.utf8.reduce(5381) { ($0 &* 33) &+ UInt64($1) })
         // Weighted sampling without replacement. Temperature 2.5 flattens the ranking.
@@ -367,33 +408,81 @@ final class Predictor {
     }
 
     /// Symbol suggestions for the 123 and #+= layers, based on the character before the cursor.
+    private static let symbolClosers: [Character: [String]] = [
+        "(": [")", " ", ".", ","], "[": ["]", " ", ".", ","], "{": ["}", " ", ".", ","],
+        "<": [">", " ", ".", ","], "\"": ["\"", " ", ".", ","], "'": ["'", " ", ".", ","],
+    ]
+    private static let numberSymbols = [".", ",", "%", "$", ":", "-", "/"]
+    private static let defaultSymbols = [".", ",", "?", "!", "'", "\"", ":", ";"]
+    private static let exploreSymbols = ["…", "->", "=>", "—", "≠", "±", "°", "×", "÷", "≈", "✓", ":)", "<3", "©", "™", "§"]
     func symbols(before: Character?) -> (explore: [String], closest: [String]) {
-        let closers: [Character: String] = ["(": ")", "[": "]", "{": "}", "<": ">", "\"": "\"", "'": "'"]
         let closest: [String]
-        if let b = before, let close = closers[b] { closest = [close, ".", ","] }
-        else if let b = before, b.isNumber { closest = [".", ",", "%", "$", ":", "-", "/"] }
-        else { closest = [".", ",", "?", "!", "'", "\"", ":", ";"] }
-        return (["…", "->", "=>", "—", "≠", "±", "°", "×", "÷", "≈", "✓", ":)", "<3", "©", "™", "§"], closest)
+        if let b = before, let close = Self.symbolClosers[b] { closest = close }
+        else if let b = before, b.isNumber { closest = Self.numberSymbols }
+        else { closest = Self.defaultSymbols }
+        return (Self.exploreSymbols, closest)
     }
 
     /// Remembers a word you typed.
     func learn(_ word: String, _ prev: String? = nil, _ prev2: String? = nil) {
         let w = word.lowercased()
-        guard w.count >= 2, w.allSatisfy({ $0.isLetter || $0 == "'" }) else { return }
-        user[w, default: 0] += 1
-        if userLetters[w] == nil { userLetters[w] = Array(w) }
-        if let prev = prev {
-            userPairs[prev, default: [:]][w, default: 0] += 1
-            if let prev2 = prev2 { userTriples[prev2 + "\t" + prev, default: [:]][w, default: 0] += 1 }
+        guard (2...64).contains(w.count), w.utf8.count <= 64, w.allSatisfy({ $0.isLetter || $0 == "'" }) else { return }
+        user[w] = min(1_000_000, (user[w] ?? 0) + 1)
+        if userLetters[w] == nil { userLetters[w] = CompactLetters(w) }
+        if let prev = prev, prev.utf8.count <= 64 {
+            userPairs[prev, default: [:]][w] = min(1_000_000, (userPairs[prev]?[w] ?? 0) + 1)
+            if let prev2 = prev2, prev2.utf8.count <= 64 {
+                let key = prev2 + "\t" + prev
+                userTriples[key, default: [:]][w] = min(1_000_000, (userTriples[key]?[w] ?? 0) + 1)
+                Self.trimFollowers(&userTriples, key)
+            }
+            Self.trimFollowers(&userPairs, prev)
         }
+        if user.count > Self.wordLimit || userPairs.count > Self.contextLimit || userTriples.count > Self.contextLimit { boundLearning() }
         cachedCandidates = nil
-        save()
+        learningDirty = true
+        saveWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.flushLearning() }
+        saveWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
     }
 
-    func save() {
-        defaults.set(user, forKey: userKey)
-        defaults.set(userPairs, forKey: pairKey)
-        defaults.set(userTriples, forKey: tripleKey)
+    /// Called on the owner thread. Only immutable COW snapshots enter the persistence queue.
+    func flushLearning(wait: Bool = false) {
+        saveWork?.cancel(); saveWork = nil
+        if learningDirty {
+            learningDirty = false
+            let snapshot = LearningSnapshot(words: user, pairs: userPairs, triples: userTriples,
+                                            wordKey: userKey, pairKey: pairKey, tripleKey: tripleKey)
+            Self.persistence.async { snapshot.write() }
+        }
+        if wait { Self.persistence.sync {} }
+    }
+
+    private static func trimFollowers(_ contexts: inout [String: [String: Int]], _ key: String) {
+        guard let row = contexts[key], row.count > followerLimit,
+              let least = row.min(by: { $0.value == $1.value ? $0.key > $1.key : $0.value < $1.value }) else { return }
+        contexts[key]?.removeValue(forKey: least.key)
+    }
+
+    private func boundLearning() {
+        func bounded(_ words: [String: Int], _ limit: Int) -> [String: Int] {
+            let valid = words.filter { (1...64).contains($0.key.utf8.count) && $0.value > 0 }
+            return Dictionary(uniqueKeysWithValues: valid.sorted {
+                $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value
+            }.prefix(limit).map { ($0.key, min(1_000_000, $0.value)) })
+        }
+        func contexts(_ source: [String: [String: Int]]) -> [String: [String: Int]] {
+            let rows = source.filter { $0.key.utf8.count <= 129 }.mapValues { bounded($0, Self.followerLimit) }
+            return Dictionary(uniqueKeysWithValues: rows.sorted {
+                let a = $0.value.values.reduce(0, +), b = $1.value.values.reduce(0, +)
+                return a == b ? $0.key < $1.key : a > b
+            }.prefix(Self.contextLimit).map { ($0.key, $0.value) })
+        }
+        user = bounded(user, Self.wordLimit)
+        userPairs = contexts(userPairs); userTriples = contexts(userTriples)
+        userLetters.removeAll(keepingCapacity: true)
+        for word in user.keys { userLetters[word] = CompactLetters(word) }
     }
 
     private func matchCase(_ w: String, _ prefix: String) -> String {
