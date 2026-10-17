@@ -1,6 +1,7 @@
 import UIKit
 
-/// Native tiles over the keyboard, with scrolling at small heights and standard VoiceOver controls.
+/// Compact quick options over the keys: a 4 × 2 grid of key-styled tiles (icon, label, state) that fits the keyboard
+/// without scrolling; a scroll view remains only as a fallback for very small keyboards.
 final class QuickOptions: UIView {
     var onClose: (() -> Void)?
     var onRearrange: (() -> Void)?
@@ -11,17 +12,58 @@ final class QuickOptions: UIView {
     private let stripHeight: () -> CGFloat
     private let titleLabel = UILabel()
     private let closeButton = UIButton(type: .system)
-    private let sizeLabel = UILabel()
     private var headerHeight: NSLayoutConstraint!
-    private var buttons: [UIButton] = []
-    private var split: UIButton!
-    private var oneHand: UIButton!
-    private var smaller: UIButton!
-    private var larger: UIButton!
-    private var theme: UIButton!
-    private var language: UIButton!
-    private var swipe: UIButton!
     private var landscape: Bool { UIScreen.main.bounds.width > UIScreen.main.bounds.height }
+
+    /// One grid cell: icon over label over a muted state line.
+    private final class Tile: UIControl {
+        let iconView = UIImageView()
+        let glyph = UILabel()
+        let label = UILabel()
+        let stateLabel = UILabel()
+        var on = false
+        var action: (() -> Void)?
+        init(icon: String?, title: String) {
+            super.init(frame: .zero)
+            iconView.contentMode = .scaleAspectFit
+            iconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 16, weight: .medium)
+            if let icon = icon { iconView.image = UIImage(systemName: icon) }
+            glyph.font = .systemFont(ofSize: 15, weight: .bold)
+            label.text = title
+            label.font = .systemFont(ofSize: 12, weight: .medium)
+            stateLabel.font = .systemFont(ofSize: 11)
+            for l in [glyph, label, stateLabel] { l.textAlignment = .center; l.adjustsFontSizeToFitWidth = true; l.minimumScaleFactor = 0.8 }
+            let top: UIView = icon == nil ? glyph : iconView
+            let stack = UIStackView(arrangedSubviews: [top, label, stateLabel])
+            stack.axis = .vertical
+            stack.alignment = .center
+            stack.spacing = 1
+            stack.isUserInteractionEnabled = false
+            stack.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(stack)
+            NSLayoutConstraint.activate([
+                top.heightAnchor.constraint(equalToConstant: 20),
+                stack.centerXAnchor.constraint(equalTo: centerXAnchor), stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+                stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 2),
+                heightAnchor.constraint(equalToConstant: 60),
+            ])
+            isAccessibilityElement = true
+            accessibilityTraits = .button
+            addAction(UIAction { [weak self] _ in self?.action?() }, for: .touchUpInside)
+        }
+        required init?(coder: NSCoder) { fatalError("not used") }
+    }
+
+    private var tiles: [Tile] = []
+    private var split: Tile!
+    private var oneHand: Tile!
+    private var size: Tile!
+    private let smaller = UIButton(type: .system)
+    private let larger = UIButton(type: .system)
+    private var theme: Tile!
+    private var language: Tile!
+    private var swipe: Tile!
+    private var all: Tile!
 
     init(settings: KeyboardSettings, stripHeight: @escaping () -> CGFloat) {
         self.settings = settings
@@ -29,16 +71,18 @@ final class QuickOptions: UIView {
         super.init(frame: .zero)
         accessibilityViewIsModal = true
         titleLabel.text = "Quick options"
-        titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         titleLabel.accessibilityTraits = .header
-        closeButton.setTitle("✕", for: .normal)
+        closeButton.setTitle("Done", for: .normal)
+        closeButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
         closeButton.accessibilityLabel = "Close quick options"
         closeButton.addAction(UIAction { [weak self] _ in self?.onClose?() }, for: .touchUpInside)
         let header = UIStackView(arrangedSubviews: [titleLabel, closeButton])
         header.alignment = .center
-        closeButton.widthAnchor.constraint(equalToConstant: 48).isActive = true
+        closeButton.widthAnchor.constraint(equalToConstant: 64).isActive = true
         let scroll = UIScrollView()
         scroll.alwaysBounceVertical = false
+        scroll.showsVerticalScrollIndicator = false
         let rows = UIStackView()
         rows.axis = .vertical
         rows.spacing = 6
@@ -47,75 +91,71 @@ final class QuickOptions: UIView {
         scroll.addSubview(rows)
         headerHeight = header.heightAnchor.constraint(equalToConstant: stripHeight())
         NSLayoutConstraint.activate([
-            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             header.topAnchor.constraint(equalTo: topAnchor), headerHeight,
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor), scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.topAnchor.constraint(equalTo: header.bottomAnchor), scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
             rows.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 8),
             rows.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -8),
-            rows.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 4),
+            rows.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 2),
             rows.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -8),
             rows.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -16),
         ])
         func row() -> UIStackView {
-            let r = UIStackView(); r.spacing = 6; r.distribution = .fillEqually; r.alignment = .fill
+            let r = UIStackView(); r.spacing = 6; r.distribution = .fillEqually
             rows.addArrangedSubview(r)
             return r
         }
+        func tile(_ title: String, icon: String?, in r: UIStackView, changes: Bool = true, action: ((QuickOptions) -> Void)?) -> Tile {
+            let t = Tile(icon: icon, title: title)
+            if let action = action {
+                t.action = { [weak self] in
+                    guard let self = self else { return }
+                    action(self)
+                    if changes { self.onChange?() }
+                    self.refresh()
+                }
+            }
+            r.addArrangedSubview(t)
+            tiles.append(t)
+            return t
+        }
         let first = row()
-        first.addArrangedSubview(tile("Rearrange", icon: "arrow.left.arrow.right", changes: false) { $0.onRearrange?() })
-        split = tile("Split", icon: "rectangle.split.2x1") { s in s.settings.setSplitFor(s.landscape, !s.settings.split(s.landscape)) }
-        first.addArrangedSubview(split)
+        _ = tile("Rearrange", icon: "square.grid.3x2", in: first, changes: false) { $0.onRearrange?() }
+        split = tile("Split", icon: "rectangle.split.2x1", in: first) { s in s.settings.setSplitFor(s.landscape, !s.settings.split(s.landscape)) }
+        oneHand = tile("One hand", icon: "hand.point.up.left", in: first) { $0.settings.cycleQuickOneHand($0.landscape) }
+        size = tile("Size", icon: "arrow.up.and.down", in: first, action: nil)
+        // Size keeps its − / + as two halves of its state line.
+        size.stateLabel.isHidden = true
+        size.isAccessibilityElement = false
+        for (b, title, delta) in [(smaller, "−", -2), (larger, "+", 2)] {
+            b.setTitle(title, for: .normal)
+            b.titleLabel?.font = .systemFont(ofSize: 18, weight: .medium)
+            b.addAction(UIAction { [weak self] _ in
+                guard let self = self else { return }
+                self.settings.adjustQuickHeight(self.landscape, delta)
+                self.onChange?()
+                self.refresh()
+            }, for: .touchUpInside)
+        }
+        let steps = UIStackView(arrangedSubviews: [smaller, larger])
+        steps.distribution = .fillEqually
+        steps.translatesAutoresizingMaskIntoConstraints = false
+        size.addSubview(steps)
+        NSLayoutConstraint.activate([
+            steps.leadingAnchor.constraint(equalTo: size.leadingAnchor), steps.trailingAnchor.constraint(equalTo: size.trailingAnchor),
+            steps.bottomAnchor.constraint(equalTo: size.bottomAnchor), steps.heightAnchor.constraint(equalToConstant: 26),
+        ])
         let second = row()
-        oneHand = tile("One hand", icon: "hand.point.up.left") { $0.settings.cycleQuickOneHand($0.landscape) }
-        second.addArrangedSubview(oneHand)
-        let size = UIStackView(); size.axis = .vertical; size.spacing = 2
-        sizeLabel.textAlignment = .center
-        sizeLabel.font = .systemFont(ofSize: 13)
-        size.addArrangedSubview(sizeLabel)
-        let sizeButtons = UIStackView(); sizeButtons.distribution = .fillEqually; sizeButtons.spacing = 6
-        smaller = tile("−", icon: nil) { $0.settings.adjustQuickHeight($0.landscape, -2) }
-        larger = tile("+", icon: nil) { $0.settings.adjustQuickHeight($0.landscape, 2) }
-        for b in [smaller!, larger!] { sizeButtons.addArrangedSubview(b) }
-        size.addArrangedSubview(sizeButtons)
-        second.addArrangedSubview(size)
-        let third = row()
-        theme = tile("Theme", icon: "circle.lefthalf.filled") { $0.settings.cycleQuickTheme() }
-        language = tile("Language", icon: "globe", changes: false) { $0.onLanguage?() }
-        third.addArrangedSubview(theme); third.addArrangedSubview(language)
-        let fourth = row()
-        swipe = tile("Swipe typing", icon: "scribble") { s in s.settings.set(Prefs.swipeTyping, !s.settings.bool(Prefs.swipeTyping, true)) }
-        fourth.addArrangedSubview(swipe)
-        fourth.addArrangedSubview(tile("All settings", icon: "gearshape", changes: false) { $0.onSettings?() })
+        theme = tile("Theme", icon: "circle.lefthalf.filled", in: second) { $0.settings.cycleQuickTheme() }
+        language = tile("Language", icon: nil, in: second, changes: false) { $0.onLanguage?() }
+        swipe = tile("Swipe", icon: "scribble", in: second) { s in s.settings.set(Prefs.swipeTyping, !s.settings.bool(Prefs.swipeTyping, true)) }
+        all = tile("Settings", icon: "gearshape", in: second, changes: false) { $0.onSettings?() }
         refresh()
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
-
-    private func tile(_ label: String, icon: String?, changes: Bool = true, action: @escaping (QuickOptions) -> Void) -> UIButton {
-        let b = UIButton(type: .system)
-        b.setTitle(label, for: .normal)
-        if let icon = icon { b.setImage(UIImage(systemName: icon), for: .normal) }
-        b.titleLabel?.font = UIFontMetrics(forTextStyle: .body).scaledFont(for: .systemFont(ofSize: 14))
-        b.titleLabel?.adjustsFontForContentSizeCategory = true
-        b.titleLabel?.numberOfLines = 0
-        b.titleLabel?.textAlignment = .center
-        b.contentEdgeInsets = UIEdgeInsets(top: 8, left: 6, bottom: 8, right: 6)
-        b.heightAnchor.constraint(greaterThanOrEqualToConstant: 56).isActive = true
-        b.widthAnchor.constraint(greaterThanOrEqualToConstant: 48).isActive = true
-        b.accessibilityLabel = label
-        b.layer.cornerRadius = 10
-        b.layer.borderWidth = 1
-        b.addAction(UIAction { [weak self] _ in
-            guard let self = self else { return }
-            action(self)
-            if changes { self.onChange?() }
-            self.refresh()
-        }, for: .touchUpInside)
-        buttons.append(b)
-        return b
-    }
 
     func refresh() {
         let p = Palette.of(settings.theme, dark: traitCollection.userInterfaceStyle == .dark)
@@ -123,35 +163,41 @@ final class QuickOptions: UIView {
         titleLabel.textColor = p.text
         closeButton.tintColor = p.accent
         headerHeight.constant = stripHeight()
-        func state(_ b: UIButton, _ label: String, _ value: String, on: Bool = false) {
-            b.setTitle(" \(label)\n\(value)", for: .normal)
-            b.accessibilityLabel = label
-            b.accessibilityValue = value
-            b.isSelected = on
+        func state(_ t: Tile, _ value: String, on: Bool = false, enabled: Bool = true) {
+            t.stateLabel.text = value
+            t.on = on
+            t.isEnabled = enabled
+            t.accessibilityLabel = t.label.text
+            t.accessibilityValue = value
         }
-        state(split, "Split", settings.split(landscape) ? "On" : "Off", on: settings.split(landscape))
+        state(split, settings.split(landscape) ? "On" : "Off", on: settings.split(landscape))
         let hand: String
         switch settings.quickOneHand(landscape) { case .center: hand = "Off"; case .left: hand = "Left"; case .right: hand = "Right" }
-        state(oneHand, "One hand", hand, on: hand != "Off")
+        state(oneHand, hand, on: hand != "Off")
         let height = settings.int(Prefs.height(landscape))
-        sizeLabel.text = "↕ Size \(height)%"
-        sizeLabel.textColor = p.text
+        size.label.text = "Size \(height)%"
         smaller.accessibilityLabel = "Size, decrease"
         larger.accessibilityLabel = "Size, increase"
-        for b in [smaller!, larger!] { b.accessibilityValue = "\(height) percent" }
+        for b in [smaller, larger] { b.accessibilityValue = "\(height) percent"; b.tintColor = p.text }
         smaller.isEnabled = height > Prefs.height(landscape).min
         larger.isEnabled = height < Prefs.height(landscape).max
-        state(theme, "Theme", settings.theme == .system ? "System" : settings.theme.title)
-        state(language, "Language", settings.currentLanguage.uppercased())
-        language.isEnabled = settings.languages.count > 1
+        state(theme, settings.theme == .system ? "System" : settings.theme.title)
+        language.glyph.text = settings.currentLanguage.uppercased()
+        let multi = settings.languages.count > 1
+        state(language, multi ? "Tap to switch" : "Only one", enabled: multi)
         let swipeOn = settings.bool(Prefs.swipeTyping, true)
-        state(swipe, "Swipe typing", swipeOn ? "On" : "Off", on: swipeOn)
-        for b in buttons {
-            b.alpha = b.isEnabled ? 1 : 0.4
-            b.backgroundColor = b.isSelected ? p.accent : p.key
-            b.tintColor = b.isSelected ? p.onAccent : p.text
-            b.setTitleColor(b.isSelected ? p.onAccent : p.text, for: .normal)
-            b.layer.borderColor = (b.isSelected ? p.accent : p.hint).cgColor
+        state(swipe, swipeOn ? "On" : "Off", on: swipeOn)
+        state(all, "All")
+        let radius = CGFloat(settings.int(Prefs.cornerRadius))
+        for t in tiles {
+            t.alpha = t.isEnabled ? 1 : 0.45
+            t.backgroundColor = p.key
+            t.layer.cornerRadius = radius
+            let ink = t.on ? p.accent : p.text
+            t.iconView.tintColor = ink
+            t.glyph.textColor = ink
+            t.label.textColor = ink
+            t.stateLabel.textColor = t.on ? p.accent : p.hint
         }
     }
 

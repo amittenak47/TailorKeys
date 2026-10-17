@@ -1,9 +1,10 @@
 package app.tailorkeys
 
 import android.content.Context
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
-import android.widget.Button
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -27,10 +28,19 @@ internal class CursorJoystick {
     private var fraction = 0.0
     private var lastTime: Long? = null
 
+    private var smoothed = 0.0
+
+    /**
+     * [dx] is the finger's distance from where it pressed, in dp. Speed follows a gentle curve: about 2 chars/s just
+     * outside the 8 dp dead zone (precise), ~8 at 58 dp, up to 28 at 108 dp and beyond. The distance is smoothed so
+     * finger jitter doesn't make the speed jump.
+     */
     fun displace(dx: Float, now: Long): Int {
         var steps = advance(now)
-        val magnitude = abs(dx.toDouble())
-        val next = if (magnitude <= 6) 0.0 else min(45.0, 4.0 + 1.2 * (magnitude - 6)) * if (dx < 0) -1 else 1
+        smoothed += (dx - smoothed) * 0.35
+        val magnitude = abs(smoothed)
+        val u = ((magnitude - 8) / 100).coerceIn(0.0, 1.0)
+        val next = if (magnitude <= 8) 0.0 else (2.0 + 26.0 * u * u) * if (smoothed < 0) -1 else 1
         if (next == 0.0 || next * speed < 0) fraction = 0.0
         if (next != 0.0 && speed == 0.0) steps += if (next < 0) -1 else 1
         speed = next
@@ -59,7 +69,10 @@ internal class GapPresses {
     fun clear() { liftedAt = null }
 }
 
-/** Native, scrollable tiles keep the full panel reachable even at the minimum keyboard height. */
+/**
+ * Compact quick options over the keys: a 4 × 2 grid of key-styled tiles (icon, label, state) that fits the keyboard
+ * without scrolling; a scroll view remains only as a fallback for very small keyboards.
+ */
 class QuickOptions(
     context: Context,
     private val settings: KeyboardSettings,
@@ -74,108 +87,130 @@ class QuickOptions(
     private fun dp(n: Int) = (n * d).toInt()
     private val title = TextView(context)
     private val header = LinearLayout(context)
-    private val closeButton = Button(context)
-    private val buttons = ArrayList<Button>()
-    private val split: Button
-    private val oneHand: Button
-    private val sizeLabel = TextView(context)
-    private val smaller: Button
-    private val larger: Button
-    private val theme: Button
-    private val lang: Button
-    private val swipe: Button
+    private val closeButton = TextView(context)
+
+    /** One grid cell: icon over label over a muted state line. */
+    private inner class Tile(val icon: Int?, val glyph: String?, val label: String) {
+        val box = LinearLayout(context).apply { orientation = VERTICAL; gravity = Gravity.CENTER; isClickable = true; isFocusable = true }
+        val iconView = ImageView(context)
+        val glyphView = TextView(context).apply { textSize = 15f; gravity = Gravity.CENTER; setTypeface(typeface, Typeface.BOLD) }
+        val labelView = TextView(context).apply { textSize = 12f; gravity = Gravity.CENTER; maxLines = 1 }
+        val stateView = TextView(context).apply { textSize = 11f; gravity = Gravity.CENTER; maxLines = 1 }
+        var on = false
+        init {
+            if (icon != null) box.addView(iconView, LayoutParams(dp(20), dp(20)).apply { bottomMargin = dp(2) })
+            else box.addView(glyphView, LayoutParams(LayoutParams.WRAP_CONTENT, dp(20)).apply { bottomMargin = dp(2) })
+            labelView.text = label
+            box.addView(labelView)
+            box.addView(stateView)
+        }
+    }
+
+    private val tiles = ArrayList<Tile>()
+    private val split: Tile
+    private val oneHand: Tile
+    private val size: Tile
+    private val smaller = TextView(context)
+    private val larger = TextView(context)
+    private val theme: Tile
+    private val lang: Tile
+    private val swipe: Tile
 
     init {
         orientation = VERTICAL
         isClickable = true
         title.text = "Quick options"
-        title.textSize = 16f
+        title.textSize = 15f
         title.gravity = Gravity.CENTER_VERTICAL
-        title.setPadding(dp(12), 0, 0, 0)
+        title.setPadding(dp(14), 0, 0, 0)
         if (android.os.Build.VERSION.SDK_INT >= 28) title.isAccessibilityHeading = true
-        closeButton.text = "✕"
+        closeButton.text = "Done"
+        closeButton.textSize = 15f
+        closeButton.gravity = Gravity.CENTER
         closeButton.contentDescription = "Close quick options"
         closeButton.setOnClickListener { close() }
         header.gravity = Gravity.CENTER_VERTICAL
         header.addView(title, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
-        header.addView(closeButton, LayoutParams(dp(48), LayoutParams.MATCH_PARENT))
+        header.addView(closeButton, LayoutParams(dp(72), LayoutParams.MATCH_PARENT))
         addView(header, LayoutParams(LayoutParams.MATCH_PARENT, stripHeight()))
-        val scroll = ScrollView(context).apply { isFillViewport = true }
-        val rows = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(6), dp(4), dp(6), dp(6)) }
-        scroll.addView(rows)
+        val scroll = ScrollView(context).apply { isFillViewport = true; isVerticalScrollBarEnabled = false }
+        val grid = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(6), dp(2), dp(6), dp(6)) }
+        scroll.addView(grid)
         addView(scroll, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
         fun row(): LinearLayout = LinearLayout(context).also {
-            rows.addView(it, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+            grid.addView(it, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         }
-        fun tile(parent: LinearLayout, label: String, action: () -> Unit): Button = Button(context).also {
-            it.text = label
-            it.textSize = 14f
-            it.isAllCaps = false
-            it.minimumHeight = dp(56)
-            it.minHeight = dp(56)
-            it.setPadding(dp(4), dp(4), dp(4), dp(4))
-            parent.addView(it, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) })
-            it.setOnClickListener { action(); refresh() }
-            buttons += it
-        }
+        fun tile(parent: LinearLayout, icon: Int?, glyph: String?, label: String, action: (() -> Unit)?): Tile =
+            Tile(icon, glyph, label).also { t ->
+                t.glyphView.text = glyph
+                parent.addView(t.box, LayoutParams(0, dp(64), 1f).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) })
+                if (action != null) t.box.setOnClickListener { action(); refresh() }
+                tiles += t
+            }
         val first = row()
-        tile(first, "↔  Rearrange") { rearrange() }
-        split = tile(first, "") { val l = landscape(); settings.setSplitFor(l, !settings.split(l)) }
+        tile(first, R.drawable.ic_settings_edit, null, "Rearrange") { rearrange() }
+        split = tile(first, R.drawable.ic_settings_layout, null, "Split") { val l = landscape(); settings.setSplitFor(l, !settings.split(l)) }
+        oneHand = tile(first, R.drawable.ic_settings_expand, null, "One hand") { settings.cycleQuickOneHand(landscape()) }
+        size = tile(first, R.drawable.ic_settings_size, null, "Size", null)
+        // Size keeps its − / + as two halves of its state line.
+        size.box.removeView(size.stateView)
+        val steps = LinearLayout(context).apply { gravity = Gravity.CENTER }
+        for ((view, text, delta) in listOf(Triple(smaller, "−", -2), Triple(larger, "+", 2))) {
+            view.text = text
+            view.textSize = 18f
+            view.gravity = Gravity.CENTER
+            view.setOnClickListener { settings.adjustQuickHeight(landscape(), delta); refresh() }
+            steps.addView(view, LayoutParams(dp(36), dp(24)))
+        }
+        size.box.addView(steps)
         val second = row()
-        oneHand = tile(second, "") { settings.cycleQuickOneHand(landscape()) }
-        val size = LinearLayout(context).apply { orientation = VERTICAL }
-        second.addView(size, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-        sizeLabel.gravity = Gravity.CENTER
-        sizeLabel.textSize = 13f
-        size.addView(sizeLabel)
-        val sizeButtons = LinearLayout(context)
-        size.addView(sizeButtons)
-        smaller = tile(sizeButtons, "−") { settings.adjustQuickHeight(landscape(), -2) }
-        larger = tile(sizeButtons, "+") { settings.adjustQuickHeight(landscape(), 2) }
-        val third = row()
-        theme = tile(third, "") { settings.cycleQuickTheme() }
-        lang = tile(third, "") { language() }
-        val fourth = row()
-        swipe = tile(fourth, "") { settings.set(Prefs.SWIPE_TYPING, !settings.bool(Prefs.SWIPE_TYPING)) }
-        tile(fourth, "⚙  All settings") { allSettings() }
+        theme = tile(second, R.drawable.ic_settings_look, null, "Theme") { settings.cycleQuickTheme() }
+        lang = tile(second, null, "", "Language") { language() }
+        swipe = tile(second, R.drawable.ic_settings_typing, null, "Swipe") { settings.set(Prefs.SWIPE_TYPING, !settings.bool(Prefs.SWIPE_TYPING)) }
+        tile(second, null, "⚙", "Settings") { allSettings() }
         refresh()
     }
 
     fun refresh() {
         val l = landscape()
         val p = Palette.of(context, settings.theme())
+        val radius = settings.int(Prefs.CORNER_RADIUS) * d
         setBackgroundColor(p.background)
         title.setTextColor(p.text)
         closeButton.setTextColor(p.accent)
-        closeButton.background = GradientDrawable().apply { setColor(p.background) }
+        closeButton.setTypeface(closeButton.typeface, Typeface.BOLD)
         header.layoutParams = header.layoutParams.apply { height = stripHeight() }
-        fun state(button: Button, icon: String, label: String, value: String, on: Boolean = false) {
-            button.text = "$icon  $label\n$value"
-            button.contentDescription = "$label, $value"
-            button.isSelected = on
+        fun state(tile: Tile, value: String, on: Boolean = false, enabled: Boolean = true) {
+            tile.stateView.text = value
+            tile.on = on
+            tile.box.isEnabled = enabled
+            tile.box.contentDescription = "${tile.labelView.text}, $value"
         }
-        state(split, "◫", "Split", if (settings.split(l)) "On" else "Off", settings.split(l))
+        state(split, if (settings.split(l)) "On" else "Off", settings.split(l))
         val hand = when (settings.quickOneHand(l)) { Align.CENTER -> "Off"; Align.LEFT -> "Left"; Align.RIGHT -> "Right" }
-        state(oneHand, "☝", "One hand", hand, hand != "Off")
+        state(oneHand, hand, hand != "Off")
         val height = settings.int(Prefs.height(l))
-        sizeLabel.text = "↕  Size $height%"
-        sizeLabel.setTextColor(p.text)
+        size.labelView.text = "Size $height%"
+        size.box.contentDescription = "Size, $height percent"
         smaller.contentDescription = "Size, decrease, $height percent"
         larger.contentDescription = "Size, increase, $height percent"
         smaller.isEnabled = height > Prefs.height(l).min
         larger.isEnabled = height < Prefs.height(l).max
-        state(theme, "◐", "Theme", if (settings.theme() == ThemeName.SYSTEM) "System" else settings.theme().title)
-        state(lang, "◎", "Language", settings.currentLanguage().uppercase())
-        lang.isEnabled = settings.languages().size > 1
-        state(swipe, "〰", "Swipe typing", if (settings.bool(Prefs.SWIPE_TYPING)) "On" else "Off", settings.bool(Prefs.SWIPE_TYPING))
-        for (b in buttons) {
-            b.alpha = if (b.isEnabled) 1f else 0.4f
-            b.setTextColor(if (b.isSelected) p.onAccent else p.text)
-            b.background = GradientDrawable().apply {
-                cornerRadius = dp(10).toFloat()
-                setColor(if (b.isSelected) p.accent else p.key)
-                setStroke(dp(1).coerceAtLeast(1), if (b.isSelected) p.accent else p.hint)
-            }
+        state(theme, if (settings.theme() == ThemeName.SYSTEM) "System" else settings.theme().title)
+        lang.glyphView.text = settings.currentLanguage().uppercase()
+        state(lang, if (settings.languages().size > 1) "Tap to switch" else "Only one", enabled = settings.languages().size > 1)
+        state(swipe, if (settings.bool(Prefs.SWIPE_TYPING)) "On" else "Off", settings.bool(Prefs.SWIPE_TYPING))
+        tiles.last().stateView.text = "All"
+        for (t in tiles) {
+            t.box.alpha = if (t.box.isEnabled) 1f else 0.45f
+            t.box.background = GradientDrawable().apply { cornerRadius = radius; setColor(p.key) }
+            val ink = if (t.on) p.accent else p.text
+            t.iconView.setImageResource(t.icon ?: 0)
+            t.iconView.setColorFilter(ink)
+            t.glyphView.setTextColor(ink)
+            t.labelView.setTextColor(ink)
+            t.stateView.setTextColor(if (t.on) p.accent else p.hint)
         }
+        for (v in listOf(smaller, larger)) { v.setTextColor(p.text); v.alpha = if (v.isEnabled) 1f else 0.35f }
     }
 }

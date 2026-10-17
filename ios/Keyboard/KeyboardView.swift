@@ -703,6 +703,7 @@ final class KeyboardView: UIView {
             drawWheels(ctx)
             drawGear()
             drawSymbol("globe", in: globeRect, color: palette.hint)
+            drawCursorIndicator(ctx)
         }
         let radius = CGFloat(settings.int(Prefs.cornerRadius))
         let pressed = Set(trackers.values.compactMap { $0.pk?.item.id })
@@ -909,6 +910,20 @@ final class KeyboardView: UIView {
         img.draw(at: CGPoint(x: rect.midX - img.size.width / 2, y: rect.midY - img.size.height / 2))
     }
 
+    /// While the centre gap is held: a ring marks where the finger pressed (inside it the cursor stops) and a soft
+    /// glow follows the finger.
+    private func drawCursorIndicator(_ ctx: CGContext) {
+        guard let t = trackers.values.first(where: { $0.kind == .cursor }) else { return }
+        palette.hint.withAlphaComponent(0.55).setStroke()
+        let ring = UIBezierPath(ovalIn: CGRect(x: t.x0 - 8, y: t.y0 - 8, width: 16, height: 16))
+        ring.lineWidth = 1.5
+        ring.stroke()
+        let colors = [palette.hint.withAlphaComponent(0.32).cgColor, palette.hint.withAlphaComponent(0).cgColor] as CFArray
+        guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) else { return }
+        let c = CGPoint(x: t.lastX, y: t.lastY)
+        ctx.drawRadialGradient(gradient, startCenter: c, startRadius: 0, endCenter: c, endRadius: 36, options: [])
+    }
+
     private func drawGear() { drawSymbol("gearshape", in: gearRect, color: palette.hint) }
 
     private func drawToolbar() {
@@ -1089,6 +1104,7 @@ final class KeyboardView: UIView {
         var x0: CGFloat = 0
         var y0: CGFloat = 0
         var lastX: CGFloat = 0
+        var lastY: CGFloat = 0
         let joystick = CursorJoystick()
         var lastCursorClick: TimeInterval = -.infinity
         var deferredClick = false
@@ -1238,7 +1254,7 @@ final class KeyboardView: UIView {
         let hit = findKey(p, strict: true)
         if hit == nil && cursorRect.contains(p) {
             guard !trackers.values.contains(where: { $0.kind == .cursor }) else { return }
-            let t = Tracker(kind: .cursor, pk: nil); t.x0 = p.x; trackers[id] = t
+            let t = Tracker(kind: .cursor, pk: nil); t.x0 = p.x; t.y0 = p.y; t.lastX = p.x; t.lastY = p.y; trackers[id] = t
             setNeedsDisplay()
             return
         }
@@ -1330,8 +1346,10 @@ final class KeyboardView: UIView {
             if abs(p.x - t.x0) > 8 { t.moved = true }
         case .cursor:
             let now = CACurrentMediaTime()
+            t.lastX = p.x; t.lastY = p.y
             moveCursor(t, t.joystick.displace(p.x - t.x0, now), now)
             updateCursorLink()
+            setNeedsDisplay()
         case .stack:
             // One swipe moves exactly one face; the rest of the gesture is ignored.
             guard let sw = swipe, !t.consumed, !sw.stepped, let pk = t.pk else { return }
@@ -1776,10 +1794,17 @@ private final class CursorJoystick {
     private var fraction = 0.0
     private var lastTime: TimeInterval?
 
+    private var smoothed = 0.0
+
+    /// `dx` is the finger's distance from where it pressed, in points. Speed follows a gentle curve: about 2 chars/s
+    /// just outside the 8 pt dead zone (precise), ~8 at 58 pt, up to 28 at 108 pt and beyond. The distance is smoothed
+    /// so finger jitter doesn't make the speed jump.
     func displace(_ dx: CGFloat, _ now: TimeInterval) -> Int {
         var steps = advance(now)
-        let magnitude = abs(Double(dx))
-        let next = magnitude <= 6 ? 0 : min(45, 4 + 1.2 * (magnitude - 6)) * (dx < 0 ? -1.0 : 1.0)
+        smoothed += (Double(dx) - smoothed) * 0.35
+        let magnitude = abs(smoothed)
+        let u = Swift.min(1, Swift.max(0, (magnitude - 8) / 100))
+        let next = magnitude <= 8 ? 0 : (2 + 26 * u * u) * (smoothed < 0 ? -1.0 : 1.0)
         if next == 0 || next * speed < 0 { fraction = 0 }
         if next != 0 && speed == 0 { steps += next < 0 ? -1 : 1 }
         speed = next

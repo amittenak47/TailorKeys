@@ -1052,18 +1052,24 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         canvas.drawPath(shape(area.centerX(), area.centerY(), s, false, 0.25f * dir, -0.5f, -0.25f * dir, 0f, 0.25f * dir, 0.5f), strokeIn(palette.hint, s * 1.5f, 255))
     }
 
-    /** Selection presses get the full accent glow immediately. */
+    /**
+     * While the centre gap is held: a ring marks where the finger pressed (inside it the cursor stops) and a glow
+     * follows the finger. Moving the cursor gets a soft neutral glow; selecting gets a larger accent glow.
+     */
+    @Suppress("UNUSED_PARAMETER")
     private fun drawCursor(canvas: Canvas, radius: Float) {
-        val t = trackers.values.firstOrNull { it.kind == K_CURSOR && it.select } ?: return
-        val r = 64 * density
-        val rgb = palette.accent and 0x00FFFFFF
-        fill.shader = RadialGradient(t.fx, t.fy, r, intArrayOf(rgb or (120 shl 24), rgb), null, Shader.TileMode.CLAMP)
-        canvas.save()
-        path.reset()
-        path.addRoundRect(cursorRect, radius, radius, Path.Direction.CW)
-        canvas.clipPath(path)
+        val t = trackers.values.firstOrNull { it.kind == K_CURSOR } ?: return
+        val select = t.select
+        val colour = if (select) palette.accent else palette.hint
+        val rgb = colour and 0x00FFFFFF
+        stroke.color = colour
+        stroke.alpha = if (select) 200 else 140
+        stroke.strokeWidth = 1.5f * density
+        canvas.drawCircle(t.x0, t.y0, 8 * density, stroke)
+        stroke.alpha = 255
+        val r = (if (select) 56 else 36) * density
+        fill.shader = RadialGradient(t.fx, t.fy, r, intArrayOf(rgb or ((if (select) 130 else 80) shl 24), rgb), null, Shader.TileMode.CLAMP)
         canvas.drawCircle(t.fx, t.fy, r, fill)
-        canvas.restore()
         fill.shader = null
     }
 
