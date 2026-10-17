@@ -16,3 +16,9 @@ ios/Keyboard/Info.plist
 *.ipa
 
 screenshots/
+
+# Language-model corpora/checkpoints live in ../tk-lm-data, never in this repo.
+__pycache__/
+*.pyc
+*.pt
+*.pth

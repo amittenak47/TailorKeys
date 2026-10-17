@@ -1,0 +1,1541 @@
+{
+  "snapshot_date_utc": "2026-10-17",
+  "sources": {
+    "common_voice_revision": "b99fe2a29245b527a3bdf18e973f09688ea46ce8",
+    "soda_revision": "fdc848ab0183208ea7808206c91c724414d0a071",
+    "files": [
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/DNGros.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/DNGros.txt",
+        "sha256": "d21c9183327c2a21fabef0add2f366ea4e63d19e823e3728b7ea1a2465fd9673",
+        "bytes": 21153
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/DictionaryofForeignPhrases.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/DictionaryofForeignPhrases.txt",
+        "sha256": "8655860354c84d5efac32b7b836c6d71b033591f268f17ffca2521c51da8f9a5",
+        "bytes": 11673
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/RLarissa.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/RLarissa.txt",
+        "sha256": "b42ce85ad34dfa5e504c02b3eb703248b973e7f94223cb70b560a50e4b76aa15",
+        "bytes": 1460
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/activate.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/activate.txt",
+        "sha256": "6d438d4d32a55bd2fba3dcd83be560e2413de150d62d6ecda653c82fb7757793",
+        "bytes": 893
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/ajaydee.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/ajaydee.txt",
+        "sha256": "5c76e5c6baab9e7546b62f0ca2bf7987bfbad73c2abda899627fa47c35c56295",
+        "bytes": 25176
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/bavencope.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/bavencope.txt",
+        "sha256": "b9a6e84d4bf2d1c5069562a92368d5ad13bd3c4fb4a08b4b0ffbd4c3de0a61a7",
+        "bytes": 6830
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/elleo.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/elleo.txt",
+        "sha256": "5de742690b7e389bb1b0388466ef44dcac84f5d0ccf194244309e8bff5d06fa2",
+        "bytes": 19347
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/est31.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/est31.txt",
+        "sha256": "7278f16bba6fafb036687722c80044385332a75acbf41a16c946c1a5226203b9",
+        "bytes": 12003
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/fxvoice-cues.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/fxvoice-cues.txt",
+        "sha256": "263a3d6c656e293297f42f0d4f3f62e6e195e90025ee0d6e524ad7ec658dd4df",
+        "bytes": 55
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/harvsents.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/harvsents.txt",
+        "sha256": "6d11a74e46a93b9463c25843d5a1f33ffcdf299a721b35b01f32dd8dc3bea657",
+        "bytes": 29054
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/james_fortune.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/james_fortune.txt",
+        "sha256": "1803a9335ab9663d8f856b869faba61584191c87fbce5825070874ebbb5ec94f",
+        "bytes": 4879
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/jf99.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/jf99.txt",
+        "sha256": "0c2bcb8ad553d1f956b36a276a1f76749f4da808175fb375b8ce91af7e23933c",
+        "bytes": 61368
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/kieran_drew.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/kieran_drew.txt",
+        "sha256": "062e6a5a30ed5475aafbe7945d41e5ee88aa5b26c52f7a9130156bbebbdd1137",
+        "bytes": 1615
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/mlennox.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/mlennox.txt",
+        "sha256": "8e397def2948b9701994213f4583d1a8ae974b2fe17b6a5debdeb0aa31049609",
+        "bytes": 4942
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/pro.gadget.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/pro.gadget.txt",
+        "sha256": "1484fd31ae31627e774659004aed18c9e31a7098e66d8826bd1d687935028b7f",
+        "bytes": 11906
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/reinhart1010.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/reinhart1010.txt",
+        "sha256": "6a085a2f3058b178f86bf1e099e2b4364525eaeb484134dc0895aa951edae5bf",
+        "bytes": 11270
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/sentence-collector.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/sentence-collector.txt",
+        "sha256": "31ac8e200449ebd7aee4a8c6bd16d4dafd076cf11f7c3efe1035f0283712d136",
+        "bytes": 2803252
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/singleword-benchmark.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/singleword-benchmark.txt",
+        "sha256": "6e9ed6cf31d9e1b88aeaef9714ac89d23de04fc8f02cf58d19bd021bbcaa996a",
+        "bytes": 68
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/thehowl.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/thehowl.txt",
+        "sha256": "85ad5098e647641471d0fd19e28cb874847af2466ec569ebcfa46b06257b644b",
+        "bytes": 2983
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/tlcoles.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/tlcoles.txt",
+        "sha256": "014f7795a2b8ca5ea6877c5d970de612b7426f4ad8043e44ea6d0c9923a4bcae",
+        "bytes": 2860
+      },
+      {
+        "source": "common_voice",
+        "path": "raw/common_voice/tww.id.au.proverbs.txt",
+        "url": "https://raw.githubusercontent.com/common-voice/common-voice/b99fe2a29245b527a3bdf18e973f09688ea46ce8/server/data/en/tww.id.au.proverbs.txt",
+        "sha256": "630df2a5d0e7c971086871135d27d6e66263635af96225c1189ca00f03406239",
+        "bytes": 17863
+      },
+      {
+        "source": "tatoeba",
+        "path": "raw/eng_sentences.tsv.bz2",
+        "url": "https://downloads.tatoeba.org/exports/per_language/eng/eng_sentences.tsv.bz2",
+        "sha256": "bb3dcc28a8984a26dc466ee14eb53c4210b0dd9bb111b9d686d1efc83ecf091c",
+        "bytes": 24908986
+      },
+      {
+        "source": "soda",
+        "path": "raw/soda/train.parquet",
+        "url": "https://huggingface.co/datasets/allenai/soda/resolve/fdc848ab0183208ea7808206c91c724414d0a071/train.parquet",
+        "sha256": "b21314575fdc4cbf9fc74f7af4854d55fba8cc9ba72f2f3791ae2df8b23032c4",
+        "bytes": 688771672
+      },
+      {
+        "source": "soda",
+        "path": "raw/soda/valid.parquet",
+        "url": "https://huggingface.co/datasets/allenai/soda/resolve/fdc848ab0183208ea7808206c91c724414d0a071/valid.parquet",
+        "sha256": "3e813e5b14c4edca5849cb7922f9c38568ecb71f27931a7c4c29ec1160bd0d1c",
+        "bytes": 82869716
+      },
+      {
+        "source": "soda",
+        "path": "raw/soda/test.parquet",
+        "url": "https://huggingface.co/datasets/allenai/soda/resolve/fdc848ab0183208ea7808206c91c724414d0a071/test.parquet",
+        "sha256": "edd0a57b460fa7faa3782b332327f3a4bc9681dcaaec88e77727c47fd5870180",
+        "bytes": 84204550
+      }
+    ]
+  },
+  "preparation": {
+    "common_voice": {
+      "train_sentences": 67197,
+      "eval_sentences": 1390,
+      "train_tokens": 622809,
+      "eval_tokens": 12903,
+      "duplicates": 1379,
+      "train_sampled_tokens": 622809,
+      "eval_sampled_tokens": 12903,
+      "train_sampled_sentences": 67197,
+      "eval_sampled_sentences": 1390
+    },
+    "tatoeba": {
+      "train_sentences": 2025230,
+      "eval_sentences": 41204,
+      "train_tokens": 17565707,
+      "eval_tokens": 359075,
+      "duplicates": 48791,
+      "train_sampled_tokens": 17565707,
+      "eval_sampled_tokens": 359075,
+      "train_sampled_sentences": 2025230,
+      "eval_sampled_sentences": 41204
+    },
+    "soda": {
+      "train_sentences": 10225821,
+      "eval_sentences": 208534,
+      "train_tokens": 131283853,
+      "eval_tokens": 2678782,
+      "duplicates": 13389919,
+      "train_sampled_tokens": 18178039,
+      "eval_sampled_tokens": 2678782,
+      "train_sampled_sentences": 1416203,
+      "eval_sampled_sentences": 208534
+    },
+    "soda_keep_probability": 0.1385434353453962,
+    "vocab_size": 15000,
+    "words_sha256": "78f4c2371aa102c535204f896ee01ee72a017fe8ef58f35e979ad48e8a477917"
+  },
+  "software": {
+    "python": "3.10.6",
+    "torch": "2.11.0+cu128",
+    "cuda": "12.8",
+    "numpy": "2.2.6",
+    "pyarrow": "25.0.1"
+  },
+  "host": {
+    "os": "Windows-10-10.0.26200-SP0",
+    "cpu": "Intel Core i7-14700K",
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "observed_training_peak_working_set_mib": 1738,
+    "cuda_peak_allocated_mib": 3042
+  },
+  "training_history": [
+    {
+      "step": 2000,
+      "seconds": 44.11000000000058,
+      "nll": 4.026123808357308,
+      "perplexity": 56.043255283775395,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 5.071142442590768,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 4.1940327885884905,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.828066858431188,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.001999600720153315
+    },
+    {
+      "step": 4000,
+      "seconds": 83.84399999999732,
+      "nll": 3.745933544739284,
+      "perplexity": 42.34852301196182,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.893099254121878,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.9493701960410625,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.510045958728325,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.0019985491513541745
+    },
+    {
+      "step": 6000,
+      "seconds": 121.53100000000268,
+      "nll": 3.61956677706794,
+      "perplexity": 37.32139583473661,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.848319127470508,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.8498292140121224,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.3549617488209793,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.0019969494602819805
+    },
+    {
+      "step": 8000,
+      "seconds": 159.51600000000326,
+      "nll": 3.5562828673477402,
+      "perplexity": 35.03273350239262,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.812515036627999,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.7937875012549935,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.2837380944228753,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.0019947449810467804
+    },
+    {
+      "step": 10000,
+      "seconds": 197.90600000000268,
+      "nll": 3.5067686893961927,
+      "perplexity": 33.340360476480726,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.784656346050297,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.7515805905065642,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.22642084447349,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.001991912640620421
+    },
+    {
+      "step": 12000,
+      "seconds": 235.95300000000134,
+      "nll": 3.4775130054985786,
+      "perplexity": 32.37909522636651,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.76175600912754,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.733562940191683,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.1860879386343606,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.0019885074066794592
+    },
+    {
+      "step": 14000,
+      "seconds": 274.0,
+      "nll": 3.4532483453368803,
+      "perplexity": 31.602882833401708,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.775993221702907,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.7148424450290713,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.1551467337259433,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.001984511921968308
+    },
+    {
+      "step": 16000,
+      "seconds": 312.25,
+      "nll": 3.438246242538288,
+      "perplexity": 31.132311740010557,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.771695456780026,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.698950273055449,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.140637969970703,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.00197990371848458
+    },
+    {
+      "step": 18000,
+      "seconds": 350.6100000000006,
+      "nll": 3.417915426956433,
+      "perplexity": 30.505757215264484,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.741350710373268,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.679382907290867,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.1199125150354896,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.001974686293709084
+    },
+    {
+      "step": 20000,
+      "seconds": 390.3289999999979,
+      "nll": 3.409934848439339,
+      "perplexity": 30.263272495735233,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.727761594365377,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.6698693499201247,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.1136054341386004,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.001968660728075546,
+      "next_lr_scale": 1.0
+    },
+    {
+      "step": 22000,
+      "seconds": 431.93799999999464,
+      "nll": 3.4004970095804947,
+      "perplexity": 29.978996193648538,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.7376667684793,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.6654910961000584,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.098615720795422,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.0019616926576665507,
+      "next_lr_scale": 1.0
+    },
+    {
+      "step": 24000,
+      "seconds": 477.2350000000006,
+      "nll": 3.3944317422499926,
+      "perplexity": 29.797715879952747,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.74691680719606,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.665606933093974,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.0860528341153772,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.0019533065235477136,
+      "next_lr_scale": 1.0
+    },
+    {
+      "step": 26000,
+      "seconds": 521.3129999999946,
+      "nll": 3.3814965822791763,
+      "perplexity": 29.414759796995252,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.724046351735574,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.6472666078929974,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.078681164253049,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.001944371060367583,
+      "next_lr_scale": 1.0
+    },
+    {
+      "step": 28000,
+      "seconds": 564.265999999996,
+      "nll": 3.37605099405726,
+      "perplexity": 29.255014475876685,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.706117429620398,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.6395691605160887,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.075839279919136,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.0019349385521651283,
+      "next_lr_scale": 1.0
+    },
+    {
+      "step": 30000,
+      "seconds": 606.3289999999979,
+      "nll": 3.3726133133596505,
+      "perplexity": 29.15461774213262,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.713685418194197,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.650601502748991,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.058041930780178,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.0019250357536181582,
+      "next_lr_scale": 1.0
+    },
+    {
+      "step": 32000,
+      "seconds": 649.1719999999987,
+      "nll": 3.3623272075911252,
+      "perplexity": 28.856267322930428,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.7120471609516565,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.634091600574054,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.0534736819383577,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.0019142348878322538,
+      "next_lr_scale": 1.0
+    },
+    {
+      "step": 34000,
+      "seconds": 693.375,
+      "nll": 3.361023067089633,
+      "perplexity": 28.818659224445177,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.72516767374568,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.628556406729785,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.0557638587021247,
+          "tokens": 13120
+        }
+      ],
+      "improved": false,
+      "lr": 0.0019024121084917419,
+      "next_lr_scale": 0.5
+    },
+    {
+      "step": 36000,
+      "seconds": 739.1879999999946,
+      "nll": 3.3171776285449917,
+      "perplexity": 27.58239283923517,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.686419958392525,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.5910216597964113,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 3.0056456496075885,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.0009446977643201445,
+      "next_lr_scale": 0.5
+    },
+    {
+      "step": 38000,
+      "seconds": 783.3129999999946,
+      "nll": 3.3123264153471856,
+      "perplexity": 27.4489088125896,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.684418207290248,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.588331552464496,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.9986085007830363,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.0009380509417815025,
+      "next_lr_scale": 0.5
+    },
+    {
+      "step": 40000,
+      "seconds": 826.9219999999987,
+      "nll": 3.311710891639021,
+      "perplexity": 27.432018557161793,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.6872325628306015,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.59116749029768,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.9945402657113425,
+          "tokens": 13120
+        }
+      ],
+      "improved": false,
+      "lr": 0.0009311569484040307,
+      "next_lr_scale": 0.25
+    },
+    {
+      "step": 42000,
+      "seconds": 869.5939999999973,
+      "nll": 3.2866892240898924,
+      "perplexity": 26.754139902823972,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.669546566646836,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.571512594302197,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.9640812757538586,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.00046204575340917284,
+      "next_lr_scale": 0.25
+    },
+    {
+      "step": 44000,
+      "seconds": 916.4539999999979,
+      "nll": 3.2850806290449523,
+      "perplexity": 26.711137921604195,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.672249867227598,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.567104284502765,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.965030353825267,
+          "tokens": 13120
+        }
+      ],
+      "improved": false,
+      "lr": 0.00045799357414708287,
+      "next_lr_scale": 0.125
+    },
+    {
+      "step": 46000,
+      "seconds": 972.8600000000006,
+      "nll": 3.274659804017065,
+      "perplexity": 26.434231131485923,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.662017416302241,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.5579274304556003,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.9534010073033774,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.0002264317663365406,
+      "next_lr_scale": 0.125
+    },
+    {
+      "step": 48000,
+      "seconds": 1041.015999999996,
+      "nll": 3.2699772851224846,
+      "perplexity": 26.31074169120327,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.663610295149573,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.5551011549603557,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.9467097677835605,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.00022316733958415306,
+      "next_lr_scale": 0.125
+    },
+    {
+      "step": 50000,
+      "seconds": 1086.5,
+      "nll": 3.271452549457282,
+      "perplexity": 26.349585635540205,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.668470571886948,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.554888527995014,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.9497000903618047,
+          "tokens": 13120
+        }
+      ],
+      "improved": false,
+      "lr": 0.00022088079210118763,
+      "next_lr_scale": 0.0625
+    },
+    {
+      "step": 52000,
+      "seconds": 1125.890999999996,
+      "nll": 3.2661424417204623,
+      "perplexity": 26.2100373331613,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.663699575128312,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.549693119426941,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.944260676314191,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 0.00010942037358909116,
+      "next_lr_scale": 0.0625
+    },
+    {
+      "step": 54000,
+      "seconds": 1164.890999999996,
+      "nll": 3.2643401092143547,
+      "perplexity": 26.162840675700554,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.660910939126411,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.547503385150119,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.9428664882008624,
+          "tokens": 13120
+        }
+      ],
+      "improved": false,
+      "lr": 0.00010838366444263088,
+      "next_lr_scale": 0.05
+    },
+    {
+      "step": 56000,
+      "seconds": 1204.0629999999946,
+      "nll": 3.2630181216208047,
+      "perplexity": 26.12827657660418,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.66205450281543,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.5457052393305575,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.9419201455465176,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 8.585179749523084e-05,
+      "next_lr_scale": 0.05
+    },
+    {
+      "step": 58000,
+      "seconds": 1246.2969999999987,
+      "nll": 3.262522288900171,
+      "perplexity": 26.11532453343249,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.660099459878185,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.5446206904862176,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.942043192793683,
+          "tokens": 13120
+        }
+      ],
+      "improved": false,
+      "lr": 8.490962289396596e-05,
+      "next_lr_scale": 0.05
+    },
+    {
+      "step": 60000,
+      "seconds": 1288.078999999998,
+      "nll": 3.2619300670480498,
+      "perplexity": 26.09986304633571,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.65791255750743,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.544736208178736,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.940821708120951,
+          "tokens": 13120
+        }
+      ],
+      "improved": false,
+      "lr": 8.39474202654827e-05,
+      "next_lr_scale": 0.05
+    },
+    {
+      "step": 62000,
+      "seconds": 1330.390999999996,
+      "nll": 3.2606391272504514,
+      "perplexity": 26.06619143310633,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.659065985787011,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.5441663245976915,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.938750253072599,
+          "tokens": 13120
+        }
+      ],
+      "improved": true,
+      "lr": 8.295403618017674e-05,
+      "next_lr_scale": 0.05
+    },
+    {
+      "step": 64000,
+      "seconds": 1375.9069999999992,
+      "nll": 3.2607969859434247,
+      "perplexity": 26.070306532810335,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.657964277881796,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.54271077529489,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.9405103264785395,
+          "tokens": 13120
+        }
+      ],
+      "improved": false,
+      "lr": 8.186141677239055e-05,
+      "next_lr_scale": 0.05
+    },
+    {
+      "step": 66000,
+      "seconds": 1420.9850000000006,
+      "nll": 3.259613341526537,
+      "perplexity": 26.039466815266547,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.655842393583636,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.5423576834800232,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.938556252456293,
+          "tokens": 13120
+        }
+      ],
+      "improved": false,
+      "lr": 8.075318587228973e-05,
+      "next_lr_scale": 0.05
+    },
+    {
+      "step": 68000,
+      "seconds": 1466.703999999998,
+      "nll": 3.2595649373308024,
+      "perplexity": 26.038206426322294,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.655609421746524,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.541837485972951,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.938970072676496,
+          "tokens": 13120
+        }
+      ],
+      "improved": false,
+      "lr": 7.960607487528281e-05,
+      "next_lr_scale": 0.05
+    },
+    {
+      "step": 70000,
+      "seconds": 1511.7350000000006,
+      "nll": 3.2603099052769124,
+      "perplexity": 26.05761128258462,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.656730488031663,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.5439672262937316,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.938364028930664,
+          "tokens": 13120
+        }
+      ],
+      "improved": false,
+      "lr": 7.845420738097691e-05,
+      "next_lr_scale": 0.05
+    },
+    {
+      "step": 70000,
+      "seconds": 1512.015999999996,
+      "nll": 3.2603099052769124,
+      "perplexity": 26.05761128258462,
+      "per_source": [
+        {
+          "source": "common_voice",
+          "nll": 4.656730488031663,
+          "tokens": 9547
+        },
+        {
+          "source": "tatoeba",
+          "nll": 3.5439672262937316,
+          "tokens": 8793
+        },
+        {
+          "source": "soda",
+          "nll": 2.938364028930664,
+          "tokens": 13120
+        }
+      ],
+      "final": true
+    }
+  ],
+  "export": {
+    "bytes": 3331705,
+    "sha256": "1277eafdfb0ce4464acae11f61358e886065708e19050c06afde5cd49bb18919",
+    "parameters": 3069816,
+    "config": {
+      "vocab_size": 15000,
+      "embedding": 96,
+      "hidden": 672
+    },
+    "step": 70000,
+    "training_seconds": 1512.015999999996,
+    "reference_candidates": 40,
+    "stable_candidates": 21,
+    "references": 12,
+    "max_top10_logprob_delta": 0.13648176193237305
+  },
+  "evaluation_int8": {
+    "quantized": true,
+    "checkpoint_step": 70000,
+    "limit": 0,
+    "sources": {
+      "common_voice": {
+        "sentences": 1390,
+        "lexical_targets": 11058,
+        "oov": 739,
+        "nll": 58583.56884765625,
+        "ppl_tokens": 11513,
+        "perplexity": 162.14178900918412,
+        "counts": {
+          "lstm": [
+            [
+              1804,
+              3060
+            ],
+            [
+              4412,
+              6356
+            ],
+            [
+              6465,
+              8200
+            ]
+          ],
+          "baseline": [
+            [
+              1378,
+              2311
+            ],
+            [
+              3561,
+              5467
+            ],
+            [
+              5612,
+              7428
+            ]
+          ]
+        }
+      },
+      "tatoeba": {
+        "sentences": 41204,
+        "lexical_targets": 311841,
+        "oov": 12126,
+        "nll": 1232171.6718120575,
+        "ppl_tokens": 317871,
+        "perplexity": 48.246638495700374,
+        "counts": {
+          "lstm": [
+            [
+              83249,
+              134036
+            ],
+            [
+              175026,
+              228942
+            ],
+            [
+              226993,
+              269685
+            ]
+          ],
+          "baseline": [
+            [
+              62624,
+              100693
+            ],
+            [
+              133047,
+              190164
+            ],
+            [
+              187161,
+              238721
+            ]
+          ]
+        }
+      },
+      "soda": {
+        "sentences": 208534,
+        "lexical_targets": 2363055,
+        "oov": 30271,
+        "nll": 7889013.73397541,
+        "ppl_tokens": 2470248,
+        "perplexity": 24.376316645640742,
+        "counts": {
+          "lstm": [
+            [
+              813865,
+              1199570
+            ],
+            [
+              1544593,
+              1973073
+            ],
+            [
+              1905904,
+              2191939
+            ]
+          ],
+          "baseline": [
+            [
+              394400,
+              670451
+            ],
+            [
+              1019893,
+              1489588
+            ],
+            [
+              1467024,
+              1914062
+            ]
+          ]
+        }
+      },
+      "overall": {
+        "sentences": 251128,
+        "lexical_targets": 2685954,
+        "oov": 43136,
+        "nll": 9179768.974635124,
+        "ppl_tokens": 2799632,
+        "counts": {
+          "lstm": [
+            [
+              898918,
+              1336666
+            ],
+            [
+              1724031,
+              2208371
+            ],
+            [
+              2139362,
+              2469824
+            ]
+          ],
+          "baseline": [
+            [
+              458402,
+              773455
+            ],
+            [
+              1156501,
+              1685219
+            ],
+            [
+              1659797,
+              2160211
+            ]
+          ]
+        },
+        "perplexity": 26.54708272888161
+      }
+    },
+    "seconds": 31.5,
+    "asset_hashes": {
+      "words.txt": "78f4c2371aa102c535204f896ee01ee72a017fe8ef58f35e979ad48e8a477917",
+      "bigrams.txt": "d2715e6162c97a1eef9968b7271eed6f470d3e7e074be75e9713c5b60505b782",
+      "trigrams.txt": "223f08536503e4baabb905c61d27527f39e2368620334277e046aa9e98dbee1d"
+    },
+    "heldout_hashes": {
+      "common_voice": "6b2f0251ac8cf6436ba3da5cd637d04aae5928f5620fd4c2fe9f66ea3b3921d4",
+      "tatoeba": "efdd1084e66c6d42f35c281ffc01f711ab354bf75a6df1b6a9c83d90a83e24b4",
+      "soda": "baba1710dc89fe01d277c6f6f7c66e92186005e356e7da34d63e6bf0f3d96003"
+    },
+    "baseline_cache": "..\\tk-lm-data\\baseline-cache.json"
+  },
+  "evaluation_float": {
+    "quantized": false,
+    "checkpoint_step": 70000,
+    "limit": 0,
+    "sources": {
+      "common_voice": {
+        "sentences": 1390,
+        "lexical_targets": 11058,
+        "oov": 739,
+        "nll": 58580.938049316406,
+        "ppl_tokens": 11513,
+        "perplexity": 162.10474274697057,
+        "counts": {
+          "lstm": [
+            [
+              1808,
+              3058
+            ],
+            [
+              4416,
+              6362
+            ],
+            [
+              6469,
+              8189
+            ]
+          ],
+          "baseline": [
+            [
+              1378,
+              2311
+            ],
+            [
+              3561,
+              5467
+            ],
+            [
+              5612,
+              7428
+            ]
+          ]
+        }
+      },
+      "tatoeba": {
+        "sentences": 41204,
+        "lexical_targets": 311841,
+        "oov": 12126,
+        "nll": 1232137.5521445274,
+        "ppl_tokens": 317871,
+        "perplexity": 48.241460071370135,
+        "counts": {
+          "lstm": [
+            [
+              83258,
+              134061
+            ],
+            [
+              175054,
+              229148
+            ],
+            [
+              227101,
+              269705
+            ]
+          ],
+          "baseline": [
+            [
+              62624,
+              100693
+            ],
+            [
+              133047,
+              190164
+            ],
+            [
+              187161,
+              238721
+            ]
+          ]
+        }
+      },
+      "soda": {
+        "sentences": 208534,
+        "lexical_targets": 2363055,
+        "oov": 30271,
+        "nll": 7888622.5556845665,
+        "ppl_tokens": 2470248,
+        "perplexity": 24.372456818237886,
+        "counts": {
+          "lstm": [
+            [
+              813942,
+              1200211
+            ],
+            [
+              1544778,
+              1972555
+            ],
+            [
+              1905408,
+              2192012
+            ]
+          ],
+          "baseline": [
+            [
+              394400,
+              670451
+            ],
+            [
+              1019893,
+              1489588
+            ],
+            [
+              1467024,
+              1914062
+            ]
+          ]
+        }
+      },
+      "overall": {
+        "sentences": 251128,
+        "lexical_targets": 2685954,
+        "oov": 43136,
+        "nll": 9179341.04587841,
+        "ppl_tokens": 2799632,
+        "counts": {
+          "lstm": [
+            [
+              899008,
+              1337330
+            ],
+            [
+              1724248,
+              2208065
+            ],
+            [
+              2138978,
+              2469906
+            ]
+          ],
+          "baseline": [
+            [
+              458402,
+              773455
+            ],
+            [
+              1156501,
+              1685219
+            ],
+            [
+              1659797,
+              2160211
+            ]
+          ]
+        },
+        "perplexity": 26.543025269925298
+      }
+    },
+    "seconds": 30.75,
+    "asset_hashes": {
+      "words.txt": "78f4c2371aa102c535204f896ee01ee72a017fe8ef58f35e979ad48e8a477917",
+      "bigrams.txt": "d2715e6162c97a1eef9968b7271eed6f470d3e7e074be75e9713c5b60505b782",
+      "trigrams.txt": "223f08536503e4baabb905c61d27527f39e2368620334277e046aa9e98dbee1d"
+    },
+    "heldout_hashes": {
+      "common_voice": "6b2f0251ac8cf6436ba3da5cd637d04aae5928f5620fd4c2fe9f66ea3b3921d4",
+      "tatoeba": "efdd1084e66c6d42f35c281ffc01f711ab354bf75a6df1b6a9c83d90a83e24b4",
+      "soda": "baba1710dc89fe01d277c6f6f7c66e92186005e356e7da34d63e6bf0f3d96003"
+    },
+    "baseline_cache": "..\\tk-lm-data\\baseline-cache.json"
+  },
+  "jvm": {
+    "step_median_ms": 0.603631,
+    "step_softmax_median_ms": 1.015571,
+    "asset_sha256": "1277eafdfb0ce4464acae11f61358e886065708e19050c06afde5cd49bb18919",
+    "allocated_bytes_per_step_softmax": 0.0,
+    "step_softmax_min_ms": 1.008541,
+    "step_softmax_max_ms": 1.035525,
+    "java": "23.0.1",
+    "arch": "amd64"
+  },
+  "validation": {
+    "pipeline_semantic_tests": 6,
+    "jvm_tests": 3,
+    "jvm_failures": 0,
+    "assembleDebug": "passed",
+    "apk_asset_sha256": "1277eafdfb0ce4464acae11f61358e886065708e19050c06afde5cd49bb18919",
+    "apk_bytes": 21501780,
+    "swift": "manually reviewed; not compiled on Windows",
+    "tablet_latency": "not measured; no device installation"
+  }
+}
