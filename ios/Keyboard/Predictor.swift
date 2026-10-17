@@ -247,7 +247,7 @@ final class Predictor {
         var current = older
         var all: [Candidate] = []
         func add(_ w: String, _ chars: [Character]) {
-            if w == p && taps == nil { return }
+            if w == p { return }
             let completion = w.hasPrefix(p)
             let distance: Int
             if completion { distance = 0 }
@@ -279,7 +279,6 @@ final class Predictor {
             for (i, w) in base.enumerated() where user[w.text] == nil && rank[w.text] == i { add(w.text, w.letters) }
         }
         let result = all.sorted {
-            if taps != nil && ($0.word == p) != ($1.word == p) { return $0.word == p }
             if p.isEmpty, prev != nil {
                 // Trigram followers, then remaining bigram followers, then frequency fallback.
                 let aTier = $0.tripleCount > 0 ? 2 : ($0.pairCount > 0 ? 1 : 0)

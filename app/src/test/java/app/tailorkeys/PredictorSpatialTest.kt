@@ -43,9 +43,11 @@ class PredictorSpatialTest {
         }
     }
 
-    @Test fun centreTappedCommonWordsRankFirst() {
-        for (word in listOf("the", "seven", "because", "people", "keyboard")) {
-            assertEquals(word, predictor.closest(word, "six", "five", taps = SplitTaps.word(word)).first())
+    @Test fun centreTappedPrefixesStillLeadToTheIntendedWord() {
+        // The exact typed word is never offered back; a correctly typed prefix must still complete first.
+        for ((prefix, word) in listOf("th" to "the", "seve" to "seven", "becau" to "because", "peopl" to "people", "keyboar" to "keyboard")) {
+            val result = predictor.closest(prefix, "six", "five", taps = SplitTaps.word(prefix))
+            assertTrue("$prefix: $result", word in result.take(3) && result.first().startsWith(prefix))
         }
     }
 

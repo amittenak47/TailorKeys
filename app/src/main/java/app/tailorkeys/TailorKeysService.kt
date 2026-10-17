@@ -331,7 +331,9 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         oldSelStart: Int, oldSelEnd: Int, newSelStart: Int, newSelEnd: Int, candidatesStart: Int, candidatesEnd: Int,
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
-        if (newSelStart != newSelEnd || tapCursor != newSelEnd) clearTaps()
+        // Cursor moves are caught by validateTaps (the text around the cursor changes); comparing positions here
+        // would wipe the taps during fast typing, when this callback trails the next letter.
+        if (newSelStart != newSelEnd) clearTaps()
         if (keyboardView?.armedWord != null && chosenSelection != (newSelStart to newSelEnd)) clearChoice()
         armedUndo?.let { undo ->
             val ic = currentInputConnection

@@ -242,7 +242,7 @@ class Predictor internal constructor(
         val rows = Array(3) { IntArray(p.length + 1) }
         val all = ArrayList<Candidate>()
         fun add(w: String) {
-            if (w == p && taps == null) return
+            if (w == p) return
             val completion = w.startsWith(p)
             val cost = if (completion) 0 else if (p.length >= 2) cost(p, w, limit, rows, taps) else return
             if (cost > limit) return
@@ -277,8 +277,7 @@ class Predictor internal constructor(
                 .thenByDescending { if (it.tripleCount > 0) it.tripleCount else it.pairCount }
                 .thenByDescending { it.score }.thenBy { it.word })
         } else {
-            all.sortedWith(compareByDescending<Candidate> { taps != null && it.word == p }
-                .thenByDescending { it.score }.thenBy { it.word })
+            all.sortedWith(compareByDescending<Candidate> { it.score }.thenBy { it.word })
         }
         cachedPrefix = p
         cachedPrev = prev
