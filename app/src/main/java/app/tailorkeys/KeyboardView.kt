@@ -1447,6 +1447,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 it.joystick.reach((x - gapEdgeAt(gapLeft, y)) / density, (gapEdgeAt(gapRight, y) - x) / density)
                 it.select = gapPresses.isSelection(time, x / density, y / density)
                 if (it.select) {
+                    // Selecting is 15% less sensitive, but the split's edge still reaches full speed and the glow the end.
+                    it.joystick.sensitivity = 0.85
                     listener?.onSelectMode(true)
                     haptic(HapticFeedbackConstants.LONG_PRESS)
                     it.lastCursorHaptic = SystemClock.uptimeMillis()
@@ -1535,9 +1537,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             K_CURSOR -> {
                 t.fx = x; t.fy = y
                 val now = SystemClock.uptimeMillis()
-                // Selecting is 15% less sensitive; the push itself is scaled, so the glow follows the same curve.
-                val sensitivity = if (t.select) 0.85f else 1f
-                moveCursor(t, t.joystick.displace((x - t.x0) / density * sensitivity, now), now)
+                moveCursor(t, t.joystick.displace((x - t.x0) / density, now), now)
                 removeCallbacks(cursorFrame)
                 postOnAnimation(cursorFrame)
                 invalidate()

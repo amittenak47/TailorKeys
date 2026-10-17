@@ -12,6 +12,7 @@ import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 
 internal data class WheelTapTarget(val index: Int, val center: Float, val width: Float)
 
@@ -33,6 +34,11 @@ internal class CursorJoystick {
     private var fraction = 0.0
     private var lastTime: Long? = null
     private var reachLeft = MIN_REACH
+    /**
+     * Below 1, the same push moves the cursor (and the glow) less, yet reaching the gap's edge still gives top speed:
+     * the response curve bends rather than being cut short.
+     */
+    var sensitivity = 1.0
     private var reachRight = MIN_REACH
 
     /** How far the gap extends from the press point on each side, in dp. Pushing to that edge gives top speed. */
@@ -50,8 +56,9 @@ internal class CursorJoystick {
         var steps = advance(now)
         val magnitude = abs(dx.toDouble())
         val reach = if (dx < 0) reachLeft else reachRight
-        push = min(1.0, magnitude / reach) * if (dx < 0) -1 else 1
-        val u = ((magnitude - DEAD_ZONE) / (reach - DEAD_ZONE)).coerceIn(0.0, 1.0)
+        val bend = 1 / sensitivity
+        push = min(1.0, magnitude / reach).pow(bend) * if (dx < 0) -1 else 1
+        val u = ((magnitude - DEAD_ZONE) / (reach - DEAD_ZONE)).coerceIn(0.0, 1.0).pow(bend)
         val next = if (magnitude <= DEAD_ZONE) 0.0 else (MIN_SPEED + (MAX_SPEED - MIN_SPEED) * u * Math.sqrt(u)) * if (dx < 0) -1 else 1
         if (next == 0.0 || next * speed < 0) fraction = 0.0
         if (next != 0.0 && speed == 0.0) steps += if (next < 0) -1 else 1
