@@ -18,6 +18,8 @@ import app.tailorkeys.layout.KeyText
 import app.tailorkeys.layout.Keys
 import app.tailorkeys.layout.Layer
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
@@ -350,8 +352,21 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             currentInputConnection?.setSelection(anchor, selectFocus)
             return
         }
-        val code = if (steps < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
-        repeat(abs(steps)) { sendDownUpKeyEvents(code) }
+        val ic = currentInputConnection ?: return
+        // Set the position directly, clamped to the text. Arrow keys at either end move focus to the next view,
+        // which closes the keyboard. Only fields that hide their text (raw key input) or an unknown cursor fall back.
+        if (currentInputEditorInfo?.inputType == InputType.TYPE_NULL || selStart < 0 || selEnd < 0) {
+            val code = if (steps < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
+            repeat(abs(steps)) { sendDownUpKeyEvents(code) }
+            return
+        }
+        val lo = min(selStart, selEnd)
+        val hi = max(selStart, selEnd)
+        val total = hi + (ic.getTextAfterCursor(10_000, 0)?.length ?: 0)
+        // A selection collapses toward the direction of travel, like arrow keys do.
+        val pos = ((if (steps < 0) lo else hi) + steps).coerceIn(0, total)
+        ic.setSelection(pos, pos)
+        selStart = pos; selEnd = pos // until onUpdateSelection confirms, so fast steps build on each other
     }
 
     override fun onReplacePressText(original: String, following: String, replacement: String) {
