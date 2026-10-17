@@ -10,6 +10,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import kotlin.math.abs
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.min
 
 internal data class WheelTapTarget(val index: Int, val center: Float, val width: Float)
@@ -28,46 +29,49 @@ internal class CursorJoystick {
         private set
     private var fraction = 0.0
     private var lastTime: Long? = null
-    private var smoothed = 0.0
-    /** Speed from distance alone, before holding speeds it up. */
-    private var base = 0.0
-    private var pushedSince: Long? = null
+    private var reachLeft = MIN_REACH
+    private var reachRight = MIN_REACH
+
+    /** How far the gap extends from the press point on each side, in dp. Pushing to that edge gives top speed. */
+    fun reach(left: Float, right: Float) {
+        reachLeft = max(MIN_REACH, left.toDouble())
+        reachRight = max(MIN_REACH, right.toDouble())
+    }
 
     /**
-     * [dx] is the finger's distance from where it pressed, in dp. Distance sets a starting speed: 3 chars/s just outside
-     * the 6 dp dead zone (precise), ~10 at 31 dp, 24 at 56 dp and beyond. Holding the push speeds it up, up to 3x after
-     * ~1.3 s, capped at 60 chars/s. Light smoothing keeps finger jitter from making the speed jump.
+     * Like a thumb stick: [dx] is how far the finger has pushed from where it pressed, in dp, and the cursor keeps
+     * moving that way until it comes back. Speed runs from 3 chars/s just past the dead zone to [MAX_SPEED] at the
+     * gap's edge, easing in so small pushes stay precise; the finger never has to leave the gap.
      */
     fun displace(dx: Float, now: Long): Int {
         var steps = advance(now)
-        smoothed += (dx - smoothed) * 0.5
-        val magnitude = abs(smoothed)
-        val u = ((magnitude - 6) / 50).coerceIn(0.0, 1.0)
-        val next = if (magnitude <= 6) 0.0 else (3.0 + 21.0 * u * Math.sqrt(u)) * if (smoothed < 0) -1 else 1
-        if (next == 0.0 || next * base < 0) { fraction = 0.0; pushedSince = null }
-        if (next != 0.0 && pushedSince == null) pushedSince = now
-        if (next != 0.0 && base == 0.0) steps += if (next < 0) -1 else 1
-        base = next
-        speed = effective(now)
+        val magnitude = abs(dx.toDouble())
+        val reach = if (dx < 0) reachLeft else reachRight
+        val u = ((magnitude - DEAD_ZONE) / (reach - DEAD_ZONE)).coerceIn(0.0, 1.0)
+        val next = if (magnitude <= DEAD_ZONE) 0.0 else (MIN_SPEED + (MAX_SPEED - MIN_SPEED) * u * Math.sqrt(u)) * if (dx < 0) -1 else 1
+        if (next == 0.0 || next * speed < 0) fraction = 0.0
+        if (next != 0.0 && speed == 0.0) steps += if (next < 0) -1 else 1
+        speed = next
         return steps
-    }
-
-    private fun effective(now: Long): Double {
-        val since = pushedSince ?: return base
-        val boost = 1.0 + min(2.0, (now - since) / 1000.0 * 1.5)
-        return (base * boost).coerceIn(-60.0, 60.0)
     }
 
     fun advance(now: Long): Int {
         val previous = lastTime
         lastTime = now
-        speed = effective(now)
         if (previous == null) return 0
         fraction += speed * (now - previous).coerceAtLeast(0) / 1000.0
         // Avoid losing a whole character to floating-point error at an exact boundary.
         val steps = (fraction + if (fraction > 0) 1e-9 else -1e-9).toInt()
         fraction -= steps
         return steps
+    }
+
+    companion object {
+        const val MAX_SPEED = 30.0
+        private const val MIN_SPEED = 3.0
+        private const val DEAD_ZONE = 4.0
+        /** A press right beside the gap's edge still gets this much room before top speed. */
+        private const val MIN_REACH = 12.0
     }
 }
 

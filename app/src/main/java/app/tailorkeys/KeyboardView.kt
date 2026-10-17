@@ -1053,29 +1053,24 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     /**
-     * While the centre gap is held, its background shows the cursor's motion: a gradient from the press point toward
-     * the side the cursor is moving, stronger the faster it goes, and a faint even tint while inside the dead zone.
-     * Selecting uses the accent colour; moving the cursor uses the hint colour.
+     * While the centre gap is held, the whole gap shades toward the side the cursor is moving: faint on the trailing
+     * edge, strongest on the leading edge, and stronger the faster it goes. Inside the dead zone it is an even faint
+     * tint. Selecting uses the accent colour; moving the cursor uses the hint colour.
      */
     private fun drawCursor(canvas: Canvas, radius: Float) {
         val t = trackers.values.firstOrNull { it.kind == K_CURSOR } ?: return
         val rgb = (if (t.select) palette.accent else palette.hint) and 0x00FFFFFF
         val speed = t.joystick.speed
-        val strength = min(1.0, abs(speed) / 30.0).toFloat()
-        canvas.save()
-        path.reset()
-        path.addRoundRect(cursorRect, radius, radius, Path.Direction.CW)
-        canvas.clipPath(path)
-        fill.color = rgb or ((if (t.select) 46 else 28) shl 24)
-        canvas.drawRect(cursorRect, fill)
-        if (speed != 0.0) {
-            val edge = if (speed < 0) cursorRect.left else cursorRect.right
-            val peak = (70 + 150 * strength).toInt()
-            fill.shader = LinearGradient(t.x0, 0f, edge, 0f, rgb, rgb or (peak shl 24), Shader.TileMode.CLAMP)
-            canvas.drawRect(min(t.x0, edge), cursorRect.top, max(t.x0, edge), cursorRect.bottom, fill)
-            fill.shader = null
+        val idle = rgb or ((if (t.select) 46 else 28) shl 24)
+        if (speed == 0.0) {
+            fill.color = idle
+        } else {
+            val peak = rgb or ((60 + 170 * min(1.0, abs(speed) / CursorJoystick.MAX_SPEED)).toInt() shl 24)
+            val (from, to) = if (speed < 0) cursorRect.right to cursorRect.left else cursorRect.left to cursorRect.right
+            fill.shader = LinearGradient(from, 0f, to, 0f, idle, peak, Shader.TileMode.CLAMP)
         }
-        canvas.restore()
+        canvas.drawRoundRect(cursorRect, radius, radius, fill)
+        fill.shader = null
     }
 
     private fun drawHandle(canvas: Canvas) {
@@ -1382,6 +1377,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             if (trackers.values.any { it.kind == K_CURSOR }) return
             trackers[id] = Tracker(K_CURSOR, null).also {
                 it.x0 = x; it.y0 = y; it.fx = x; it.fy = y
+                it.joystick.reach((x - cursorRect.left) / density, (cursorRect.right - x) / density)
                 it.select = gapPresses.isSelection(time, x / density, y / density)
                 if (it.select) {
                     listener?.onSelectMode(true)

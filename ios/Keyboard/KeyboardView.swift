@@ -912,22 +912,23 @@ final class KeyboardView: UIView {
 
     /// While the centre gap is held: a ring marks where the finger pressed (inside it the cursor stops) and a soft
     /// glow follows the finger.
-    /// While the centre gap is held, its background shows the cursor's motion: a gradient from the press point toward
-    /// the side the cursor is moving, stronger the faster it goes, and a faint even tint while inside the dead zone.
+    /// While the centre gap is held, the whole gap shades toward the side the cursor is moving: faint on the trailing
+    /// edge, strongest on the leading edge, and stronger the faster it goes. Inside the dead zone it is an even faint tint.
     private func drawCursorIndicator(_ ctx: CGContext) {
         guard let t = trackers.values.first(where: { $0.kind == .cursor }), !cursorRect.isEmpty else { return }
         let speed = t.joystick.speed
-        let strength = CGFloat(Swift.min(1, abs(speed) / 30))
+        let idle = palette.hint.withAlphaComponent(0.11)
         ctx.saveGState()
         UIBezierPath(roundedRect: cursorRect, cornerRadius: CGFloat(settings.int(Prefs.cornerRadius))).addClip()
-        palette.hint.withAlphaComponent(0.11).setFill()
-        ctx.fill(cursorRect)
-        if speed != 0 {
-            let edge = speed < 0 ? cursorRect.minX : cursorRect.maxX
-            let colors = [palette.hint.withAlphaComponent(0).cgColor, palette.hint.withAlphaComponent(0.27 + 0.59 * strength).cgColor] as CFArray
+        if speed == 0 {
+            idle.setFill()
+            ctx.fill(cursorRect)
+        } else {
+            let peak = palette.hint.withAlphaComponent(0.24 + 0.66 * CGFloat(Swift.min(1, abs(speed) / CursorJoystick.maxSpeed)))
+            let colors = [idle.cgColor, peak.cgColor] as CFArray
             if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) {
-                ctx.clip(to: CGRect(x: Swift.min(t.x0, edge), y: cursorRect.minY, width: abs(edge - t.x0), height: cursorRect.height))
-                ctx.drawLinearGradient(gradient, start: CGPoint(x: t.x0, y: 0), end: CGPoint(x: edge, y: 0), options: [])
+                let (from, to) = speed < 0 ? (cursorRect.maxX, cursorRect.minX) : (cursorRect.minX, cursorRect.maxX)
+                ctx.drawLinearGradient(gradient, start: CGPoint(x: from, y: 0), end: CGPoint(x: to, y: 0), options: [])
             }
         }
         ctx.restoreGState()
@@ -1266,6 +1267,7 @@ final class KeyboardView: UIView {
         if hit == nil && cursorRect.contains(p) {
             guard !trackers.values.contains(where: { $0.kind == .cursor }) else { return }
             let t = Tracker(kind: .cursor, pk: nil); t.x0 = p.x; t.y0 = p.y; t.lastX = p.x; t.lastY = p.y; trackers[id] = t
+            t.joystick.reach(left: p.x - cursorRect.minX, right: cursorRect.maxX - p.x)
             setNeedsDisplay()
             return
         }
@@ -1801,42 +1803,42 @@ final class KeyboardView: UIView {
 
 /// Rate control independent of event frequency and reduced-motion preferences.
 private final class CursorJoystick {
+    static let maxSpeed = 30.0
+    private static let minSpeed = 3.0
+    private static let deadZone = 4.0
+    /// A press right beside the gap's edge still gets this much room before top speed.
+    private static let minReach = 12.0
     /// Current signed speed in characters per second (also drives the gap's direction gradient).
     private(set) var speed = 0.0
     private var fraction = 0.0
     private var lastTime: TimeInterval?
-    private var smoothed = 0.0
-    /// Speed from distance alone, before holding speeds it up.
-    private var base = 0.0
-    private var pushedSince: TimeInterval?
+    private var reachLeft = CursorJoystick.minReach
+    private var reachRight = CursorJoystick.minReach
 
-    /// `dx` is the finger's distance from where it pressed, in points. Distance sets a starting speed: 3 chars/s just
-    /// outside the 6 pt dead zone (precise), ~10 at 31 pt, 24 at 56 pt and beyond. Holding the push speeds it up, up to
-    /// 3x after ~1.3 s, capped at 60 chars/s. Light smoothing keeps finger jitter from making the speed jump.
-    func displace(_ dx: CGFloat, _ now: TimeInterval) -> Int {
-        var steps = advance(now)
-        smoothed += (Double(dx) - smoothed) * 0.5
-        let magnitude = abs(smoothed)
-        let u = Swift.min(1, Swift.max(0, (magnitude - 6) / 50))
-        let next = magnitude <= 6 ? 0 : (3 + 21 * u * u.squareRoot()) * (smoothed < 0 ? -1.0 : 1.0)
-        if next == 0 || next * base < 0 { fraction = 0; pushedSince = nil }
-        if next != 0 && pushedSince == nil { pushedSince = now }
-        if next != 0 && base == 0 { steps += next < 0 ? -1 : 1 }
-        base = next
-        speed = effective(now)
-        return steps
+    /// How far the gap extends from the press point on each side, in points. Pushing to that edge gives top speed.
+    func reach(left: CGFloat, right: CGFloat) {
+        reachLeft = Swift.max(Self.minReach, Double(left))
+        reachRight = Swift.max(Self.minReach, Double(right))
     }
 
-    private func effective(_ now: TimeInterval) -> Double {
-        guard let since = pushedSince else { return base }
-        let boost = 1 + Swift.min(2, (now - since) * 1.5)
-        return Swift.min(60, Swift.max(-60, base * boost))
+    /// Like a thumb stick: `dx` is how far the finger has pushed from where it pressed, in points, and the cursor keeps
+    /// moving that way until it comes back. Speed runs from 3 chars/s just past the dead zone to `maxSpeed` at the
+    /// gap's edge, easing in so small pushes stay precise; the finger never has to leave the gap.
+    func displace(_ dx: CGFloat, _ now: TimeInterval) -> Int {
+        var steps = advance(now)
+        let magnitude = abs(Double(dx))
+        let reach = dx < 0 ? reachLeft : reachRight
+        let u = Swift.min(1, Swift.max(0, (magnitude - Self.deadZone) / (reach - Self.deadZone)))
+        let next = magnitude <= Self.deadZone ? 0 : (Self.minSpeed + (Self.maxSpeed - Self.minSpeed) * u * u.squareRoot()) * (dx < 0 ? -1.0 : 1.0)
+        if next == 0 || next * speed < 0 { fraction = 0 }
+        if next != 0 && speed == 0 { steps += next < 0 ? -1 : 1 }
+        speed = next
+        return steps
     }
 
     func advance(_ now: TimeInterval) -> Int {
         let previous = lastTime
         lastTime = now
-        speed = effective(now)
         guard let previous = previous else { return 0 }
         fraction += speed * max(0, now - previous)
         // Avoid losing a whole character to floating-point error at an exact boundary.
