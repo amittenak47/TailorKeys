@@ -14,7 +14,6 @@ import android.graphics.PorterDuff
 import android.graphics.Color
 import android.graphics.ComposeShader
 import android.graphics.Path
-import android.graphics.PointF
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
@@ -143,10 +142,30 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val cells = ArrayList<Cell>()
     private val wheels = listOf(Wheel(0), Wheel(1))
     private val handleRect = RectF()
-    private val cursorRect = RectF()
-    /** The visible split's two sides: each row's innermost key edge, top to bottom, following tilt and curve. */
-    private val gapLeft = ArrayList<PointF>()
-    private val gapRight = ArrayList<PointF>()
+    private var centerZone: CursorZone? = null
+    private var cursorZones = emptyList<CursorZone>()
+    private var outerCursorActive = false
+    private var switchRect: RectF? = null
+    private var switchToLeft = false
+    private var layoutHeight = 0
+    private var slideProfile: Pair<Int, Align>? = null
+    private var slideViewWidth = -1
+    private var slideCenter = 0f
+    private var slideDistance = 0f
+    private var slideStarted = 0L
+    private var optionsCovered = false
+
+    /** Let a Quick options change slide visibly when the panel closes, instead of finishing underneath it. */
+    fun setOptionsCovered(covered: Boolean) {
+        if (optionsCovered == covered) return
+        slideDistance = currentSlideOffset()
+        optionsCovered = covered
+        slideStarted = SystemClock.uptimeMillis()
+        invalidate()
+    }
+
+    private fun currentSlideOffset() = slideOffset(slideDistance, if (optionsCovered) 0L else SystemClock.uptimeMillis() - slideStarted, reducedMotion)
+    private fun isSliding() = currentSlideOffset() != 0f
     private val gearRect = RectF()
     private val undoRect = RectF()
     private val hintRect = RectF()
@@ -219,19 +238,27 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
-        setMeasuredDimension(w, layoutFor(w))
+        setMeasuredDimension(w, if (builtWidth == w) layoutHeight else layoutFor(w))
     }
 
     private fun ensureLayout() { if (builtWidth != width && width > 0) layoutFor(width) }
 
-    // Gesture navigation treats a strip along each screen edge as "back", which swallowed taps on the outer keys
-    // (q, a, z, p…). Keep that gesture off the key area so edge keys always type.
+    // Android caps exclusion at 200 dp per edge. Centre the band on the keys so the middle rows win.
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         super.onLayout(changed, left, top, right, bottom)
         if (Build.VERSION.SDK_INT >= 29 && inKeyboard) {
-            val edge = (32 * density).toInt()
-            val keysTop = stripH.toInt()
-            systemGestureExclusionRects = listOf(Rect(0, keysTop, edge, height), Rect(width - edge, keysTop, width, height))
+            val keyBounds = placed.map { RectF(it.rect).also(it.matrix::mapRect) }
+            val topY = keyBounds.minOfOrNull { it.top } ?: stripH
+            val bottomY = keyBounds.maxOfOrNull { it.bottom } ?: handleRect.top
+            val bandH = min(200 * density, bottomY - topY)
+            val bandTop = ((topY + bottomY - bandH) / 2).roundToInt()
+            val edge = 32 * density
+            val leftWidth = if (outerCursorActive) max(edge, cursorZones.filter { it.bounds.left <= edge }
+                .maxOfOrNull { it.bounds.right } ?: edge) else edge
+            val rightStart = if (outerCursorActive) min(width - edge, cursorZones.filter { it.bounds.right >= width - edge }
+                .minOfOrNull { it.bounds.left } ?: (width - edge)) else width - edge
+            systemGestureExclusionRects = listOf(Rect(0, bandTop, ceil(leftWidth).toInt(), bandTop + bandH.toInt()),
+                Rect(rightStart.toInt(), bandTop, width, bandTop + bandH.toInt()))
         }
     }
 
@@ -498,40 +525,64 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             hintRect.set(undoRect.right, 0f, right - undoRect.width(), stripH)
         }
         handleRect.set(areaLeft, y0 + hc, areaLeft + areaW, y0 + hc + handleH)
-        // The cursor gap is exactly the empty split you can see: each row's innermost key edges, following tilt and
-        // curve, from the strip down to the handle. Gaps between other keys are not part of it.
-        gapLeft.clear()
-        gapRight.clear()
-        cursorRect.setEmpty()
-        if (split && !editMode) {
+        // All cursor regions use the same row-edge geometry, including fan rotation and separate space-row tilt.
+        fun keyEdge(leftHalf: Boolean, inner: Boolean): List<ZonePoint> {
+            val edgeRight = leftHalf == inner
             val pt = FloatArray(2)
-            fun mapX(pk: Placed, x: Float): Float { pt[0] = x; pt[1] = pk.rect.centerY(); pk.matrix.mapPoints(pt); return pt[0] }
-            for (left in booleanArrayOf(true, false)) {
-                val side = if (left) gapLeft else gapRight
-                placed.filter { if (left) it.item.c < KeyGrid.CENTER else it.item.c > KeyGrid.CENTER }.groupBy { it.item.r }.values.forEach { row ->
-                    val pk = if (left) row.maxBy { mapX(it, it.rect.right) } else row.minBy { mapX(it, it.rect.left) }
+            fun mapX(pk: Placed): Float {
+                pt[0] = if (edgeRight) pk.rect.right else pk.rect.left; pt[1] = pk.rect.centerY()
+                pk.matrix.mapPoints(pt); return pt[0]
+            }
+            val points = ArrayList<ZonePoint>()
+            placed.filter { !split || if (leftHalf) it.item.c < KeyGrid.CENTER else it.item.c > KeyGrid.CENTER }
+                .groupBy { it.item.r }.values.forEach { row ->
+                    val pk = if (edgeRight) row.maxBy(::mapX) else row.minBy(::mapX)
                     for (y in floatArrayOf(pk.rect.top, pk.rect.bottom)) {
-                        pt[0] = if (left) pk.rect.right else pk.rect.left; pt[1] = y
-                        pk.matrix.mapPoints(pt)
-                        side += PointF(pt[0], pt[1])
+                        pt[0] = if (edgeRight) pk.rect.right else pk.rect.left; pt[1] = y
+                        pk.matrix.mapPoints(pt); points += ZonePoint(pt[0], pt[1])
                     }
                 }
-                side.sortBy { it.y }
-                if (side.isNotEmpty()) {
-                    side.add(0, PointF(side.first().x, stripH))
-                    side += PointF(side.last().x, handleRect.top)
-                }
+            points.sortBy { it.y }
+            if (points.isNotEmpty()) {
+                points.add(0, ZonePoint(points.first().x, stripH))
+                points += ZonePoint(points.last().x, handleRect.top)
             }
-            if (gapLeft.isNotEmpty() && gapRight.isNotEmpty()) {
-                cursorRect.set(gapLeft.minOf { it.x }, stripH, gapRight.maxOf { it.x }, handleRect.top)
-            } else {
-                gapLeft.clear()
-                gapRight.clear()
+            return points
+        }
+        fun vertical(x: Float) = listOf(ZonePoint(x, stripH), ZonePoint(x, handleRect.top))
+        fun zone(left: List<ZonePoint>, right: List<ZonePoint>, excluded: ZoneRect? = null) =
+            if (left.isNotEmpty() && right.isNotEmpty()) CursorZone(left, right, stripH, handleRect.top, excluded) else null
+        centerZone = if (split && !editMode) zone(keyEdge(true, true), keyEdge(false, true)) else null
+        val outer = if (!editMode) listOfNotNull(zone(vertical(areaLeft), keyEdge(true, false)),
+            zone(keyEdge(false, false), vertical(areaLeft + areaW))) else emptyList()
+        val emptyCursor = settings.emptySide() == EmptySide.CURSOR
+        val minSpace = if (emptyCursor) 0f else 40 * d
+        leftSpace = if (areaLeft > 0f && areaLeft >= minSpace) RectF(0f, stripH, areaLeft, y0 + hc) else null
+        rightSpace = if (width - (areaLeft + areaW) > 0f && width - (areaLeft + areaW) >= minSpace) RectF(areaLeft + areaW, stripH, width.toFloat(), y0 + hc) else null
+        val emptyZones = ArrayList<CursorZone>()
+        switchRect = null
+        if (emptyCursor && !editMode) {
+            // Keep the switch next to the keys, as far from the system back-gesture edge as the space permits.
+            val space = listOfNotNull(leftSpace, rightSpace).maxByOrNull { it.width() }
+            if (space != null) {
+                switchToLeft = space === leftSpace
+                val inset = min(8 * d, space.width() / 4)
+                val size = min(min(unit - gap, 48 * d), space.width() - 2 * inset).coerceAtLeast(1f)
+                val x = if (switchToLeft) space.right - inset - size else space.left + inset
+                switchRect = RectF(x, space.bottom - inset - size, x + size, space.bottom - inset)
+            }
+            for (space in listOfNotNull(leftSpace, rightSpace)) {
+                val excluded = switchRect?.takeIf { space.contains(it) }?.let { ZoneRect(it.left, it.top, it.right, it.bottom) }
+                zone(vertical(space.left), vertical(space.right), excluded)?.let(emptyZones::add)
             }
         }
-        val minSpace = 40 * d
-        leftSpace = if (areaLeft >= minSpace) RectF(0f, stripH, areaLeft, y0 + hc) else null
-        rightSpace = if (width - (areaLeft + areaW) >= minSpace) RectF(areaLeft + areaW, stripH, width.toFloat(), y0 + hc) else null
+        val kind = cursorZoneKind(settings.cursorControl(), outer, 32 * d, emptyZones.isNotEmpty())
+        outerCursorActive = !editMode && kind == CursorZoneKind.OUTER
+        cursorZones = if (editMode) emptyList() else when (kind) {
+            CursorZoneKind.OUTER -> outer + emptyZones
+            CursorZoneKind.CENTER -> listOfNotNull(centerZone)
+            CursorZoneKind.NONE -> emptyList()
+        }
         val letters = placed.filter { !it.item.isStack && it.item.keys[0].let { k -> k.length == 1 && k[0].isLetter() } }
         letterCentres = letters.associate { pk ->
             val pt = floatArrayOf(pk.rect.centerX(), pk.rect.centerY())
@@ -539,9 +590,21 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             pk.item.keys[0][0].lowercaseChar() to GestureDecoder.Point(pt[0], pt[1])
         }
         letterWidth = letters.map { it.rect.width() }.sorted().let { if (it.isEmpty()) 1f else it[it.size / 2] }
+        val nextProfile = p.widthPercent to p.align
+        val nextCenter = areaLeft + areaW / 2
+        if (!editMode && slideViewWidth == width && slideProfile != null && slideProfile != nextProfile) {
+            val distance = slideCenter + currentSlideOffset() - nextCenter
+            cancelTouches()
+            slideDistance = if (reducedMotion) 0f else distance
+            slideStarted = SystemClock.uptimeMillis()
+        } else if (slideViewWidth != width || editMode) slideDistance = 0f
+        slideCenter = nextCenter
+        slideProfile = nextProfile
+        slideViewWidth = width
+        layoutHeight = ceil(if (reserve) s.total else max(target, s.total)).toInt()
         builtWidth = width
         accessibilityEvent(View.NO_ID, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE)
-        return ceil(if (reserve) s.total else max(target, s.total)).toInt()
+        return layoutHeight
     }
 
     /** The face a swipe key shows: the one you swiped to, unless another key switched to a different layer. */
@@ -577,7 +640,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         } else {
             ids += A_WHEEL_LEFT; ids += A_WHEEL_RIGHT
             if (gearRect.width() >= 20 * density) ids += A_GEAR
-            if (!cursorRect.isEmpty) ids += A_CURSOR
+            cursorZones.indices.forEach { ids += A_CURSOR + it }
+            if (switchRect != null) ids += A_SWITCH
         }
         popup?.choices?.indices?.forEach { ids += A_POPUP + it }
         return ids
@@ -585,11 +649,12 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     private fun accessibilityRect(id: Int): RectF = when {
         id >= A_POPUP -> popup!!.rects[id - A_POPUP]
+        isCursorAccessibility(id) -> zoneRect(cursorZones[id - A_CURSOR])
         else -> when (id) {
         A_WHEEL_LEFT -> wheels[0].rect
         A_WHEEL_RIGHT -> wheels[1].rect
         A_GEAR -> gearRect
-        A_CURSOR -> cursorRect
+        A_SWITCH -> switchRect ?: RectF()
         A_UNDO -> undoRect
         A_SETTINGS -> moreRect
         A_DONE -> doneRect
@@ -606,12 +671,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun accessibilityLabel(id: Int): String = when {
+        isCursorAccessibility(id) -> "Cursor"
         id >= A_POPUP -> accessibilityValue(id).orEmpty()
         else -> when (id) {
         A_WHEEL_LEFT -> "More suggestions"
         A_WHEEL_RIGHT -> "Suggestions"
         A_GEAR -> "Quick options"
-        A_CURSOR -> "Cursor"
+        A_SWITCH -> "Switch sides"
         A_UNDO -> "Undo"
         A_SETTINGS -> "Settings"
         A_DONE -> "Done"
@@ -679,6 +745,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     override fun onHoverEvent(event: MotionEvent): Boolean {
         if (!accessibilityManager.isEnabled || !accessibilityManager.isTouchExplorationEnabled) return super.onHoverEvent(event)
         ensureLayout()
+        if (isSliding()) { updateHoveredView(A_NONE); return true }
         when (event.actionMasked) {
             MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> {
                 val x = event.x; val y = event.y
@@ -686,7 +753,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     accessibilityIds().firstOrNull { it >= A_WHEEL_LEFT && accessibilityRect(it).contains(x, y) } ?: A_NONE
                 } else {
                     findKey(x, y, strict = true)?.let { placed.indexOf(it) }
-                        ?: if (!editMode && inGap(x, y)) A_CURSOR else A_NONE
+                        ?: if (!editMode && switchRect?.contains(x, y) == true) A_SWITCH
+                        else if (!editMode) cursorZones.indexOfFirst { it.contains(x, y) }.takeIf { it >= 0 }?.let { A_CURSOR + it } ?: A_NONE
+                        else A_NONE
                 }
                 updateHoveredView(id)
             }
@@ -697,6 +766,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun activateAccessibleView(id: Int): Boolean {
+        if (isSliding()) return false
         if (id >= A_POPUP) {
             val choice = accessibilityValue(id) ?: return false
             val owner = popup?.owner
@@ -704,7 +774,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             commitPopup(owner, choice)
             return true
         }
-        if (id == A_CURSOR || id == A_UNDO && history.isEmpty()) return false
+        if (isCursorAccessibility(id) || id == A_UNDO && history.isEmpty()) return false
         if ((id == A_WHEEL_LEFT || id == A_WHEEL_RIGHT) && accessibilityValue(id) == null) return false
         accessibilityEvent(id, AccessibilityEvent.TYPE_VIEW_CLICKED)
         when (id) {
@@ -713,7 +783,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             A_UNDO -> { if (history.isEmpty()) return false; undo() }
             A_SETTINGS -> listener?.onOpenSettings()
             A_DONE -> editMode = false
-            A_CURSOR -> return false
+            A_SWITCH -> switchRect?.let { moveKeyboardToward(it.centerX(), it.centerY()) }
             else -> {
                 val item = placed[id].item
                 if (!acceptKeyTap(item, SystemClock.uptimeMillis())) return true
@@ -727,6 +797,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun adjustAccessibleView(id: Int, step: Int): Boolean {
+        if (isSliding()) return false
+        if (isCursorAccessibility(id)) { listener?.onCursor(step, select = false); return true }
         when (id) {
             A_WHEEL_LEFT, A_WHEEL_RIGHT -> {
                 val wheel = wheels[id - A_WHEEL_LEFT]
@@ -736,7 +808,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 wheel.dragDx = 0f
                 armWheel(wheel)
             }
-            A_CURSOR -> { listener?.onCursor(step, select = false); return true }
             else -> {
                 val item = placed.getOrNull(id)?.item ?: return false
                 if (item.isSpace && settings.languages().size > 1) {
@@ -787,9 +858,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 if (wheel) it.text = value
                 if (Build.VERSION.SDK_INT >= 29) it.isTextEntryKey = item != null || id >= A_POPUP
                 if (Build.VERSION.SDK_INT >= 30 && (item?.isStack == true || wheel)) it.stateDescription = value
-                it.isClickable = id != A_CURSOR && (!wheel || value != null)
+                it.isClickable = !isCursorAccessibility(id) && (!wheel || value != null)
                 if (it.isClickable) it.addAction(AccessibilityNodeInfo.ACTION_CLICK)
-                if (item?.isStack == true || item?.isSpace == true && settings.languages().size > 1 || wheel && value != null || id == A_CURSOR) {
+                if (item?.isStack == true || item?.isSpace == true && settings.languages().size > 1 || wheel && value != null || isCursorAccessibility(id)) {
                     it.isScrollable = true
                     it.addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
                     it.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
@@ -824,7 +895,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     return true
                 }
             }
-            if (!isEnabled) return false
+            if (!isEnabled || isSliding()) return false
             return when (action) {
                 AccessibilityNodeInfo.ACTION_DISMISS -> { dismissPopup(); true }
                 AccessibilityNodeInfo.ACTION_LONG_CLICK -> {
@@ -848,6 +919,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         ensureLayout()
         refreshAccessibilityState()
         canvas.drawColor(palette.background)
+        canvas.save()
+        val offset = currentSlideOffset()
+        canvas.translate(offset, 0f)
         if (editMode) {
             drawToolbar(canvas)
             drawCells(canvas)
@@ -869,11 +943,21 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             canvas.restore()
         }
         drawHandle(canvas)
-        leftSpace?.let { drawMoveArrow(canvas, it, pointsLeft = true) }
-        rightSpace?.let { drawMoveArrow(canvas, it, pointsLeft = false) }
         drag?.let { drawGhost(canvas, it, radius) }
         drawGlide(canvas, now)
         drawPopup(canvas)
+        canvas.restore()
+        if (offset != 0f && !optionsCovered) postInvalidateOnAnimation()
+        else if (!editMode) {
+            if (settings.emptySide() == EmptySide.SLIDE_ARROW) {
+                leftSpace?.let { drawMoveArrow(canvas, it, pointsLeft = true) }
+                rightSpace?.let { drawMoveArrow(canvas, it, pointsLeft = false) }
+            } else switchRect?.let {
+                fill.color = palette.key
+                canvas.drawOval(it, fill)
+                drawMoveArrow(canvas, it, pointsLeft = switchToLeft)
+            }
+        }
         if (editMode && !reducedMotion) postInvalidateOnAnimation()
     }
 
@@ -1074,19 +1158,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         canvas.drawPath(shape(area.centerX(), area.centerY(), s, false, 0.25f * dir, -0.5f, -0.25f * dir, 0f, 0.25f * dir, 0.5f), strokeIn(palette.hint, s * 1.5f, 255))
     }
 
-    /** X of one side of the split at height [y], between that side's row edge points. */
-    private fun gapEdgeAt(side: List<PointF>, y: Float): Float {
-        if (y <= side.first().y) return side.first().x
-        for (i in 1 until side.size) {
-            val a = side[i - 1]
-            val b = side[i]
-            if (y <= b.y) return if (b.y - a.y < 0.5f) b.x else a.x + (b.x - a.x) * (y - a.y) / (b.y - a.y)
-        }
-        return side.last().x
-    }
-
-    private fun inGap(x: Float, y: Float) =
-        gapLeft.isNotEmpty() && cursorRect.contains(x, y) && x >= gapEdgeAt(gapLeft, y) && x <= gapEdgeAt(gapRight, y)
+    private fun cursorZoneAt(x: Float, y: Float) = cursorZones.firstOrNull { it.contains(x, y) }
+    private fun zoneRect(zone: CursorZone) = zone.bounds.let { RectF(it.left, it.top, it.right, it.bottom) }
+    private fun isCursorAccessibility(id: Int) = id in A_CURSOR until A_CURSOR + cursorZones.size
 
     /**
      * Springs the keyboard-wide wave toward where the push points: from the press point out to the keyboard's edge as
@@ -1097,7 +1171,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val dt = (now - t.waveTime).coerceIn(0L, 40L) / 1000f
         t.waveTime = now
         val push = t.joystick.push
-        val reach = if (push < 0) t.x0 - handleRect.left else handleRect.right - t.x0
+        val bounds = t.cursorZone?.bounds
+        val reach = if (push < 0) t.x0 - min(handleRect.left, bounds?.left ?: handleRect.left)
+            else max(handleRect.right, bounds?.right ?: handleRect.right) - t.x0
         val target = t.x0 + push.toFloat() * reach
         if (reducedMotion) { t.waveX = target; t.waveV = 0f; return false }
         t.waveV += (60f * (target - t.waveX) - 16f * t.waveV) * dt
@@ -1106,7 +1182,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     /**
-     * While the centre gap is held, a soft vertical glow in a pale complement of the theme's accent sits under the keys and moves out
+     * While a cursor zone is held, a soft vertical glow in a pale complement of the theme's accent sits under the keys and moves out
      * the way the cursor is pushed: a small push carries it a little past the split, a push to the split's edge carries
      * it to the keyboard's edge. It fades out on every side, gets stronger the harder the push, and is brighter and
      * wider while selecting.
@@ -1130,10 +1206,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         // A bell-shaped falloff across, and a fade at the top and bottom, so no edge is ever hard.
         val across = LinearGradient(t.waveX - half, 0f, t.waveX + half, 0f,
             WAVE_FALLOFF.map { rgb or ((peak * it).toInt() shl 24) }.toIntArray(), WAVE_STOPS, Shader.TileMode.CLAMP)
-        val down = LinearGradient(0f, cursorRect.top, 0f, cursorRect.bottom,
+        val down = LinearGradient(0f, stripH, 0f, handleRect.top,
             intArrayOf(0, -0x1000000, -0x1000000, 0), floatArrayOf(0f, 0.2f, 0.8f, 1f), Shader.TileMode.CLAMP)
         fill.shader = ComposeShader(across, down, PorterDuff.Mode.DST_IN)
-        canvas.drawRect(t.waveX - half, cursorRect.top, t.waveX + half, cursorRect.bottom, fill)
+        canvas.drawRect(t.waveX - half, stripH, t.waveX + half, handleRect.top, fill)
         fill.shader = null
     }
 
@@ -1304,6 +1380,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         var tapY = 0f
         var lastX = 0f
         val joystick = CursorJoystick()
+        var cursorZone: CursorZone? = null
         var lastCursorHaptic = Long.MIN_VALUE
         /** The keyboard-wide wave's position and velocity (px, px/s), sprung toward where the push points. */
         var waveX = 0f
@@ -1382,6 +1459,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (e.actionMasked == MotionEvent.ACTION_DOWN) parent?.requestDisallowInterceptTouchEvent(true)
         ensureLayout()
+        if (isSliding()) return true
         if (editMode) return editTouch(e)
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN ->
@@ -1408,13 +1486,14 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun pointerDown(id: Int, x: Float, y: Float, time: Long) {
-        if (glideId != null) return
-        val onControl = gearRect.contains(x, y) || handleRect.contains(x, y) || wheels.any { it.rect.contains(x, y) } ||
+        if (glideId != null || isSliding()) return
+        val zone = cursorZoneAt(x, y)
+        val onControl = zone != null || gearRect.contains(x, y) || handleRect.contains(x, y) || wheels.any { it.rect.contains(x, y) } ||
             leftSpace?.contains(x, y) == true || rightSpace?.contains(x, y) == true
         val initialKey = if (onControl) null else findKey(x, y)
         if (initialKey != null && !acceptKeyTap(initialKey.item, time)) return
         val chordKey = if (chordsAllowed && state.layer == Layer.ABC && !editMode && popup == null &&
-            !gearRect.contains(x, y) && !handleRect.contains(x, y) && !wheels.any { it.rect.contains(x, y) } &&
+            zone == null && !gearRect.contains(x, y) && !handleRect.contains(x, y) && !wheels.any { it.rect.contains(x, y) } &&
             leftSpace?.contains(x, y) != true && rightSpace?.contains(x, y) != true) findKey(x, y)?.takeIf {
                 !it.item.isStack && it.item.keys[0].let { k -> k.length == 1 && k[0].isLetter() }
             } else null
@@ -1440,20 +1519,22 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             trackers[id] = Tracker(K_HANDLE, null).also { it.x0 = x; it.lastX = x }
             return
         }
-        if (leftSpace?.contains(x, y) == true || rightSpace?.contains(x, y) == true) {
+        if (switchRect?.contains(x, y) == true || settings.emptySide() == EmptySide.SLIDE_ARROW &&
+            (leftSpace?.contains(x, y) == true || rightSpace?.contains(x, y) == true)) {
             moveKeyboardToward(x, y)
             return
         }
         val hit = findKey(x, y, strict = true)
-        if (hit == null && inGap(x, y)) {
+        if (hit == null && zone != null) {
             if (trackers.values.any { it.kind == K_CURSOR }) return
             trackers[id] = Tracker(K_CURSOR, null).also {
                 it.x0 = x; it.y0 = y; it.fx = x; it.fy = y
+                it.cursorZone = zone
                 it.waveX = x; it.waveTime = SystemClock.uptimeMillis()
-                it.joystick.reach((x - gapEdgeAt(gapLeft, y)) / density, (gapEdgeAt(gapRight, y) - x) / density)
+                it.joystick.reach((x - CursorZone.edgeAt(zone.left, y)) / density, (CursorZone.edgeAt(zone.right, y) - x) / density)
                 it.select = gapPresses.isSelection(time, x / density, y / density)
                 if (it.select) {
-                    // Selecting is 15% less sensitive, but the split's edge still reaches full speed and the glow the end.
+                    // Selecting is 15% less sensitive, but the zone's edge still reaches full speed and the glow the end.
                     it.joystick.sensitivity = 0.85
                     listener?.onSelectMode(true)
                     haptic(HapticFeedbackConstants.LONG_PRESS)
@@ -1463,6 +1544,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             invalidate()
             return
         }
+        if (hit == null && (centerZone?.contains(x, y) == true ||
+            leftSpace?.contains(x, y) == true || rightSpace?.contains(x, y) == true)) return
         val pk = chordKey ?: findKey(x, y) ?: return
         if (chordKey == null) haptic(HapticFeedbackConstants.KEYBOARD_TAP)
         if (pk.item.isStack) {
@@ -1830,7 +1913,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             else -> return
         }
         haptic(HapticFeedbackConstants.KEYBOARD_TAP)
-        settings.setAlign(isLandscape, align)
+        settings.setAlignFor(isLandscape, align)
     }
 
     /** Dragging the bar under the keys: full width shrinks to one-hand size on that side; the other way restores it. */
@@ -1870,6 +1953,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         clearAccessibilityFocus()
         updateHoveredView(A_NONE)
         cancelTouches()
+        slideDistance = 0f
         super.onDetachedFromWindow()
     }
 
@@ -2031,7 +2115,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         const val A_WHEEL_LEFT = 10000
         const val A_WHEEL_RIGHT = 10001
         const val A_GEAR = 10002
-        const val A_CURSOR = 10003
+        const val A_CURSOR = 11000
+        const val A_SWITCH = 10007
         const val A_UNDO = 10004
         const val A_SETTINGS = 10005
         const val A_DONE = 10006

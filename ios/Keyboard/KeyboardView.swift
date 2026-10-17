@@ -164,10 +164,55 @@ final class KeyboardView: UIView {
     private var cells: [Cell] = []
     private let wheels = [Wheel(side: 0), Wheel(side: 1)]
     private var handleRect = CGRect.zero
-    private var cursorRect = CGRect.zero
-    /// The visible split's two sides: each row's innermost key edge, top to bottom, following tilt and curve.
-    private var gapLeft: [CGPoint] = []
-    private var gapRight: [CGPoint] = []
+    private var centerZone: CursorZone?
+    private var cursorZones: [CursorZone] = []
+    private var switchRect: CGRect?
+    private var switchToLeft = false
+    private var layoutHeight: CGFloat = 0
+    private var slideProfileWidth: Int?
+    private var slideAlign: Align = .center
+    private var slideViewWidth: CGFloat = -1
+    private var slideCenter: CGFloat = 0
+    private var slideDistance: CGFloat = 0
+    private var slideStarted: TimeInterval = 0
+    private var slideDisplayLink: CADisplayLink?
+    private var optionsCovered = false
+
+    /// Keep Quick options changes at their starting position until the keys are visible again.
+    func setOptionsCovered(_ covered: Bool) {
+        guard optionsCovered != covered else { return }
+        let offset = currentSlideOffset
+        optionsCovered = covered
+        startSlide(offset)
+        setNeedsDisplay()
+    }
+
+    private var currentSlideOffset: CGFloat {
+        slideOffset(slideDistance, elapsed: optionsCovered ? 0 : CACurrentMediaTime() - slideStarted,
+                    reducedMotion: reducedMotion || UIAccessibility.isReduceMotionEnabled)
+    }
+    private var isSliding: Bool { currentSlideOffset != 0 }
+
+    private func startSlide(_ distance: CGFloat) {
+        cancelTouches()
+        slideDisplayLink?.invalidate(); slideDisplayLink = nil
+        slideDistance = reducedMotion || UIAccessibility.isReduceMotionEnabled ? 0 : distance
+        slideStarted = CACurrentMediaTime()
+        if slideDistance != 0 && !optionsCovered {
+            let link = CADisplayLink(target: self, selector: #selector(slideTick))
+            link.add(to: .main, forMode: .common)
+            slideDisplayLink = link
+        }
+    }
+
+    @objc private func slideTick() {
+        setNeedsDisplay()
+        if !isSliding {
+            slideDisplayLink?.invalidate(); slideDisplayLink = nil
+            slideDistance = 0
+            rebuildAccessibilityElements(layoutChanged: true)
+        }
+    }
     private var gearRect = CGRect.zero
     private var globeRect = CGRect.zero
     /// Set by the controller from `needsInputModeSwitchKey` (iPhones with a home button).
@@ -220,6 +265,7 @@ final class KeyboardView: UIView {
     private func refreshMotion() {
         reducedMotion = UIAccessibility.isReduceMotionEnabled
         if reducedMotion && glideID == nil { trail = [] }
+        if reducedMotion { slideDisplayLink?.invalidate(); slideDisplayLink = nil; slideDistance = 0 }
         layer.removeAllAnimations()
         updateWiggle()
     }
@@ -242,11 +288,15 @@ final class KeyboardView: UIView {
         setNeedsDisplay()
     }
 
-    func height(forWidth w: CGFloat) -> CGFloat { layoutFor(w) }
+    func height(forWidth w: CGFloat) -> CGFloat { builtWidth == w ? layoutHeight : layoutFor(w) }
 
     override func layoutSubviews() {
         super.layoutSubviews()
         if builtWidth != bounds.width { layoutFor(bounds.width) }
+        // Paths use screen coordinates; refresh them after a height change moves the keyboard's frame.
+        for (index, zone) in cursorZones.enumerated() {
+            accessibleItems["cursor\(index)"]?.accessibilityPath = UIAccessibility.convertToScreenCoordinates(zone.path, in: self)
+        }
         setNeedsDisplay()
     }
 
@@ -534,44 +584,81 @@ final class KeyboardView: UIView {
         moreRect = CGRect(x: doneRect.minX - 44, y: 0, width: 44, height: strip)
         hintRect = CGRect(x: undoRect.maxX, y: 0, width: Swift.max(0, moreRect.minX - undoRect.maxX), height: strip)
         handleRect = CGRect(x: areaLeft, y: y0 + hc, width: areaW, height: handleH)
-        // The cursor gap is exactly the empty split you can see: each row's innermost key edges, following tilt and
-        // curve, from the strip down to the handle. Gaps between other keys are not part of it.
-        gapLeft = []
-        gapRight = []
-        cursorRect = .zero
-        if split && !editMode {
-            func side(_ left: Bool) -> [CGPoint] {
-                func mapX(_ pk: Placed, _ x: CGFloat) -> CGFloat { CGPoint(x: x, y: pk.rect.midY).applying(pk.t).x }
-                let keys = placed.filter { left ? $0.item.c < KeyGrid.center : $0.item.c > KeyGrid.center }
-                var points: [CGPoint] = []
-                for row in Dictionary(grouping: keys, by: { $0.item.r }).values {
-                    guard let pk = left ? row.max(by: { mapX($0, $0.rect.maxX) < mapX($1, $1.rect.maxX) })
-                                        : row.min(by: { mapX($0, $0.rect.minX) < mapX($1, $1.rect.minX) }) else { continue }
-                    let x = left ? pk.rect.maxX : pk.rect.minX
-                    points += [CGPoint(x: x, y: pk.rect.minY).applying(pk.t), CGPoint(x: x, y: pk.rect.maxY).applying(pk.t)]
-                }
-                points.sort { $0.y < $1.y }
-                guard let first = points.first, let last = points.last else { return [] }
-                return [CGPoint(x: first.x, y: stripH)] + points + [CGPoint(x: last.x, y: handleRect.minY)]
+        // Select the inner or outer key in each row, then follow its transformed edge just as the split does.
+        func keyEdge(_ leftHalf: Bool, inner: Bool) -> [CGPoint] {
+            let edgeRight = leftHalf == inner
+            func mapX(_ pk: Placed) -> CGFloat {
+                CGPoint(x: edgeRight ? pk.rect.maxX : pk.rect.minX, y: pk.rect.midY).applying(pk.t).x
             }
-            let l = side(true), r = side(false)
-            if !l.isEmpty && !r.isEmpty {
-                gapLeft = l
-                gapRight = r
-                let x0 = l.map(\.x).min()!, x1 = r.map(\.x).max()!
-                cursorRect = CGRect(x: x0, y: stripH, width: x1 - x0, height: handleRect.minY - stripH)
+            let keys = placed.filter { !split || (leftHalf ? $0.item.c < KeyGrid.center : $0.item.c > KeyGrid.center) }
+            var points: [CGPoint] = []
+            for row in Dictionary(grouping: keys, by: { $0.item.r }).values {
+                let pk = edgeRight ? row.max(by: { mapX($0) < mapX($1) }) : row.min(by: { mapX($0) < mapX($1) })
+                guard let key = pk else { continue }
+                let x = edgeRight ? key.rect.maxX : key.rect.minX
+                points += [CGPoint(x: x, y: key.rect.minY).applying(key.t), CGPoint(x: x, y: key.rect.maxY).applying(key.t)]
+            }
+            points.sort { $0.y < $1.y }
+            guard let first = points.first, let last = points.last else { return [] }
+            return [CGPoint(x: first.x, y: stripH)] + points + [CGPoint(x: last.x, y: handleRect.minY)]
+        }
+        func vertical(_ x: CGFloat) -> [CGPoint] { [CGPoint(x: x, y: stripH), CGPoint(x: x, y: handleRect.minY)] }
+        func zone(_ left: [CGPoint], _ right: [CGPoint], excluded: CGRect? = nil) -> CursorZone? {
+            guard !left.isEmpty, !right.isEmpty else { return nil }
+            return CursorZone(left: left, right: right, top: stripH, bottom: handleRect.minY, excluded: excluded)
+        }
+        centerZone = split && !editMode ? zone(keyEdge(true, inner: true), keyEdge(false, inner: true)) : nil
+        let outer: [CursorZone] = editMode ? [] : [zone(vertical(areaLeft), keyEdge(true, inner: false)),
+            zone(keyEdge(false, inner: false), vertical(areaLeft + areaW))].compactMap { $0 }
+        let emptyCursor = settings.emptySide == .cursor
+        let minSpace: CGFloat = emptyCursor ? 0 : 40
+        leftSpace = areaLeft > 0 && areaLeft >= minSpace ? CGRect(x: 0, y: strip, width: areaLeft, height: y0 + hc - strip) : nil
+        rightSpace = width - (areaLeft + areaW) > 0 && width - (areaLeft + areaW) >= minSpace ? CGRect(x: areaLeft + areaW, y: strip, width: width - areaLeft - areaW, height: y0 + hc - strip) : nil
+        var emptyZones: [CursorZone] = []
+        switchRect = nil
+        if emptyCursor && !editMode {
+            // The switch hugs the keys, leaving the greatest possible distance from the screen's back-gesture edge.
+            if let space = [leftSpace, rightSpace].compactMap({ $0 }).max(by: { $0.width < $1.width }) {
+                switchToLeft = leftSpace == space
+                let inset = Swift.min(8, space.width / 4)
+                let size = Swift.max(1, Swift.min(Swift.min(unit - gap, 48), space.width - 2 * inset))
+                let x = switchToLeft ? space.maxX - inset - size : space.minX + inset
+                switchRect = CGRect(x: x, y: space.maxY - inset - size, width: size, height: size)
+            }
+            for space in [leftSpace, rightSpace].compactMap({ $0 }) {
+                let excluded = switchRect.flatMap { space.contains($0) ? $0 : nil }
+                if let z = zone(vertical(space.minX), vertical(space.maxX), excluded: excluded) { emptyZones.append(z) }
             }
         }
-        leftSpace = areaLeft >= 40 ? CGRect(x: 0, y: strip, width: areaLeft, height: y0 + hc - strip) : nil
-        rightSpace = width - (areaLeft + areaW) >= 40 ? CGRect(x: areaLeft + areaW, y: strip, width: width - areaLeft - areaW, height: y0 + hc - strip) : nil
+        let kind = cursorZoneKind(settings.cursorControl, outer: outer, hasEmptySide: !emptyZones.isEmpty)
+        if editMode { cursorZones = [] }
+        else {
+            switch kind {
+            case .outer: cursorZones = outer + emptyZones
+            case .center: cursorZones = [centerZone].compactMap { $0 }
+            case .none: cursorZones = []
+            }
+        }
         let letters = placed.filter { !$0.item.isStack && $0.item.keys[0].count == 1 && $0.item.keys[0].first!.isLetter }
         letterCentres = [:]
         for pk in letters { letterCentres[pk.item.keys[0].lowercased().first!] = CGPoint(x: pk.rect.midX, y: pk.rect.midY).applying(pk.t) }
         let widths = letters.map { $0.rect.width }.sorted()
         letterWidth = widths.isEmpty ? 1 : widths[widths.count / 2]
+        let nextCenter = areaLeft + areaW / 2
+        if !editMode, slideViewWidth == width, let previousWidth = slideProfileWidth,
+           previousWidth != p.widthPercent || slideAlign != p.align {
+            startSlide(slideCenter + currentSlideOffset - nextCenter)
+        } else if slideViewWidth != width || editMode {
+            slideDisplayLink?.invalidate(); slideDisplayLink = nil; slideDistance = 0
+        }
+        slideCenter = nextCenter
+        slideProfileWidth = p.widthPercent
+        slideAlign = p.align
+        slideViewWidth = width
+        layoutHeight = ceil(reserve ? total(s) : Swift.max(target, total(s)))
         builtWidth = width
         rebuildAccessibilityElements(layoutChanged: accessibilityLayoutChanged)
-        return ceil(reserve ? total(s) : Swift.max(target, total(s)))
+        return layoutHeight
     }
 
     /// The face a swipe key shows: the one you swiped to, unless another key switched to a different layer.
@@ -624,6 +711,7 @@ final class KeyboardView: UIView {
         func element(_ id: String, _ frame: CGRect, _ label: String, _ traits: UIAccessibilityTraits) -> AccessibleElement {
             let e = accessibleItems[id] ?? AccessibleElement(accessibilityContainer: self)
             e.isAccessibilityElement = true
+            e.accessibilityPath = nil
             e.accessibilityFrameInContainerSpace = frame
             e.accessibilityLabel = label
             e.accessibilityTraits = traits
@@ -696,6 +784,25 @@ final class KeyboardView: UIView {
                 e.increment = { [weak self] in self?.adjustAccessibleWheel(index, 1) }
                 e.decrement = { [weak self] in self?.adjustAccessibleWheel(index, -1) }
             }
+            for (index, zone) in cursorZones.enumerated() {
+                let e = element("cursor\(index)", zone.bounds, "Cursor", .adjustable)
+                e.accessibilityPath = UIAccessibility.convertToScreenCoordinates(zone.path, in: self)
+                e.increment = { [weak self] in
+                    guard let self = self, !self.isSliding else { return }
+                    self.delegate?.moveCursor(1)
+                }
+                e.decrement = { [weak self] in
+                    guard let self = self, !self.isSliding else { return }
+                    self.delegate?.moveCursor(-1)
+                }
+            }
+            if let button = switchRect {
+                let e = element("switch", button, "Switch sides", .button)
+                e.activate = { [weak self] in
+                    guard let self = self, !self.isSliding else { return false }
+                    self.moveToward(CGPoint(x: button.midX, y: button.midY)); return true
+                }
+            }
             let gear = element("gear", gearRect, "Quick options", .button)
             gear.activate = { [weak self] in
                 guard let self = self else { return false }
@@ -722,7 +829,7 @@ final class KeyboardView: UIView {
     }
 
     private func activateAccessibleKey(_ index: Int) -> Bool {
-        guard placed.indices.contains(index), delegate != nil else { return false }
+        guard !isSliding, placed.indices.contains(index), delegate != nil else { return false }
         let item = placed[index].item
         if !acceptKeyTap(item, CACurrentMediaTime()) { return true }
         click()
@@ -733,7 +840,7 @@ final class KeyboardView: UIView {
     }
 
     private func adjustAccessibleKey(_ index: Int, _ step: Int) {
-        guard placed.indices.contains(index) else { return }
+        guard !isSliding, placed.indices.contains(index) else { return }
         let item = placed[index].item
         guard item.isStack else { return }
         item.idx = (shownIdx(item) + step + item.keys.count) % item.keys.count
@@ -772,6 +879,8 @@ final class KeyboardView: UIView {
         rebuildAccessibilityElements()
         palette.background.setFill()
         ctx.fill(bounds)
+        ctx.saveGState()
+        ctx.translateBy(x: currentSlideOffset, y: 0)
         if editMode {
             drawToolbar()
             drawCells(ctx)
@@ -798,11 +907,20 @@ final class KeyboardView: UIView {
             ctx.restoreGState()
         }
         drawHandle()
-        if let l = leftSpace { drawArrow(l, pointsLeft: true) }
-        if let r = rightSpace { drawArrow(r, pointsLeft: false) }
         if let d = drag { drawGhost(ctx, d, radius) }
         drawGlide(ctx, now)
         drawPopup()
+        ctx.restoreGState()
+        if !editMode && !isSliding {
+            if settings.emptySide == .slideArrow {
+                if let l = leftSpace { drawArrow(l, pointsLeft: true) }
+                if let r = rightSpace { drawArrow(r, pointsLeft: false) }
+            } else if let button = switchRect {
+                palette.key.setFill()
+                ctx.fillEllipse(in: button)
+                drawArrow(button, pointsLeft: switchToLeft)
+            }
+        }
     }
 
     private func drawGlide(_ ctx: CGContext, _ now: TimeInterval) {
@@ -987,21 +1105,7 @@ final class KeyboardView: UIView {
         img.draw(at: CGPoint(x: rect.midX - img.size.width / 2, y: rect.midY - img.size.height / 2))
     }
 
-    /// While the centre gap is held: a ring marks where the finger pressed (inside it the cursor stops) and a soft
-    /// glow follows the finger.
-    /// X of one side of the split at height `y`, between that side's row edge points.
-    private func gapEdge(_ side: [CGPoint], at y: CGFloat) -> CGFloat {
-        guard let first = side.first, y > first.y else { return side.first?.x ?? 0 }
-        for i in 1..<side.count where y <= side[i].y {
-            let a = side[i - 1], b = side[i]
-            return b.y - a.y < 0.5 ? b.x : a.x + (b.x - a.x) * (y - a.y) / (b.y - a.y)
-        }
-        return side[side.count - 1].x
-    }
-
-    private func inGap(_ p: CGPoint) -> Bool {
-        !gapLeft.isEmpty && cursorRect.contains(p) && p.x >= gapEdge(gapLeft, at: p.y) && p.x <= gapEdge(gapRight, at: p.y)
-    }
+    private func cursorZone(at p: CGPoint) -> CursorZone? { cursorZones.first { $0.contains(p) } }
 
     /// Springs the keyboard-wide wave toward where the push points: from the press point out to the keyboard's edge as
     /// the push reaches the gap's edge, in proportion, gliding smoothly without overshoot so it stays easy on the eyes.
@@ -1010,7 +1114,9 @@ final class KeyboardView: UIView {
         let dt = CGFloat(Swift.min(0.04, Swift.max(0, now - t.waveTime)))
         t.waveTime = now
         let push = t.joystick.push
-        let reach = push < 0 ? t.x0 - handleRect.minX : handleRect.maxX - t.x0
+        let zoneBounds = t.cursorZone?.bounds ?? handleRect
+        let reach = push < 0 ? t.x0 - Swift.min(handleRect.minX, zoneBounds.minX)
+            : Swift.max(handleRect.maxX, zoneBounds.maxX) - t.x0
         let target = t.x0 + CGFloat(push) * reach
         if UIAccessibility.isReduceMotionEnabled { t.waveX = target; t.waveV = 0; return false }
         t.waveV += (60 * (target - t.waveX) - 16 * t.waveV) * dt
@@ -1018,7 +1124,7 @@ final class KeyboardView: UIView {
         return abs(target - t.waveX) > 0.5 || abs(t.waveV) > 4
     }
 
-    /// While the centre gap is held, a soft vertical glow in a pale complement of the theme's accent sits under the keys and moves out
+    /// While a cursor zone is held, a soft vertical glow in a pale complement of the theme's accent sits under the keys and moves out
     /// the way the cursor is pushed: a small push carries it a little past the split, a push to the split's edge carries
     /// it to the keyboard's edge. It fades out on every side and gets stronger the harder the push.
     /// The accent's complementary hue, softened to a light pastel so the glow reads as a tint, never a dark smear.
@@ -1032,7 +1138,7 @@ final class KeyboardView: UIView {
     }
 
     private func drawWave(_ ctx: CGContext) {
-        guard let t = trackers.values.first(where: { $0.kind == .cursor }), !cursorRect.isEmpty else { return }
+        guard let t = trackers.values.first(where: { $0.kind == .cursor }) else { return }
         let half: CGFloat = 44
         let peak = 0.22 + 0.14 * CGFloat(Swift.min(1, abs(t.joystick.push)))
         let color = waveColor
@@ -1043,7 +1149,7 @@ final class KeyboardView: UIView {
                                       locations: [0, 0.15, 0.3, 0.5, 0.7, 0.85, 1]),
               let down = CGGradient(colorsSpace: space, colors: [UIColor.clear.cgColor, UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor] as CFArray,
                                     locations: [0, 0.2, 0.8, 1]) else { return }
-        let box = CGRect(x: t.waveX - half, y: cursorRect.minY, width: half * 2, height: cursorRect.height)
+        let box = CGRect(x: t.waveX - half, y: stripH, width: half * 2, height: handleRect.minY - stripH)
         ctx.saveGState()
         ctx.clip(to: box)
         ctx.beginTransparencyLayer(auxiliaryInfo: nil)
@@ -1237,6 +1343,7 @@ final class KeyboardView: UIView {
         var lastX: CGFloat = 0
         var lastY: CGFloat = 0
         let joystick = CursorJoystick()
+        var cursorZone: CursorZone?
         /// The keyboard-wide wave's position and velocity (pt, pt/s), sprung toward where the push points.
         var waveX: CGFloat = 0
         var waveV: CGFloat = 0
@@ -1312,6 +1419,8 @@ final class KeyboardView: UIView {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if builtWidth != bounds.width { layoutFor(bounds.width) }
+        guard !isSliding else { return }
         for t in touches.sorted(by: { $0.timestamp < $1.timestamp }) {
             let p = t.location(in: self)
             if editMode { editBegan(t, p) } else { down(ObjectIdentifier(t), p, t.timestamp) }
@@ -1319,6 +1428,7 @@ final class KeyboardView: UIView {
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard !isSliding else { return }
         for t in touches {
             let p = t.location(in: self)
             if editMode { editMoved(t, p) } else {
@@ -1332,6 +1442,7 @@ final class KeyboardView: UIView {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard !isSliding else { return }
         for t in touches {
             if editMode { editEnded(t) } else {
                 let id = ObjectIdentifier(t)
@@ -1359,13 +1470,14 @@ final class KeyboardView: UIView {
     }
 
     private func down(_ id: ObjectIdentifier, _ p: CGPoint, _ time: TimeInterval) {
-        if glideID != nil { return }
-        let onControl = gearRect.contains(p) || handleRect.contains(p) || wheels.contains { $0.rect.contains(p) } ||
+        if glideID != nil || isSliding { return }
+        let zone = cursorZone(at: p)
+        let onControl = zone != nil || gearRect.contains(p) || handleRect.contains(p) || wheels.contains { $0.rect.contains(p) } ||
             leftSpace?.contains(p) == true || rightSpace?.contains(p) == true
         if !onControl, let pk = findKey(p), !acceptKeyTap(pk.item, time) { return }
         let chordKey: Placed?
         if settings.chording, state.layer == .abc, !editMode, popup == nil,
-           !gearRect.contains(p), !handleRect.contains(p), !wheels.contains(where: { $0.rect.contains(p) }),
+           zone == nil, !gearRect.contains(p), !handleRect.contains(p), !wheels.contains(where: { $0.rect.contains(p) }),
            leftSpace?.contains(p) != true, rightSpace?.contains(p) != true,
            let pk = findKey(p), !pk.item.isStack, pk.item.keys[0].count == 1, pk.item.keys[0].first!.isLetter {
             chordKey = pk
@@ -1391,16 +1503,19 @@ final class KeyboardView: UIView {
             let t = Tracker(kind: .handle, pk: nil); t.x0 = p.x; t.lastX = p.x; trackers[id] = t
             return
         }
-        if leftSpace?.contains(p) == true || rightSpace?.contains(p) == true { moveToward(p); return }
+        if switchRect?.contains(p) == true || (settings.emptySide == .slideArrow &&
+            (leftSpace?.contains(p) == true || rightSpace?.contains(p) == true)) { moveToward(p); return }
         let hit = findKey(p, strict: true)
-        if hit == nil && inGap(p) {
+        if hit == nil, let zone = zone {
             guard !trackers.values.contains(where: { $0.kind == .cursor }) else { return }
             let t = Tracker(kind: .cursor, pk: nil); t.x0 = p.x; t.y0 = p.y; t.lastX = p.x; t.lastY = p.y; trackers[id] = t
+            t.cursorZone = zone
             t.waveX = p.x; t.waveTime = CACurrentMediaTime()
-            t.joystick.reach(left: p.x - gapEdge(gapLeft, at: p.y), right: gapEdge(gapRight, at: p.y) - p.x)
+            t.joystick.reach(left: p.x - CursorZone.edge(zone.left, at: p.y), right: CursorZone.edge(zone.right, at: p.y) - p.x)
             setNeedsDisplay()
             return
         }
+        if hit == nil && (centerZone?.contains(p) == true || leftSpace?.contains(p) == true || rightSpace?.contains(p) == true) { return }
         guard let pk = chordKey ?? findKey(p) else { return }
         if chordKey == nil { click() }
         if pk.item.isStack {
@@ -1817,7 +1932,10 @@ final class KeyboardView: UIView {
 
     override func willMove(toWindow newWindow: UIWindow?) {
         super.willMove(toWindow: newWindow)
-        if newWindow == nil { cancelTouches(); displayLink?.invalidate(); displayLink = nil } else { refreshMotion(); setNeedsDisplay() }
+        if newWindow == nil {
+            cancelTouches(); displayLink?.invalidate(); displayLink = nil
+            slideDisplayLink?.invalidate(); slideDisplayLink = nil; slideDistance = 0
+        } else { refreshMotion(); setNeedsDisplay() }
     }
 
     private func editBegan(_ t: UITouch, _ p: CGPoint) {

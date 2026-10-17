@@ -491,6 +491,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         guard quickOptions == nil else { return }
         choiceInterrupted()
         keyboard.cancelTouches()
+        keyboard.setOptionsCovered(true)
         keyboard.accessibilityElementsHidden = true
         let p = QuickOptions(settings: settings, stripHeight: { [weak self] in self?.keyboard.suggestionStripHeight ?? 40 })
         p.onClose = { [weak self] in self?.closeQuickOptions() }
@@ -516,6 +517,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func closeQuickOptions() {
         quickOptions?.removeFromSuperview()
         quickOptions = nil
+        keyboard?.setOptionsCovered(false)
         keyboard?.accessibilityElementsHidden = false
         UIAccessibility.post(notification: .layoutChanged, argument: keyboard)
     }

@@ -24,6 +24,7 @@ targets:
       - Keyboard/Theme.swift
       - Keyboard/KeyboardSettings.swift
       - Keyboard/KeyboardView.swift
+      - Keyboard/CursorZones.swift
       - path: ../app/src/main/assets/NOTICE-dictionary.txt
         buildPhase: resources
     entitlements:
