@@ -12,6 +12,8 @@ protocol KeyboardViewDelegate: AnyObject {
     func replacePressText(_ original: String, following: String, replacement: String)
     func longPressText(_ text: String)
     func stackFace(_ code: String)
+    func wheelChosen()
+    func choiceInterrupted()
     func suggestionPicked(_ text: String)
     func switchLanguage(_ direction: Int)
     func spaceLongPressed()
@@ -22,6 +24,8 @@ protocol KeyboardViewDelegate: AnyObject {
 }
 
 extension KeyboardViewDelegate {
+    func wheelChosen() {}
+    func choiceInterrupted() {}
     func chordTyped(_ word: String) {}
     func replacePressText(_ original: String, following: String, replacement: String) {}
     func switchLanguage(_ direction: Int) {}
@@ -41,7 +45,7 @@ final class KeyboardView: UIView {
     /// Setting a new grid from outside clears the undo history; `undo()` and `replaceGrid(_:)` keep it.
     var grid: KeyGrid { didSet { if !keepHistory { history.removeAll() }; cancelTouches(); relayout() } }
     var enterLabel: String? { didSet { rebuildAccessibilityElements(); setNeedsDisplay() } }
-    var editMode = false { didSet { if editMode != oldValue { editHint = nil; cancelTouches(); updateWiggle(); relayout() } } }
+    var editMode = false { didSet { if editMode != oldValue { clearArmedWord(); delegate?.choiceInterrupted(); editHint = nil; cancelTouches(); updateWiggle(); relayout() } } }
 
     private var history: [String] = []
     private var keepHistory = false
@@ -55,7 +59,30 @@ final class KeyboardView: UIView {
     private var sugRight: [String] = []
     private var prefix = ""
 
+    private var armedWheel: Wheel?
+    var armedWord: String? {
+        guard let wheel = armedWheel, !words(wheel).isEmpty else { return nil }
+        return wordAt(words(wheel), wheel.index)
+    }
+
+    func clearArmedWord() {
+        armedWheel = nil
+        rebuildAccessibilityElements()
+        setNeedsDisplay()
+    }
+
+    private func armWheel(_ wheel: Wheel) {
+        guard settings.spaceAccepts, state.layer == .abc, !words(wheel).isEmpty else { return }
+        armedWheel = wheel
+        delegate?.wheelChosen()
+        rebuildAccessibilityElements()
+        UIAccessibility.post(notification: .announcement, argument: "\(armedWord!) chosen, space to insert")
+        setNeedsDisplay()
+    }
+
     func setSuggestions(left: [String], right: [String], prefix: String) {
+        if armedWheel != nil && sugLeft == left && sugRight == right && self.prefix == prefix { return }
+        clearArmedWord()
         sugLeft = left; sugRight = right; self.prefix = prefix
         for w in wheels { w.index = 0; w.dragDx = 0 }
         rebuildAccessibilityElements()
@@ -126,6 +153,7 @@ final class KeyboardView: UIView {
     }
 
     func reloadSettings() {
+        clearArmedWord()
         cancelTouches()
         refreshMotion()
         state.language = settings.currentLanguage
@@ -480,6 +508,7 @@ final class KeyboardView: UIView {
         if capsChanged { UIAccessibility.post(notification: .announcement, argument: state.capsLock ? "Caps lock on" : "Caps lock off") }
         var signature = [state.language, "\(settings.languages.count)", "\(state.layer)", "\(state.capsLock)", "\(state.shift)", enterLabel ?? "", "\(editMode)", "\(history.isEmpty)"]
         signature.append(contentsOf: placed.map { "\(KeyText.spoken($0.item.keys[shownIdx($0.item)], state, enterLabel)):\($0.item.keys.count)" })
+        signature.append("\(armedWheel?.side ?? -1):" + (armedWord ?? ""))
         signature.append(contentsOf: wheels.map { words($0).isEmpty ? "" : wordAt(words($0), $0.index) })
         signature.append(contentsOf: popup?.choices ?? [])
         guard layoutChanged || signature != accessibilitySignature else { return }
@@ -550,7 +579,7 @@ final class KeyboardView: UIView {
             for (index, wheel) in wheels.enumerated() {
                 let list = words(wheel)
                 let e = element("wheel\(index)", wheel.rect, index == 0 ? "More suggestions" : "Suggestions", list.isEmpty ? [.adjustable, .notEnabled] : .adjustable)
-                e.accessibilityValue = list.isEmpty ? nil : wordAt(list, wheel.index)
+                e.accessibilityValue = list.isEmpty ? nil : wordAt(list, wheel.index) + (armedWheel === wheel ? " chosen, space to insert" : "")
                 e.activate = { [weak self] in self?.activateAccessibleWheel(index) ?? false }
                 e.increment = { [weak self] in self?.adjustAccessibleWheel(index, 1) }
                 e.decrement = { [weak self] in self?.adjustAccessibleWheel(index, -1) }
@@ -618,6 +647,7 @@ final class KeyboardView: UIView {
         guard !list.isEmpty else { return }
         wheel.index = (wheel.index + step + list.count) % list.count
         wheel.dragDx = 0
+        armWheel(wheel)
         rebuildAccessibilityElements()
         setNeedsDisplay()
     }
@@ -904,6 +934,17 @@ final class KeyboardView: UIView {
                 let cx = wh.rect.midX + offsetOf(list, wh.index, k) + wh.dragDx
                 let alpha: CGFloat = highContrast || k == 0 ? 1 : 0.4
                 let x = cx - textWidth(word) / 2
+                if armedWheel === wh && k == 0 {
+                    let font = UIFont.systemFont(ofSize: 15 * labelScale, weight: .bold)
+                    let size = (word as NSString).size(withAttributes: [.font: font])
+                    let pill = CGRect(x: cx - size.width / 2 - 8, y: wh.rect.midY - size.height / 2 - 4,
+                                      width: size.width + 16, height: size.height + 8)
+                    palette.accent.withAlphaComponent(0.2).setFill()
+                    UIBezierPath(roundedRect: pill, cornerRadius: pill.height / 2).fill()
+                    (word as NSString).draw(at: CGPoint(x: cx - size.width / 2, y: wh.rect.midY - size.height / 2),
+                                           withAttributes: [.font: font, .foregroundColor: palette.accent])
+                    continue
+                }
                 // The part you've already typed is highlighted.
                 if !prefix.isEmpty && word.count >= prefix.count && word.lowercased().hasPrefix(prefix.lowercased()) {
                     let pre = String(word.prefix(prefix.count))
@@ -1198,7 +1239,7 @@ final class KeyboardView: UIView {
         case .wheel:
             let dx = p.x - t.x0
             if abs(dx) > 8 { t.moved = true }
-            if t.moved { t.wheel?.dragDx = dx; setNeedsDisplay() }
+            if t.moved { clearArmedWord(); t.wheel?.dragDx = dx; setNeedsDisplay() }
         case .handle:
             t.lastX = p.x
             if abs(p.x - t.x0) > 8 { t.moved = true }
@@ -1287,6 +1328,7 @@ final class KeyboardView: UIView {
                     if d < bestDist { bestDist = d; best = k }
                 }
                 wh.index = ((wh.index + best) % list.count + list.count) % list.count
+                armWheel(wh)
             } else if !list.isEmpty {
                 invalidatePressAccents()
                 delegate?.suggestionPicked(wordAt(list, wh.index))

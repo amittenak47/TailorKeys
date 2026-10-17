@@ -60,6 +60,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         fun onReplacePressText(original: String, following: String, replacement: String) {}
         fun onLongPressText(text: String)
         fun onStackFace(code: String)
+        fun onWheelChosen() {}
+        fun onChoiceInterrupted() {}
         fun onSuggestion(text: String)
         fun onGlide(points: List<GestureDecoder.Point>, keys: Map<Char, GestureDecoder.Point>, keyWidth: Float) {}
         fun onSwitchLanguage(direction: Int) {}
@@ -84,7 +86,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     var enterLabel: String? = null
         set(value) { field = value; refreshAccessibilityState(); invalidate() }
     var editMode = false
-        set(value) { if (field != value) { field = value; editHint = null; cancelTouches(); relayout() } }
+        set(value) { if (field != value) { field = value; clearArmedWord(); listener?.onChoiceInterrupted(); editHint = null; cancelTouches(); relayout() } }
     /** True inside the keyboard itself: shows the gear, and settings and Done while rearranging. */
     var inKeyboard = false
         set(value) { field = value; relayout() }
@@ -97,7 +99,27 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private var sugRight = emptyList<String>()
     private var prefix = ""
 
+    private var armedWheel: Wheel? = null
+    val armedWord: String? get() = armedWheel?.let { w -> words(w).takeIf { it.isNotEmpty() }?.let { wordAt(it, w.index) } }
+
+    fun clearArmedWord() {
+        armedWheel = null
+        refreshAccessibilityState()
+        invalidate()
+    }
+
+    private fun armWheel(wheel: Wheel) {
+        if (!settings.bool(Prefs.SPACE_ACCEPTS) || state.layer != Layer.ABC || words(wheel).isEmpty()) return
+        armedWheel = wheel
+        listener?.onWheelChosen()
+        refreshAccessibilityState()
+        announceForAccessibility("$armedWord chosen, space to insert")
+        invalidate()
+    }
+
     fun setSuggestions(left: List<String>, right: List<String>, prefix: String) {
+        if (armedWheel != null && sugLeft == left && sugRight == right && this.prefix == prefix) return
+        clearArmedWord()
         sugLeft = left; sugRight = right; this.prefix = prefix
         for (w in wheels) { w.index = 0; w.dragDx = 0f }
         refreshAccessibilityState()
@@ -163,6 +185,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     fun reloadSettings() {
+        clearArmedWord()
         cancelTouches()
         refreshMotion()
         state.language = settings.currentLanguage()
@@ -538,7 +561,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         placed.getOrNull(id)?.item?.let { return KeyText.spoken(it.keys[shownIdx(it)], state, enterLabel) }
         val wheel = when (id) { A_WHEEL_LEFT -> wheels[0]; A_WHEEL_RIGHT -> wheels[1]; else -> return null }
         val list = words(wheel)
-        return if (list.isEmpty()) null else wordAt(list, wheel.index)
+        return if (list.isEmpty()) null else wordAt(list, wheel.index) + if (armedWheel === wheel) " chosen, space to insert" else ""
     }
 
     private fun accessibilityLabel(id: Int): String = when {
@@ -644,7 +667,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         if ((id == A_WHEEL_LEFT || id == A_WHEEL_RIGHT) && accessibilityValue(id) == null) return false
         accessibilityEvent(id, AccessibilityEvent.TYPE_VIEW_CLICKED)
         when (id) {
-            A_WHEEL_LEFT, A_WHEEL_RIGHT -> listener?.onSuggestion(accessibilityValue(id) ?: return false)
+            A_WHEEL_LEFT, A_WHEEL_RIGHT -> { val w = wheels[id - A_WHEEL_LEFT]; listener?.onSuggestion(wordAt(words(w), w.index)); clearArmedWord() }
             A_GEAR -> editMode = true
             A_UNDO -> { if (history.isEmpty()) return false; undo() }
             A_SETTINGS -> listener?.onOpenSettings()
@@ -670,6 +693,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 if (list.isEmpty()) return false
                 wheel.index = (wheel.index + step + list.size) % list.size
                 wheel.dragDx = 0f
+                armWheel(wheel)
             }
             A_CURSOR -> { listener?.onCursor(step, select = false); return true }
             else -> {
@@ -1092,6 +1116,19 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 val cx = wh.rect.centerX() + offsetOf(list, wh.index, k) + wh.dragDx
                 val alpha = if (highContrast || k == 0) 255 else 100
                 var x = cx - wheelText.measureText(word) / 2
+                if (armedWheel === wh && k == 0) {
+                    wheelText.isFakeBoldText = true
+                    val half = wheelText.measureText(word) / 2
+                    val h = wheelText.descent() - wheelText.ascent() + 8 * density
+                    fill.color = palette.accent; fill.alpha = 51
+                    canvas.drawRoundRect(cx - half - 8 * density, wh.rect.centerY() - h / 2,
+                        cx + half + 8 * density, wh.rect.centerY() + h / 2, h / 2, h / 2, fill)
+                    fill.alpha = 255
+                    wheelText.color = palette.accent; wheelText.alpha = 255
+                    canvas.drawText(word, cx - half, baseline, wheelText)
+                    wheelText.isFakeBoldText = highContrast
+                    continue
+                }
                 // The part you've already typed is highlighted.
                 if (prefix.isNotEmpty() && word.startsWith(prefix, ignoreCase = true)) {
                     val pre = word.substring(0, prefix.length)
@@ -1364,7 +1401,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             K_WHEEL -> {
                 val dx = x - t.x0
                 if (abs(dx) > 8 * density) t.moved = true
-                if (t.moved) { t.wheel!!.dragDx = dx; invalidate() }
+                if (t.moved) { clearArmedWord(); t.wheel!!.dragDx = dx; invalidate() }
             }
             K_HANDLE -> { t.lastX = x; if (abs(x - t.x0) > 8 * density) t.moved = true }
             K_CURSOR -> {
@@ -1455,7 +1492,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             K_WHEEL -> {
                 val wh = t.wheel!!
                 val list = words(wh)
-                if (t.moved) {
+                if (t.moved && list.isNotEmpty()) {
                     // Settle on whichever word is nearest the middle.
                     var best = 0
                     var bestDist = Float.MAX_VALUE
@@ -1464,6 +1501,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                         if (dist < bestDist) { bestDist = dist; best = k }
                     }
                     wh.index = ((wh.index + best) % list.size + list.size) % list.size
+                    armWheel(wh)
                     accessibilityEvent(A_WHEEL_LEFT + wh.side, AccessibilityEvent.TYPE_VIEW_SELECTED)
                 } else if (list.isNotEmpty()) {
                     invalidatePressAccents()

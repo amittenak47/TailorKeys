@@ -33,6 +33,7 @@ enum Prefs {
     static let typeOnPress = "type_on_press"
     static let numberRow = "number_row"
     static let showHints = "show_hints"
+    static let spaceAccepts = "space_accepts"
     static let autoCap = "auto_cap"
     static let doubleSpace = "double_space_period"
     static let clicks = "haptics"
@@ -130,6 +131,7 @@ final class KeyboardSettings {
     var typeOnPress: Bool { bool(Prefs.typeOnPress, false) }
     var numberRow: Bool { bool(Prefs.numberRow, true) }
     var showHints: Bool { bool(Prefs.showHints, true) }
+    var spaceAccepts: Bool { bool(Prefs.spaceAccepts, true) }
     var autoCap: Bool { bool(Prefs.autoCap, true) }
     var doubleSpace: Bool { bool(Prefs.doubleSpace, true) }
     var clicks: Bool { bool(Prefs.clicks, true) }
@@ -184,7 +186,7 @@ final class KeyboardSettings {
     func resetAll() {
         // Leave learned words, migration and setup metadata intact in either store.
         var keys = [Prefs.curve.key, Prefs.keyGap.key, Prefs.cornerRadius.key, Prefs.textScale.key,
-                    Prefs.longPressMs.key, Prefs.numberRow, Prefs.showHints, Prefs.autoCap, Prefs.doubleSpace,
+                    Prefs.longPressMs.key, Prefs.numberRow, Prefs.showHints, Prefs.spaceAccepts, Prefs.autoCap, Prefs.doubleSpace,
                     Prefs.clicks, Prefs.keyTint, Prefs.smartTargets, Prefs.swipeTyping, Prefs.lockSize, Prefs.sameOrientations,
                     Prefs.theme, Prefs.layout, Prefs.languages, Prefs.currentLanguage]
         for l in [false, true] {

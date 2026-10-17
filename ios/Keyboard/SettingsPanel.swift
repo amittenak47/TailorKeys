@@ -269,6 +269,7 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
         let assist = label("Assist")
         assist.font = .boldSystemFont(ofSize: 15)
         stack.addArrangedSubview(assist)
+        stack.addArrangedSubview(switchRow("Space accepts chosen word", settings.spaceAccepts) { [weak self] on in self?.settings.set(Prefs.spaceAccepts, on); self?.changed() })
         for (title, key, def) in [("Swipe typing", Prefs.swipeTyping, true), ("Chords", Prefs.chording, false)] {
             let row = switchRow(title, !settings.typeOnPress && settings.bool(key, def)) { [weak self] on in
                 self?.settings.set(key, on); self?.changed()

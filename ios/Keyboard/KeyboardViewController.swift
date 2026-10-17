@@ -29,6 +29,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func activateLanguage() {
         let lang = settings.currentLanguage
         if state.language != lang {
+            choiceInterrupted()
             clearGlide()
             lastSpace = 0
             keyboard?.cancelTouches()
@@ -67,6 +68,81 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private var panel: SettingsPanel?
     private var lastSpace: CFTimeInterval = 0
     private var lastAbcTap: CFTimeInterval = 0
+    private var chosenBefore: String?
+    private var chosenAfter: String?
+    private var chosenDocument: UUID?
+    private struct ArmedUndo {
+        let original: String
+        let inserted: String
+        let separator: String
+        let before: String?
+        let after: String?
+        let document: UUID
+        let learn: () -> Void
+    }
+    private var armedUndo: ArmedUndo?
+
+    func wheelChosen() {
+        chosenBefore = textDocumentProxy.documentContextBeforeInput
+        chosenAfter = textDocumentProxy.documentContextAfterInput
+        chosenDocument = textDocumentProxy.documentIdentifier
+    }
+
+    private func clearChoice() {
+        keyboard?.clearArmedWord()
+        chosenBefore = nil; chosenAfter = nil; chosenDocument = nil
+    }
+
+    private func finishArmedLearning() {
+        let undo = armedUndo
+        armedUndo = nil
+        undo?.learn()
+    }
+
+    func choiceInterrupted() { clearChoice(); finishArmedLearning() }
+
+    private func validateChoice() {
+        guard settings != nil else { return }
+        if !settings.spaceAccepts || textDocumentProxy.documentIdentifier != chosenDocument ||
+            textDocumentProxy.documentContextBeforeInput != chosenBefore ||
+            textDocumentProxy.documentContextAfterInput != chosenAfter || !(textDocumentProxy.selectedText ?? "").isEmpty {
+            clearChoice()
+        }
+    }
+
+    private func undoArmedCommit() -> Bool {
+        guard let undo = armedUndo,
+              textDocumentProxy.documentIdentifier == undo.document,
+              textDocumentProxy.documentContextBeforeInput == undo.before,
+              textDocumentProxy.documentContextAfterInput == undo.after,
+              (textDocumentProxy.selectedText ?? "").isEmpty else { return false }
+        armedUndo = nil // Reverting discards the deferred learning increment.
+        clearChoice(); clearGlide()
+        for _ in undo.inserted { textDocumentProxy.deleteBackward() }
+        textDocumentProxy.insertText(undo.original + undo.separator)
+        return true
+    }
+
+    private func commitArmed(_ separator: String) -> Bool {
+        validateChoice()
+        guard settings.spaceAccepts, state.layer == .abc, let word = keyboard?.armedWord else { return false }
+        let before = textDocumentProxy.documentContextBeforeInput ?? ""
+        let original = currentGlide() ? glideWord! : currentWord(before)
+        let model = predictor!
+        let shouldLearn = suggestAllowed && modelReady
+        let prev = previousWord(before)
+        let prev2 = previousWord2(before)
+        clearChoice(); clearGlide()
+        for _ in original { textDocumentProxy.deleteBackward() }
+        insert(word)
+        if separator == " " { typeSpace(learnWord: false) } else { insert(separator) }
+        armedUndo = ArmedUndo(original: original, inserted: word + separator, separator: separator,
+            before: textDocumentProxy.documentContextBeforeInput, after: textDocumentProxy.documentContextAfterInput,
+            document: textDocumentProxy.documentIdentifier, learn: {
+                if shouldLearn { model.learn(word, prev, prev2) }
+            })
+        return true
+    }
 
     override func loadView() {
         let v = ClickInputView(frame: .zero, inputViewStyle: .keyboard)
@@ -121,6 +197,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         loadKeyboardIfNeeded()
+        choiceInterrupted()
         if hasFullAccess, let group = UserDefaults(suiteName: KeyboardSettings.groupID) {
             group.set(Date(), forKey: KeyboardSettings.fullAccessSeenKey)
         }
@@ -152,6 +229,23 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         }
     }
 
+    override func viewWillDisappear(_ animated: Bool) {
+        choiceInterrupted()
+        super.viewWillDisappear(animated)
+    }
+
+    override func selectionDidChange(_ textInput: UITextInput?) {
+        if !changingGlide {
+            validateChoice()
+            if let undo = armedUndo,
+               textDocumentProxy.documentIdentifier != undo.document ||
+               textDocumentProxy.documentContextBeforeInput != undo.before ||
+               textDocumentProxy.documentContextAfterInput != undo.after { finishArmedLearning() }
+            _ = currentGlide()
+        }
+        super.selectionDidChange(textInput)
+    }
+
     override func textDidChange(_ textInput: UITextInput?) {
         if changingGlide { return }
         if settings != nil && (state.language != settings.currentLanguage || predictor?.language != settings.currentLanguage) { activateLanguage() }
@@ -162,6 +256,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     // MARK: - KeyboardViewDelegate
 
     func chordTyped(_ word: String) {
+        choiceInterrupted()
         changingGlide = true
         defer { changingGlide = false }
         let shifted = state.shift
@@ -179,6 +274,17 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     func keyTapped(_ code: String) {
+        changingGlide = true
+        defer { changingGlide = false }
+        if code == Keys.backspace && undoArmedCommit() {
+            updateAutoCap(); updateSuggestions(); keyboard.setNeedsDisplay(); return
+        }
+        finishArmedLearning()
+        let separator: String? = code == Keys.space ? " " : (code.count == 1 && ".,?!;:".contains(code) ? code : nil)
+        if let separator = separator, commitArmed(separator) {
+            updateAutoCap(); updateSuggestions(); keyboard.setNeedsDisplay(); return
+        }
+        clearChoice()
         switch code {
         case Keys.backspace: clearGlide(); textDocumentProxy.deleteBackward()
         case Keys.space: typeSpace()
@@ -201,6 +307,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     func moveCursor(_ steps: Int) {
+        choiceInterrupted()
         clearGlide()
         textDocumentProxy.adjustTextPosition(byCharacterOffset: steps)
         updateAutoCap()
@@ -208,6 +315,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     func replacePressText(_ original: String, following: String, replacement: String) {
+        choiceInterrupted()
         let proxy = textDocumentProxy
         guard proxy.documentContextBeforeInput?.hasSuffix(original + following) == true else { return }
         if !following.isEmpty { proxy.adjustTextPosition(byCharacterOffset: -following.count) }
@@ -220,6 +328,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     func longPressText(_ text: String) {
+        choiceInterrupted()
         insert(text)
         updateSuggestions()
     }
@@ -227,6 +336,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     /// A swipe key landed on a new face. Layer faces switch the layout straight away.
     func stackFace(_ code: String) {
         if KeyText.isLayerKey(code) {
+            choiceInterrupted()
             state.layer = KeyText.layerOf(code)
             state.shift = false
             updateSuggestions()
@@ -236,6 +346,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     /// A word from a wheel replaces the word being typed. A symbol is just inserted.
     func suggestionPicked(_ text: String) {
+        choiceInterrupted()
         if state.layer == .abc && currentGlide() {
             changingGlide = true
             defer { changingGlide = false }
@@ -263,6 +374,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     func glideFinished(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat) {
+        choiceInterrupted()
         guard modelReady, suggestAllowed, settings.swipeTyping, state.layer == .abc else { return }
         gestureDecoder.addWords(predictor.gestureUserWords())
         gestureDecoder.setKeys(keys, keyWidth)
@@ -318,9 +430,10 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         if currentGlide() && suggestAllowed && modelReady { predictor.learn(glideWord!, previousWord(textDocumentProxy.documentContextBeforeInput ?? "")) }
     }
 
-    func spaceLongPressed() { advanceToNextInputMode() }
+    func spaceLongPressed() { choiceInterrupted(); advanceToNextInputMode() }
 
     func switchLanguage(_ direction: Int) {
+        choiceInterrupted()
         let enabled = settings.languages
         guard enabled.count > 1, let index = enabled.firstIndex(of: settings.currentLanguage) else { return }
         settings.currentLanguage = enabled[(index + direction + enabled.count) % enabled.count]
@@ -332,6 +445,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     /// The gear in the rearranging toolbar: leaves rearranging and shows the settings panel.
     func openSettings() {
+        choiceInterrupted()
         keyboard.editMode = false
         guard panel == nil else { return }
         let landscape = UIScreen.main.bounds.width > UIScreen.main.bounds.height
@@ -437,10 +551,10 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         }
     }
 
-    private func typeSpace() {
+    private func typeSpace(learnWord: Bool = true) {
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         let word = currentWord(before)
-        if suggestAllowed && modelReady && word.count > 1 { predictor.learn(word, previousWord(before), previousWord2(before)) }
+        if learnWord && suggestAllowed && modelReady && word.count > 1 { predictor.learn(word, previousWord(before), previousWord2(before)) }
         clearGlide()
         let now = CACurrentMediaTime()
         if settings.doubleSpace && state.layer == .abc && now - lastSpace < 0.6,
@@ -498,6 +612,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     private func updateSuggestions() {
         guard keyboard != nil else { return }
+        validateChoice()
         if !modelReady {
             keyboard.keyWeights = [:]
             keyboard.setSuggestions(left: [], right: [], prefix: "")

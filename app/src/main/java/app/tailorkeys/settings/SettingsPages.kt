@@ -313,7 +313,7 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
         Column {
             GroupTitle("Assist")
             OptionGroup {
-                for ((label, pref) in listOf("Swipe typing" to Prefs.SWIPE_TYPING, "Highlight likely keys" to Prefs.KEY_TINT, "Smart tap areas" to Prefs.SMART_TARGETS, "Vibrate on typos" to Prefs.TYPO_BUZZ, "Chords" to Prefs.CHORDING)) {
+                for ((label, pref) in listOf("Space accepts chosen word" to Prefs.SPACE_ACCEPTS, "Swipe typing" to Prefs.SWIPE_TYPING, "Highlight likely keys" to Prefs.KEY_TINT, "Smart tap areas" to Prefs.SMART_TARGETS, "Vibrate on typos" to Prefs.TYPO_BUZZ, "Chords" to Prefs.CHORDING)) {
                     val blocked = state.bool(Prefs.TYPE_ON_PRESS) && (pref == Prefs.SWIPE_TYPING || pref == Prefs.CHORDING)
                     ToggleRow(label, !blocked && state.bool(pref), enabled = !blocked,
                         note = if (blocked) "Off while Type on press is on" else null) { state.set(pref, it) }

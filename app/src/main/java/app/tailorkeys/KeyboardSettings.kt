@@ -48,6 +48,7 @@ object Prefs {
     val TYPE_ON_PRESS = BoolPref("type_on_press", false)
     val NUMBER_ROW = BoolPref("number_row", true)
     val SHOW_HINTS = BoolPref("show_hints", true)
+    val SPACE_ACCEPTS = BoolPref("space_accepts", true)
     val AUTO_CAP = BoolPref("auto_cap", true)
     val DOUBLE_SPACE_PERIOD = BoolPref("double_space_period", true)
     val HAPTICS = BoolPref("haptics", true)
