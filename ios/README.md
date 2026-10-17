@@ -13,6 +13,8 @@ The keyboard's fallback panel types a code into the text field, and imports a co
 
 ## Build on a Mac
 
+Full step-by-step instructions, including free-account signing and what to test, are in [MAC_BUILD.md](MAC_BUILD.md).
+
 1. Open this repository on a Mac with Xcode installed.
 2. Install XcodeGen: `brew install xcodegen`.
 3. In `ios/`, run `xcodegen`.
@@ -26,5 +28,6 @@ The keyboard's fallback panel types a code into the text field, and imports a co
 ## Differences from Android
 
 - Key presses play the system keyboard click sound. Vibration is not currently implemented on iOS.
-- Hold the spacebar to switch to the next keyboard (Android shows a picker).
+- Use the globe key to switch keyboards. Holding a spacebar picks that side's suggestion, as on Android.
+- No text selection with the cursor control: iOS keyboards can't select text.
 - iOS never shows third-party keyboards in password fields.
