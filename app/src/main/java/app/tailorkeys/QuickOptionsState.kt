@@ -1,0 +1,37 @@
+package app.tailorkeys
+
+/** Values that affect the panel. Equality also makes the preference listener's second refresh free. */
+internal data class QuickOptionsState(
+    val theme: ThemeName,
+    val nightMode: Int,
+    val radius: Int,
+    val split: Boolean,
+    val oneHand: Align,
+    val height: Int,
+    val language: String,
+    val multipleLanguages: Boolean,
+    val swipe: Boolean,
+) {
+    fun tiles(): List<QuickTileState> = listOf(
+        QuickTileState("Rearrange"),
+        QuickTileState("Split", if (split) "On" else "Off", on = split),
+        QuickTileState("One hand", when (oneHand) {
+            Align.CENTER -> "Off"; Align.LEFT -> "Left"; Align.RIGHT -> "Right"
+        }, on = oneHand != Align.CENTER),
+        QuickTileState("Size $height%", description = "Size, $height percent"),
+        QuickTileState("Theme", if (theme == ThemeName.SYSTEM) "System" else theme.title),
+        QuickTileState("Language", if (multipleLanguages) "Tap to switch" else "Only one",
+            glyph = language.uppercase(), enabled = multipleLanguages),
+        QuickTileState("Swipe", if (swipe) "On" else "Off", on = swipe),
+        QuickTileState("Settings", "All", description = null),
+    )
+}
+
+internal data class QuickTileState(
+    val label: String,
+    val state: String = "",
+    val glyph: String? = null,
+    val on: Boolean = false,
+    val enabled: Boolean = true,
+    val description: String? = if (state.isEmpty()) null else "$label, $state",
+)

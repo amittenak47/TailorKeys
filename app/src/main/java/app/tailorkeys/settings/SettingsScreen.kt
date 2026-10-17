@@ -13,6 +13,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -32,6 +33,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -62,33 +64,27 @@ fun SettingsScreen(settings: KeyboardSettings, setupStatus: SetupStatus, onSetup
         state.observe()
         onDispose { state.dispose() }
     }
-    var tab by rememberSaveable { mutableIntStateOf(0) }
+    val tab = rememberSaveable { mutableIntStateOf(0) }
+    val listStates = List(Tabs.size) { rememberLazyListState() }
+    val selectTab: (Int) -> Unit = remember(tab, listStates) {
+        { index ->
+            if (tab.intValue != index) {
+                // Tabs have always reopened at the top. Reset while leaving, keeping their composed controls.
+                listStates[tab.intValue].requestScrollToItem(0)
+                tab.intValue = index
+            }
+        }
+    }
     var editing by rememberSaveable { mutableStateOf(false) }
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     var page by remember(landscape) { mutableStateOf(landscape) }
     var dialog by rememberSaveable { mutableStateOf<String?>(null) }
     var importCode by rememberSaveable { mutableStateOf("") }
-    BackHandler(editing || tab != 0) {
-        if (editing) editing = false else tab = 0
-    }
+    SettingsBackHandler(tab, editing, { editing = false }, selectTab)
     Scaffold(containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
         bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer, tonalElevation = 0.dp) {
-                Tabs.forEachIndexed { index, label ->
-                    NavigationBarItem(selected = tab == index, onClick = { tab = index },
-                        icon = { SettingsIcon(TabIcons[index]) }, label = {
-                            Text(label, style = MaterialTheme.typography.labelMedium,
-                                fontWeight = if (tab == index) FontWeight.Bold else FontWeight.Medium)
-                        }, colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        ))
-                }
-            }
+            SettingsNavigation(tab, selectTab)
         }) { padding ->
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
             val density = LocalDensity.current
@@ -97,12 +93,7 @@ fun SettingsScreen(settings: KeyboardSettings, setupStatus: SetupStatus, onSetup
             val compact = maxHeight < previewHeight + 200.dp
             val overflowScroll = rememberScrollState()
             val optionsRequester = remember { BringIntoViewRequester() }
-            LaunchedEffect(compact, previewHeight, tab) {
-                if (compact) {
-                    withFrameNanos { }
-                    optionsRequester.bringIntoView()
-                }
-            }
+            BringOptionsIntoView(compact, previewHeight, tab, optionsRequester)
             Column(if (compact) Modifier.fillMaxWidth().verticalScroll(overflowScroll) else Modifier.fillMaxSize()) {
                 SettingsHeader(setupStatus, onSetup)
                 Spacer(Modifier.height(16.dp))
@@ -111,32 +102,29 @@ fun SettingsScreen(settings: KeyboardSettings, setupStatus: SetupStatus, onSetup
                         .onSizeChanged { previewHeight = with(density) { it.height.toDp() } }.clip(RoundedCornerShape(24.dp)))
                 BoxWithConstraints((if (compact) Modifier.fillMaxWidth().height(200.dp) else Modifier.fillMaxWidth().weight(1f))
                     .bringIntoViewRequester(optionsRequester)) {
-                    val listState = key(tab) { rememberLazyListState() }
-                    val background = MaterialTheme.colorScheme.background
                     val layoutSpacer = (maxHeight - 232.dp).coerceAtLeast(0.dp)
-                    LazyColumn(state = listState, modifier = Modifier.fillMaxSize().clipToBounds(),
-                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = if (tab == 0) 20.dp else 16.dp,
-                            bottom = if (tab == 0) 8.dp else 44.dp),
-                        verticalArrangement = Arrangement.spacedBy(if (tab == 0) 16.dp else 12.dp)) {
-                        when (tab) {
-                            0 -> layoutOptions(state, editing, layoutSpacer, { editing = !editing }, onShare = {
-                                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                                    .putExtra(Intent.EXTRA_TEXT, "My TailorKeys layout: ${state.preview.grid.toCode()}"), "Share layout"))
-                            }, onImport = {
-                                val clip = context.getSystemService(ClipboardManager::class.java).primaryClip
-                                importCode = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
-                                    ?.takeIf { KeyGrid.fromCode(it) != null }.orEmpty()
-                                dialog = "import"
-                            })
-                            1 -> sizeOptions(state, page) { page = it }
-                            2 -> lookOptions(state)
-                            3 -> typingOptions(state, { dialog = "about" }, { dialog = "reset" })
+                    // Retain the four lazy lists. Only the selected list is measured/placed, so hidden
+                    // controls neither draw nor receive input/accessibility focus. Read tab in measure
+                    // to keep navigation changes out of the preview/header composition.
+                    Layout(content = {
+                        Tabs.indices.forEach { index ->
+                            key(index) {
+                                SettingsTab(index, listStates[index], state, editing, layoutSpacer,
+                                    { editing = !editing }, page, { page = it }, onShare = {
+                                        context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                                            .putExtra(Intent.EXTRA_TEXT, "My TailorKeys layout: ${state.preview.grid.toCode()}"), "Share layout"))
+                                    }, onImport = {
+                                        val clip = context.getSystemService(ClipboardManager::class.java).primaryClip
+                                        importCode = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
+                                            ?.takeIf { KeyGrid.fromCode(it) != null }.orEmpty()
+                                        dialog = "import"
+                                    }, onAbout = { dialog = "about" }, onReset = { dialog = "reset" })
+                            }
                         }
+                    }, modifier = Modifier.fillMaxSize()) { measurables, constraints ->
+                        val selected = measurables[tab.intValue].measure(constraints)
+                        layout(selected.width, selected.height) { selected.placeRelative(0, 0) }
                     }
-                    if (listState.canScrollBackward) Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(16.dp)
-                        .background(Brush.verticalGradient(listOf(background, Color.Transparent))))
-                    if (listState.canScrollForward) Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(44.dp)
-                        .background(Brush.verticalGradient(listOf(Color.Transparent, background))))
                 }
             }
         }
@@ -159,6 +147,67 @@ fun SettingsScreen(settings: KeyboardSettings, setupStatus: SetupStatus, onSetup
             }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Reset settings") } },
             dismissButton = { TextButton({ dialog = null }) { Text("Cancel") } })
         "about" -> AboutDialog { dialog = null }
+    }
+}
+
+@Composable
+private fun SettingsBackHandler(tab: IntState, editing: Boolean, stopEditing: () -> Unit, selectTab: (Int) -> Unit) {
+    BackHandler(editing || tab.intValue != 0) {
+        if (editing) stopEditing() else selectTab(0)
+    }
+}
+
+@Composable
+private fun SettingsNavigation(tab: IntState, selectTab: (Int) -> Unit) {
+    NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer, tonalElevation = 0.dp) {
+        Tabs.forEachIndexed { index, label ->
+            NavigationBarItem(selected = tab.intValue == index, onClick = { selectTab(index) },
+                icon = { SettingsIcon(TabIcons[index]) }, label = {
+                    Text(label, style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (tab.intValue == index) FontWeight.Bold else FontWeight.Medium)
+                }, colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                    indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                ))
+        }
+    }
+}
+
+@Composable
+private fun BringOptionsIntoView(compact: Boolean, previewHeight: androidx.compose.ui.unit.Dp,
+    tab: IntState, requester: BringIntoViewRequester) {
+    LaunchedEffect(compact, previewHeight, tab.intValue) {
+        if (compact) {
+            withFrameNanos { }
+            requester.bringIntoView()
+        }
+    }
+}
+
+@Composable
+private fun SettingsTab(index: Int, listState: LazyListState, state: SettingsState, editing: Boolean,
+    layoutSpacer: androidx.compose.ui.unit.Dp, onEdit: () -> Unit, page: Boolean, onPage: (Boolean) -> Unit,
+    onShare: () -> Unit, onImport: () -> Unit, onAbout: () -> Unit, onReset: () -> Unit) {
+    val background = MaterialTheme.colorScheme.background
+    Box(Modifier.fillMaxSize()) {
+        LazyColumn(state = listState, modifier = Modifier.fillMaxSize().clipToBounds(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = if (index == 0) 20.dp else 16.dp,
+                bottom = if (index == 0) 8.dp else 44.dp),
+            verticalArrangement = Arrangement.spacedBy(if (index == 0) 16.dp else 12.dp)) {
+            when (index) {
+                0 -> layoutOptions(state, editing, layoutSpacer, onEdit, onShare, onImport)
+                1 -> sizeOptions(state, page, onPage)
+                2 -> lookOptions(state)
+                3 -> typingOptions(state, onAbout, onReset)
+            }
+        }
+        if (listState.canScrollBackward) Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(16.dp)
+            .background(Brush.verticalGradient(listOf(background, Color.Transparent))))
+        if (listState.canScrollForward) Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(44.dp)
+            .background(Brush.verticalGradient(listOf(Color.Transparent, background))))
     }
 }
 

@@ -214,6 +214,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private var multipleLanguages = false
     private var emptySide = EmptySide.SLIDE_ARROW
     private var waveShaders = emptyArray<Shader>()
+    private data class WaveAppearance(val color: Int, val top: Float, val bottom: Float)
+    private var waveAppearance: WaveAppearance? = null
     private val waveMatrix = Matrix()
 
     private val isLandscape get() = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -227,6 +229,27 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private var tintKeys = settings.bool(Prefs.KEY_TINT)
     private var showHints = settings.bool(Prefs.SHOW_HINTS)
     private val chordsAllowed get() = settings.bool(Prefs.CHORDING) && !settings.bool(Prefs.TYPE_ON_PRESS)
+
+    private data class GeometrySettings(
+        val profile: SizeProfile, val curve: Int, val gap: Int, val labelScale: Float,
+        val sameOrientations: Boolean, val cursor: CursorControl, val emptySide: EmptySide,
+        val landscape: Boolean, val screenWidth: Int, val screenHeight: Int,
+    )
+    private fun geometrySettings() = GeometrySettings(settings.profile(isLandscape),
+        settings.int(Prefs.CURVE), settings.int(Prefs.KEY_GAP), labelScale,
+        settings.bool(Prefs.SAME_ORIENTATIONS), settings.cursorControl(), settings.emptySide(),
+        isLandscape, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
+    private var builtGeometry: GeometrySettings? = null
+
+    private data class DrawingSettings(
+        val theme: ThemeName, val night: Int, val language: String, val multipleLanguages: Boolean,
+        val textScale: Int, val labelScale: Float, val radius: Int, val tint: Boolean, val hints: Boolean,
+        val emptySide: EmptySide,
+    )
+    private fun drawingSettings() = DrawingSettings(settings.theme(), resources.configuration.uiMode,
+        state.language, settings.languages().size > 1, settings.int(Prefs.TEXT_SCALE), labelScale,
+        settings.int(Prefs.CORNER_RADIUS), settings.bool(Prefs.KEY_TINT), settings.bool(Prefs.SHOW_HINTS), settings.emptySide())
+    private var builtDrawing: DrawingSettings? = null
 
     private fun refreshMotion() {
         reducedMotion = Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f ||
@@ -257,7 +280,15 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         multipleLanguages = settings.languages().size > 1
         languageLabel = state.language.uppercase()
         emptySide = settings.emptySide()
-        relayout()
+        if (builtGeometry != geometrySettings()) relayout()
+        else {
+            clearAccessibilityFocus()
+            updateHoveredView(A_NONE)
+            if (builtDrawing != drawingSettings()) rebuildDrawingCache()
+            refreshAccessibilityState()
+            accessibilityEvent(View.NO_ID, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE)
+            invalidate()
+        }
     }
 
     private fun relayout() {
@@ -511,6 +542,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         slideViewWidth = width
         layoutHeight = ceil(if (reserve) s.total else max(target, s.total)).toInt()
         builtWidth = width
+        builtGeometry = geometrySettings()
         rebuildDrawingCache()
         accessibilityEvent(View.NO_ID, AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE)
         return layoutHeight
@@ -539,7 +571,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             faceHints[code] = KeyText.hint(code, sample)
         }
         rebuildWheelMetrics()
+        builtDrawing = drawingSettings()
         val rgb = waveColor()
+        val appearance = WaveAppearance(rgb, stripH, max(stripH + 1f, handleRect.top))
+        if (waveAppearance == appearance) return
+        waveAppearance = appearance
         val down = LinearGradient(0f, stripH, 0f, max(stripH + 1f, handleRect.top),
             intArrayOf(0, -0x1000000, -0x1000000, 0), floatArrayOf(0f, .2f, .8f, 1f), Shader.TileMode.CLAMP)
         waveShaders = Array(66) { index ->
@@ -881,6 +917,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     // ---- Drawing ----
 
     override fun onDraw(canvas: Canvas) {
+        // The panel is opaque. Do not record the keyboard or continue wiggle/trail animation loops.
+        if (optionsCovered) return
         ensureLayout()
         canvas.drawColor(palette.background)
         canvas.save()

@@ -3,9 +3,6 @@ package app.tailorkeys.settings
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.setValue
 import app.tailorkeys.Chords
 import app.tailorkeys.DictionaryWords
 import app.tailorkeys.Align
@@ -14,18 +11,20 @@ import app.tailorkeys.IntPref
 import app.tailorkeys.KeyboardSettings
 import app.tailorkeys.KeyboardView
 import app.tailorkeys.Prefs
+import app.tailorkeys.SizeProfile
 import app.tailorkeys.layout.KeyGrid
 import app.tailorkeys.layout.Template
-import org.json.JSONObject
 
 /** Bridges preference notifications and the existing, undoable keyboard editor into Compose state. */
 @Stable
 internal class SettingsState(context: Context, val settings: KeyboardSettings) {
     private val appContext = context.applicationContext
     private val chordLibraries = HashMap<String, Chords>()
-    fun chordLanguage(): String { revision; return settings.currentLanguage() }
+    private val templateMatcher = TemplateMatcher()
+    private val revisions = PreferenceRevisions()
+    fun chordLanguage(): String { revisions.read(Prefs.CURRENT_LANGUAGE, Prefs.LANGUAGES); return settings.currentLanguage() }
     fun chordLetters(): Set<Char> {
-        revision
+        revisions.read(Prefs.LAYOUT, Prefs.CURRENT_LANGUAGE, Prefs.LANGUAGES)
         return preview.grid.items.filter { !it.isStack }.mapNotNull { it.keys[0].singleOrNull()?.takeIf(Char::isLetter)?.lowercaseChar() }.toSet()
     }
     /** Called on a worker thread by the list dialog. */
@@ -34,7 +33,6 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
             Chords(DictionaryWords.read({ appContext.assets.open(it) }, language, 20_000, unique = true))
         }.forLetters(letters)
 
-    private var revision by mutableIntStateOf(0)
     val preview = KeyboardView(context, settings).apply {
         grid = settings.loadGrid()
         state.language = settings.currentLanguage()
@@ -55,32 +53,32 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         }
         preview.state.language = settings.currentLanguage()
         preview.reloadSettings()
-        revision++
+        revisions.changed(key)
     }
 
     fun observe() = settings.prefs.registerOnSharedPreferenceChangeListener(listener)
     fun dispose() = settings.prefs.unregisterOnSharedPreferenceChangeListener(listener)
-    fun int(pref: IntPref): Int { revision; return settings.int(pref) }
-    fun bool(pref: BoolPref): Boolean { revision; return settings.bool(pref) }
-    fun profile(page: Boolean) = run { revision; settings.profile(page) }
-    fun cursorControl() = run { revision; settings.cursorControl() }
-    fun emptySide() = run { revision; settings.emptySide() }
-    fun theme() = run { revision; settings.theme() }
+    fun int(pref: IntPref): Int { revisions.read(pref.key); return settings.int(pref) }
+    fun bool(pref: BoolPref): Boolean { revisions.read(pref.key); return settings.bool(pref) }
+    fun profile(page: Boolean): SizeProfile {
+        revisions.read(Prefs.height(page).key, Prefs.width(page).key, Prefs.alignKey(page),
+            Prefs.bottomPadding(page).key, Prefs.splitKey(page), Prefs.splitGap(page).key,
+            Prefs.tilt(page).key, Prefs.spaceTilt(page).key)
+        return settings.profile(page)
+    }
+    fun cursorControl() = run { revisions.read(Prefs.CURSOR_CONTROL); settings.cursorControl() }
+    fun emptySide() = run { revisions.read(Prefs.EMPTY_SIDE); settings.emptySide() }
+    fun theme() = run { revisions.read(Prefs.THEME); settings.theme() }
     fun set(pref: IntPref, value: Int) = settings.set(pref, value)
     fun set(pref: BoolPref, value: Boolean) = settings.set(pref, value)
     fun setFor(page: Boolean, pref: (Boolean) -> IntPref, value: Int) = settings.setFor(page, pref, value)
 
-    fun languages(): List<String> { revision; return settings.languages() }
+    fun languages(): List<String> { revisions.read(Prefs.LANGUAGES); return settings.languages() }
     fun setLanguages(enabled: Set<String>) = settings.setLanguages(enabled)
 
     fun templateName(): String {
-        revision
-        val current = withoutSwipeIndex(preview.grid)
-        return Template.entries.firstOrNull { template ->
-            val candidate = KeyGrid.template(template, settings.currentLanguage())
-            if (settings.bool(Prefs.NUMBER_ROW)) candidate.setNumberRow(true)
-            withoutSwipeIndex(candidate) == current
-        }?.title ?: "Custom"
+        revisions.read(Prefs.LAYOUT, Prefs.CURRENT_LANGUAGE, Prefs.LANGUAGES, Prefs.NUMBER_ROW.key)
+        return templateMatcher.name(preview.grid, settings.currentLanguage(), settings.bool(Prefs.NUMBER_ROW))
     }
 
     fun applyTemplate(template: Template, landscape: Boolean) {
@@ -104,15 +102,8 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         preview.grid = settings.loadGrid()
         preview.state.language = settings.currentLanguage()
         preview.reloadSettings()
-        revision++
+        revisions.changed(null)
     }
-}
-
-private fun withoutSwipeIndex(grid: KeyGrid): String {
-    val json = JSONObject(grid.toJson())
-    val items = json.getJSONArray("items")
-    for (i in 0 until items.length()) items.getJSONObject(i).remove("i")
-    return json.toString()
 }
 
 internal data class SizePreset(
