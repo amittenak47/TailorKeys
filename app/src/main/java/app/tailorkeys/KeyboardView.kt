@@ -7,10 +7,10 @@ import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.DashPathEffect
+import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
@@ -1053,24 +1053,29 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     /**
-     * While the centre gap is held: a ring marks where the finger pressed (inside it the cursor stops) and a glow
-     * follows the finger. Moving the cursor gets a soft neutral glow; selecting gets a larger accent glow.
+     * While the centre gap is held, its background shows the cursor's motion: a gradient from the press point toward
+     * the side the cursor is moving, stronger the faster it goes, and a faint even tint while inside the dead zone.
+     * Selecting uses the accent colour; moving the cursor uses the hint colour.
      */
-    @Suppress("UNUSED_PARAMETER")
     private fun drawCursor(canvas: Canvas, radius: Float) {
         val t = trackers.values.firstOrNull { it.kind == K_CURSOR } ?: return
-        val select = t.select
-        val colour = if (select) palette.accent else palette.hint
-        val rgb = colour and 0x00FFFFFF
-        stroke.color = colour
-        stroke.alpha = if (select) 200 else 140
-        stroke.strokeWidth = 1.5f * density
-        canvas.drawCircle(t.x0, t.y0, 8 * density, stroke)
-        stroke.alpha = 255
-        val r = (if (select) 56 else 36) * density
-        fill.shader = RadialGradient(t.fx, t.fy, r, intArrayOf(rgb or ((if (select) 130 else 80) shl 24), rgb), null, Shader.TileMode.CLAMP)
-        canvas.drawCircle(t.fx, t.fy, r, fill)
-        fill.shader = null
+        val rgb = (if (t.select) palette.accent else palette.hint) and 0x00FFFFFF
+        val speed = t.joystick.speed
+        val strength = min(1.0, abs(speed) / 30.0).toFloat()
+        canvas.save()
+        path.reset()
+        path.addRoundRect(cursorRect, radius, radius, Path.Direction.CW)
+        canvas.clipPath(path)
+        fill.color = rgb or ((if (t.select) 46 else 28) shl 24)
+        canvas.drawRect(cursorRect, fill)
+        if (speed != 0.0) {
+            val edge = if (speed < 0) cursorRect.left else cursorRect.right
+            val peak = (70 + 150 * strength).toInt()
+            fill.shader = LinearGradient(t.x0, 0f, edge, 0f, rgb, rgb or (peak shl 24), Shader.TileMode.CLAMP)
+            canvas.drawRect(min(t.x0, edge), cursorRect.top, max(t.x0, edge), cursorRect.bottom, fill)
+            fill.shader = null
+        }
+        canvas.restore()
     }
 
     private fun drawHandle(canvas: Canvas) {
@@ -1275,6 +1280,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             for (t in trackers.values.toList()) if (t.kind == K_CURSOR) {
                 moveCursor(t, t.joystick.advance(now), now)
             }
+            // Redraw every frame so the gap's gradient follows the speed as holding boosts it.
+            invalidate()
             if (trackers.values.any { it.kind == K_CURSOR && it.joystick.speed != 0.0 }) postOnAnimation(this)
         }
     }

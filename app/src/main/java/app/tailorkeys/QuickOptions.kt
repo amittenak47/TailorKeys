@@ -23,33 +23,45 @@ internal fun wheelTapIndex(targets: List<WheelTapTarget>, x: Float, left: Float,
 
 /** Time is monotonic milliseconds, displacement is in dp from the fixed press origin. */
 internal class CursorJoystick {
+    /** Current signed speed in characters per second (also drives the gap's direction gradient). */
     var speed = 0.0
         private set
     private var fraction = 0.0
     private var lastTime: Long? = null
-
     private var smoothed = 0.0
+    /** Speed from distance alone, before holding speeds it up. */
+    private var base = 0.0
+    private var pushedSince: Long? = null
 
     /**
-     * [dx] is the finger's distance from where it pressed, in dp. Speed follows a gentle curve: about 2 chars/s just
-     * outside the 8 dp dead zone (precise), ~8 at 58 dp, up to 28 at 108 dp and beyond. The distance is smoothed so
-     * finger jitter doesn't make the speed jump.
+     * [dx] is the finger's distance from where it pressed, in dp. Distance sets a starting speed: 3 chars/s just outside
+     * the 6 dp dead zone (precise), ~10 at 31 dp, 24 at 56 dp and beyond. Holding the push speeds it up, up to 3x after
+     * ~1.3 s, capped at 60 chars/s. Light smoothing keeps finger jitter from making the speed jump.
      */
     fun displace(dx: Float, now: Long): Int {
         var steps = advance(now)
-        smoothed += (dx - smoothed) * 0.35
+        smoothed += (dx - smoothed) * 0.5
         val magnitude = abs(smoothed)
-        val u = ((magnitude - 8) / 100).coerceIn(0.0, 1.0)
-        val next = if (magnitude <= 8) 0.0 else (2.0 + 26.0 * u * u) * if (smoothed < 0) -1 else 1
-        if (next == 0.0 || next * speed < 0) fraction = 0.0
-        if (next != 0.0 && speed == 0.0) steps += if (next < 0) -1 else 1
-        speed = next
+        val u = ((magnitude - 6) / 50).coerceIn(0.0, 1.0)
+        val next = if (magnitude <= 6) 0.0 else (3.0 + 21.0 * u * Math.sqrt(u)) * if (smoothed < 0) -1 else 1
+        if (next == 0.0 || next * base < 0) { fraction = 0.0; pushedSince = null }
+        if (next != 0.0 && pushedSince == null) pushedSince = now
+        if (next != 0.0 && base == 0.0) steps += if (next < 0) -1 else 1
+        base = next
+        speed = effective(now)
         return steps
+    }
+
+    private fun effective(now: Long): Double {
+        val since = pushedSince ?: return base
+        val boost = 1.0 + min(2.0, (now - since) / 1000.0 * 1.5)
+        return (base * boost).coerceIn(-60.0, 60.0)
     }
 
     fun advance(now: Long): Int {
         val previous = lastTime
         lastTime = now
+        speed = effective(now)
         if (previous == null) return 0
         fraction += speed * (now - previous).coerceAtLeast(0) / 1000.0
         // Avoid losing a whole character to floating-point error at an exact boundary.
@@ -64,7 +76,7 @@ internal class GapPresses {
     private var x = 0f
     private var y = 0f
     fun isSelection(now: Long, x: Float, y: Float): Boolean =
-        liftedAt?.let { now - it in 0..350 && hypot(x - this.x, y - this.y) <= 40 } ?: false
+        liftedAt?.let { now - it in 0..600 && hypot(x - this.x, y - this.y) <= 60 } ?: false
     fun lift(now: Long, x: Float, y: Float) { liftedAt = now; this.x = x; this.y = y }
     fun clear() { liftedAt = null }
 }
