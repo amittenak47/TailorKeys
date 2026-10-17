@@ -96,7 +96,8 @@ class PredictorIntegratedEvaluationTest {
                                 val modelWords = combined.english!!.withScores { s ->
                                     val top = IntArray(3) { -1 }
                                     for (id in 5 until s!!.model.vocabularySize) {
-                                        if (!s.model.vocabulary[id].startsWith(prefix)) continue
+                                        // Like the keyboard, never offer the already typed word back.
+                                        if (!s.model.vocabulary[id].startsWith(prefix) || s.model.vocabulary[id] == prefix) continue
                                         var at = 2
                                         if (top[at] >= 0 && s.probabilities[id] <= s.probabilities[top[at]]) continue
                                         while (at > 0 && (top[at - 1] < 0 || s.probabilities[id] > s.probabilities[top[at - 1]])) {

@@ -259,7 +259,7 @@ class Predictor internal constructor(
         val rows = Array(3) { IntArray(p.length + 1) }
         val all = ArrayList<Candidate>()
         fun add(w: String) {
-            if (w.startsWith("<") || w == p && scores == null) return
+            if (w.startsWith("<") || w == p) return
             val completion = w.startsWith(p)
             val cost = if (completion) 0 else if (p.length >= 2) cost(p, w, limit, rows, taps) else return
             if (cost > limit) return

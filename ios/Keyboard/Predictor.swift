@@ -259,7 +259,7 @@ final class Predictor {
         var current = older
         var all: [Candidate] = []
         func add(_ w: String, _ chars: [Character]) {
-            if w.hasPrefix("<") || (w == p && scores == nil) { return }
+            if w.hasPrefix("<") || w == p { return }
             let completion = w.hasPrefix(p)
             let distance: Int
             if completion { distance = 0 }

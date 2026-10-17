@@ -141,3 +141,17 @@ benchmark was skipped. `assembleDebug` passed with JDK 23 and `--no-daemon`.
 Swift mirrors the integration and was re-read for state,
 buffer ownership, locking and callbacks; compilation and mobile latency still need
 a Mac/device. No connected device was used or installed to.
+
+### Corrected integrated results (typed word never offered back)
+
+The keyboard never suggests the word that is already fully typed, so the model-only comparison now
+excludes it too, and the combined scorer follows the same rule. Same 6,946 held-out words:
+
+| Letters known | Old top-1 | New top-1 | Old top-3 | New top-3 |
+|---|---:|---:|---:|---:|
+| 0 | 16.4% | 26.6% | 27.0% | 41.6% |
+| 1 | 37.7% | 52.2% | 54.8% | 68.9% |
+| 2 | 31.4% | 53.2% | 47.1% | 64.8% |
+
+Host medians: 1.27 ms per keystroke refresh, 1.16 ms per word boundary. The context read was cut
+from 16,384 to 2,048 characters (the model only uses the last two sentences plus the current one).
