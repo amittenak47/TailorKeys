@@ -23,15 +23,16 @@ enum AppText {
         ], symbol: "gearshape"),
         Slide(title: "Switch to TailorKeys", lines: [
             "In any text field, hold the globe key and choose TailorKeys.",
-            "To switch to your next keyboard, hold the spacebar.",
+            "To switch back later, tap the globe.",
         ], symbol: "globe"),
         Slide(title: "Put keys where you want them", lines: [
-            "Tap the gear above the keys, then drag.",
+            "Tap the gear above the keys, then Rearrange. Drag a key to move it.",
             "Drop a key on another key's edge to slide it in. Drop it in the middle to stack both into one swipe key.",
         ], symbol: "square.grid.3x3"),
         Slide(title: "Swipe keys and suggestions", lines: [
             "Swipe a stacked key up or down to change it. Tap abc once for a capital, twice for caps lock.",
-            "Spin a suggestion wheel sideways, then tap a word. In split mode, slide along the center gap to move the cursor.",
+            "Spin a suggestion wheel sideways and tap a word, or hold a spacebar to pick that side's word.",
+            "To move the cursor, hold the empty space between the keys and push.",
         ], symbol: "hand.point.up.left"),
         Slide(title: "Try it", lines: [
             "Type a few words below. Size, split and tilt are in this app.",
@@ -64,7 +65,7 @@ struct GuideView: View {
         VStack(spacing: 0) {
             TabView(selection: $page) {
                 ForEach(slides.indices, id: \.self) { i in
-                    SlideView(slide: slides[i], showsSettingsButton: i == AppText.settingsButtonSlide)
+                    SlideView(slide: slides[i], showsSettingsButton: i == AppText.settingsButtonSlide, showsPractice: i == slides.count - 1)
                         .tag(i)
                 }
             }
@@ -110,34 +111,49 @@ struct GuideView: View {
 struct SlideView: View {
     let slide: AppText.Slide
     let showsSettingsButton: Bool
+    let showsPractice: Bool
+    @State private var practice = ""
+    @FocusState private var practiceFocused: Bool
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 24).fill(Color(.secondarySystemBackground))
-                    Image(systemName: slide.symbol)
-                        .font(.system(size: 72, weight: .regular))
-                        .foregroundColor(.accentColor)
-                }
-                .frame(height: 220)
-                .padding(.bottom, 14)
-
-                Text(slide.title).font(.largeTitle).fontWeight(.bold)
-                ForEach(slide.lines, id: \.self) { line in
-                    Text(line).font(.body).foregroundColor(.secondary)
-                }
-                if showsSettingsButton {
-                    Button(AppText.openSettingsButton) {
-                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+        ScrollViewReader { reader in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 24).fill(Color(.secondarySystemBackground))
+                        Image(systemName: slide.symbol)
+                            .font(.system(size: 72, weight: .regular))
+                            .foregroundColor(.accentColor)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .padding(.top, 6)
+                    .frame(height: 220)
+                    .padding(.bottom, 14)
+
+                    Text(slide.title).font(.largeTitle).fontWeight(.bold)
+                    ForEach(slide.lines, id: \.self) { line in
+                        Text(line).font(.body).foregroundColor(.secondary)
+                    }
+                    if showsPractice {
+                        TextField(AppText.tryField, text: $practice)
+                            .textFieldStyle(.roundedBorder)
+                            .focused($practiceFocused)
+                            .id("practice")
+                            .padding(.vertical, 8)
+                    }
+                    if showsSettingsButton {
+                        Button(AppText.openSettingsButton) {
+                            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .padding(.top, 6)
+                    }
                 }
+                .padding(24)
+                .frame(maxWidth: 560, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
-            .padding(24)
-            .frame(maxWidth: 560, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            .onChange(of: practiceFocused) { focused in
+                if focused { withAnimation { reader.scrollTo("practice", anchor: .bottom) } }
+            }
         }
     }
 }

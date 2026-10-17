@@ -6,11 +6,22 @@ struct CursorZone {
     let right: [CGPoint]
     let top: CGFloat
     let bottom: CGFloat
-    var excluded: CGRect? = nil
+    let excluded: CGRect?
+    let bounds: CGRect
+    let path: UIBezierPath
 
-    var bounds: CGRect {
-        let x0 = left.map(\.x).min()!, x1 = right.map(\.x).max()!
-        return CGRect(x: x0, y: top, width: max(0, x1 - x0), height: bottom - top)
+    init(left: [CGPoint], right: [CGPoint], top: CGFloat, bottom: CGFloat, excluded: CGRect? = nil) {
+        self.left = left; self.right = right; self.top = top; self.bottom = bottom; self.excluded = excluded
+        let x0 = left.reduce(CGFloat.infinity) { min($0, $1.x) }
+        let x1 = right.reduce(-CGFloat.infinity) { max($0, $1.x) }
+        bounds = CGRect(x: x0, y: top, width: max(0, x1 - x0), height: bottom - top)
+        let p = UIBezierPath()
+        p.move(to: left[0])
+        for point in left.dropFirst() { p.addLine(to: point) }
+        for point in right.reversed() { p.addLine(to: point) }
+        p.close()
+        if let excluded = excluded { p.append(UIBezierPath(rect: excluded)); p.usesEvenOddFillRule = true }
+        path = p
     }
 
     func contains(_ p: CGPoint) -> Bool {
@@ -19,17 +30,9 @@ struct CursorZone {
     }
 
     func hasRoom(_ width: CGFloat) -> Bool {
-        (left + right).allSatisfy { Self.edge(right, at: $0.y) - Self.edge(left, at: $0.y) >= width }
-    }
-
-    var path: UIBezierPath {
-        let p = UIBezierPath()
-        p.move(to: left[0])
-        for point in left.dropFirst() { p.addLine(to: point) }
-        for point in right.reversed() { p.addLine(to: point) }
-        p.close()
-        if let excluded = excluded { p.append(UIBezierPath(rect: excluded)); p.usesEvenOddFillRule = true }
-        return p
+        for point in left where Self.edge(right, at: point.y) - Self.edge(left, at: point.y) < width { return false }
+        for point in right where Self.edge(right, at: point.y) - Self.edge(left, at: point.y) < width { return false }
+        return true
     }
 
     static func edge(_ side: [CGPoint], at y: CGFloat) -> CGFloat {

@@ -56,28 +56,22 @@ struct FullAccessSheet: View {
 struct ImportLayoutSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var model: AppSettingsModel
-    @State private var code: String
-
-    init(model: AppSettingsModel) {
-        self.model = model
-        _code = State(initialValue: model.importCode)
-    }
 
     var body: some View {
         NavigationView {
             Form {
                 Section(header: Text("Layout code")) {
-                    TextField("Paste a TK1- code", text: $code)
+                    TextField("Paste a TK1- code", text: $model.importCode)
                         .textInputAutocapitalization(.never)
                         .disableAutocorrection(true)
                         .textFieldStyle(.roundedBorder)
-                    if !code.isEmpty && KeyGrid.fromCode(code) == nil {
+                    if !model.importCode.isEmpty && model.importedGrid == nil {
                         Text("No valid layout code found.").font(.footnote).foregroundColor(.secondary)
                     }
                 }
                 Section {
                     Button("Import") { importLayout() }
-                        .disabled(KeyGrid.fromCode(code) == nil || !model.fullAccessConfirmed)
+                        .disabled(model.importedGrid == nil || !model.fullAccessConfirmed)
                 }
             }
             .navigationTitle("Import layout")
@@ -90,9 +84,10 @@ struct ImportLayoutSheet: View {
     }
 
     private func importLayout() {
-        guard model.fullAccessConfirmed, let grid = KeyGrid.fromCode(code) else { return }
+        guard model.fullAccessConfirmed, let grid = model.importedGrid else { return }
         model.editing = false
-        model.saveGrid(grid)
+        // Keep the cached decode independent of later preview/editor mutations.
+        model.saveGrid(grid.copy())
         dismiss()
     }
 }

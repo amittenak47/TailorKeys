@@ -56,11 +56,8 @@ final class ComposingTaps {
     }
     func prefix(_ before: String) -> String {
         if word.contains(where: { $0.isNumber }) && before.hasSuffix(word) { return word }
-        var chars: [Character] = []
-        for ch in before.reversed() {
-            if ch.isLetter || ch == "'" { chars.append(ch) } else { break }
-        }
-        return String(chars.reversed())
+        let suffix = before.reversed().prefix { $0.isLetter || $0 == "'" }
+        return String(suffix.reversed())
     }
 }
 
@@ -103,8 +100,8 @@ final class KeyboardView: UIView {
     weak var delegate: KeyboardViewDelegate?
     var chordLibrary: Chords?
     var glideAllowed = true { didSet { if glideAllowed != oldValue { cancelTouches() } } }
-    var state = InputState() { didSet { rebuildAccessibilityElements(); setNeedsDisplay() } }
-    var keyWeights: [Character: Double] = [:] { didSet { setNeedsDisplay() } }
+    var state = InputState() { didSet { refreshInputState() } }
+    var keyWeights: [Character: Double] = [:] { didSet { if keyWeights != oldValue { setNeedsDisplay() } } }
     /// Setting a new grid from outside clears the undo history; `undo()` and `replaceGrid(_:)` keep it.
     var grid: KeyGrid { didSet { if !keepHistory { history.removeAll() }; cancelTouches(); relayout() } }
     var enterLabel: String? { didSet { rebuildAccessibilityElements(); setNeedsDisplay() } }
@@ -129,13 +126,14 @@ final class KeyboardView: UIView {
     }
 
     func clearArmedWord() {
+        guard armedWheel != nil else { return }
         armedWheel = nil
         rebuildAccessibilityElements()
         setNeedsDisplay()
     }
 
     private func armWheel(_ wheel: Wheel) {
-        guard settings.spaceAccepts, state.layer == .abc, !words(wheel).isEmpty else { return }
+        guard viewPrefs.spaceAccepts, state.layer == .abc, !words(wheel).isEmpty else { return }
         armedWheel = wheel
         delegate?.wheelChosen()
         rebuildAccessibilityElements()
@@ -144,20 +142,56 @@ final class KeyboardView: UIView {
     }
 
     func setSuggestions(left: [String], right: [String], prefix: String) {
-        if armedWheel != nil && sugLeft == left && sugRight == right && self.prefix == prefix { return }
+        if sugLeft == left && sugRight == right && self.prefix == prefix { return }
         clearArmedWord()
         sugLeft = left; sugRight = right; self.prefix = prefix
         for w in wheels { w.index = 0; w.dragDx = 0 }
+        prepareWheelWords()
         rebuildAccessibilityElements()
         setNeedsDisplay()
     }
 
+    /// Built at layout time, reused for every frame (including pressed keys and edit wiggle).
+    private final class KeyShape {
+        let rect: CGRect
+        let body: CGPath
+        let outline: CGPath
+        let inset: CGPath
+        init(_ rect: CGRect, _ radius: CGFloat) {
+            self.rect = rect
+            body = UIBezierPath(roundedRect: rect, cornerRadius: radius).cgPath
+            outline = UIBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), cornerRadius: radius).cgPath
+            inset = UIBezierPath(roundedRect: rect.insetBy(dx: 4, dy: 4), cornerRadius: radius).cgPath
+        }
+    }
     private final class Placed {
         let item: GridKey; let rect: CGRect; let t: CGAffineTransform; let inv: CGAffineTransform
-        init(item: GridKey, rect: CGRect, t: CGAffineTransform) { self.item = item; self.rect = rect; self.t = t; inv = t.inverted() }
+        let shape: KeyShape
+        let centre: CGPoint
+        let letter: Character?
+        let tapLetters: [Int]
+        init(item: GridKey, rect: CGRect, t: CGAffineTransform, radius: CGFloat) {
+            self.item = item; self.rect = rect; self.t = t; inv = t.inverted()
+            shape = KeyShape(rect, radius)
+            centre = CGPoint(x: rect.midX, y: rect.midY).applying(t)
+            let first = item.keys[0].lowercased().first
+            letter = !item.isStack && item.keys[0].count == 1 && first?.isLetter == true ? first : nil
+            tapLetters = item.keys.compactMap { text in
+                guard text.count == 1, let letter = text.lowercased().first, letter.isLetter,
+                      let code = letter.unicodeScalars.first?.value, code < UInt32(ComposingTaps.letters) else { return nil }
+                return Int(code)
+            }
+        }
     }
-    private struct Cell { let r: Int; let c: Int; let rect: CGRect; let t: CGAffineTransform; let inv: CGAffineTransform }
-    private final class Wheel { let side: Int; var rect = CGRect.zero; var index = 0; var dragDx: CGFloat = 0; init(side: Int) { self.side = side } }
+    private struct Cell {
+        let r: Int; let c: Int; let rect: CGRect; let t: CGAffineTransform; let inv: CGAffineTransform
+        let path: CGPath
+    }
+    private final class Wheel {
+        let side: Int; var rect = CGRect.zero; var index = 0; var dragDx: CGFloat = 0
+        var rendered: [WheelWord] = []
+        init(side: Int) { self.side = side }
+    }
 
     private var placed: [Placed] = []
     private var tapDistances = [Float](repeating: 100, count: ComposingTaps.letters)
@@ -231,6 +265,61 @@ final class KeyboardView: UIView {
     private var builtWidth: CGFloat = -1
     private var restoreWidth: Int?
     private var palette: Palette
+    private var viewPrefs = ViewPreferences()
+    private var faceLabels: [String: String] = [:]
+    private var faceHints: [String: String] = [:]
+    private var faceLetters: [String: Character] = [:]
+    private var languageLabel = "EN"
+    private var drawnLayer: Layer?
+    private var drawnShift = false, drawnCaps = false
+    private var drawnLanguage = ""
+    private var handlePath: CGPath?
+
+    private struct ViewPreferences {
+        var highContrast = false, keyTint = true, showHints = true, smartTargets = true
+        var swipeTyping = true, chording = false, typeOnPress = false, clicks = true, spaceAccepts = true
+        var languages = 1
+        var labelScale: CGFloat = 1, textScale: CGFloat = 1, radius: CGFloat = 8, baseSlack: CGFloat = 3.5, tapSlack: CGFloat = 3.5
+        var repeatGuard: TimeInterval = 0, longPress: TimeInterval = 0.35
+        var emptySide: EmptySide = .slideArrow
+    }
+    private func refreshPreferences() {
+        viewPrefs.highContrast = settings.theme == .highContrast
+        viewPrefs.keyTint = settings.keyTint; viewPrefs.showHints = settings.showHints
+        viewPrefs.smartTargets = settings.smartTargets; viewPrefs.swipeTyping = settings.swipeTyping
+        viewPrefs.chording = settings.chording; viewPrefs.typeOnPress = settings.typeOnPress
+        viewPrefs.clicks = settings.clicks; viewPrefs.spaceAccepts = settings.spaceAccepts
+        viewPrefs.languages = settings.languages.count; viewPrefs.emptySide = settings.emptySide
+        viewPrefs.textScale = CGFloat(settings.int(Prefs.textScale)) / 100
+        let system = settings.followSystemText ? min(1.6, max(0.85, UIFontMetrics(forTextStyle: .body)
+            .scaledValue(for: 15, compatibleWith: traitCollection) / 15)) : 1
+        viewPrefs.labelScale = viewPrefs.textScale * system
+        viewPrefs.radius = CGFloat(settings.int(Prefs.cornerRadius))
+        viewPrefs.baseSlack = CGFloat(settings.int(Prefs.keyGap)) / 2 + 1
+        viewPrefs.tapSlack = viewPrefs.baseSlack + CGFloat(settings.int(Prefs.touchSlack))
+        viewPrefs.repeatGuard = Double(settings.int(Prefs.keyRepeatGuard)) / 1000
+        viewPrefs.longPress = Double(settings.int(Prefs.longPressMs)) / 1000
+    }
+
+    func refreshInputState() {
+        guard drawnLayer != state.layer || drawnShift != state.shift || drawnCaps != state.capsLock || drawnLanguage != state.language else { return }
+        drawnLayer = state.layer; drawnShift = state.shift; drawnCaps = state.capsLock; drawnLanguage = state.language
+        prepareFaces()
+        rebuildAccessibilityElements()
+        setNeedsDisplay()
+    }
+
+    private func prepareFaces() {
+        faceLabels.removeAll(keepingCapacity: true); faceHints.removeAll(keepingCapacity: true)
+        faceLetters.removeAll(keepingCapacity: true)
+        languageLabel = state.language.uppercased()
+        for item in grid.items { for code in item.keys {
+            faceLabels[code] = KeyText.label(code, state)
+            faceHints[code] = KeyText.hint(code, state)
+            faceLetters[code] = code.lowercased().first
+        } }
+    }
+
     private var displayLink: CADisplayLink?
     private var cursorDisplayLink: CADisplayLink?
 
@@ -247,6 +336,8 @@ final class KeyboardView: UIView {
         isOpaque = true
         contentMode = .redraw
         palette = Palette.of(settings.theme, dark: traitCollection.userInterfaceStyle == .dark)
+        refreshPreferences()
+        prepareDrawingResources()
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -254,13 +345,8 @@ final class KeyboardView: UIView {
     private var isLandscape: Bool { let b = UIScreen.main.bounds; return b.width > b.height }
 
     private var reducedMotion = UIAccessibility.isReduceMotionEnabled
-    private var highContrast: Bool { settings.theme == .highContrast }
-    private var systemTextScale: CGFloat {
-        guard settings.followSystemText else { return 1 }
-        let scaled = UIFontMetrics(forTextStyle: .body).scaledValue(for: 15, compatibleWith: traitCollection) / 15
-        return min(1.6, max(0.85, scaled))
-    }
-    private var labelScale: CGFloat { CGFloat(settings.int(Prefs.textScale)) / 100 * systemTextScale }
+    private var highContrast: Bool { viewPrefs.highContrast }
+    private var labelScale: CGFloat { viewPrefs.labelScale }
 
     private func refreshMotion() {
         reducedMotion = UIAccessibility.isReduceMotionEnabled
@@ -277,6 +363,9 @@ final class KeyboardView: UIView {
         state.language = settings.currentLanguage
         dismissPopup()
         palette = Palette.of(settings.theme, dark: traitCollection.userInterfaceStyle == .dark)
+        refreshPreferences()
+        trimDrawingCaches()
+        prepareDrawingResources()
         relayout()
     }
 
@@ -292,12 +381,13 @@ final class KeyboardView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        if builtWidth != bounds.width { layoutFor(bounds.width) }
+        let changed = builtWidth != bounds.width
+        if changed { layoutFor(bounds.width) }
         // Paths use screen coordinates; refresh them after a height change moves the keyboard's frame.
         for (index, zone) in cursorZones.enumerated() {
             accessibleItems["cursor\(index)"]?.accessibilityPath = UIAccessibility.convertToScreenCoordinates(zone.path, in: self)
         }
-        setNeedsDisplay()
+        if changed { setNeedsDisplay() }
     }
 
     override func traitCollectionDidChange(_ previous: UITraitCollection?) {
@@ -374,13 +464,11 @@ final class KeyboardView: UIView {
             var cw = fixedWidth ?? half
             var pv = half
             if split {
+                let cosine = cos(angle), sine = sin(angle)
                 func rot(_ w: CGFloat) -> (CGFloat, CGFloat) {
-                    var mn = 0.0
-                    var mx = 0.0
-                    for (px, py) in [(-Double(w), 0.0), (-Double(w), -hf), (0.0, -hf), (0.0, 0.0)] {
-                        let x = px * cos(angle) - py * sin(angle)
-                        mn = Swift.min(mn, x); mx = Swift.max(mx, x)
-                    }
+                    let a = -Double(w) * cosine, b = hf * sine
+                    let mn = Swift.min(0, Swift.min(a, Swift.min(a + b, b)))
+                    let mx = Swift.max(0, Swift.max(a, Swift.max(a + b, b)))
                     return (CGFloat(-mn), CGFloat(mx))
                 }
                 var i = 0
@@ -551,13 +639,13 @@ final class KeyboardView: UIView {
                     t = rotateAbout(angle, rect.midX, rect.midY).concatenating(CGAffineTransform(translationX: 0, y: -KeyboardView.raise[ct.side][lc] * curve * unit))
                 }
                 let base = item.r == n - 1 ? (ct.spaceBase ?? ct.base) : ct.base
-                placed.append(Placed(item: item, rect: rect, t: t.concatenating(base)))
+                placed.append(Placed(item: item, rect: rect, t: t.concatenating(base), radius: viewPrefs.radius))
             }
         }
         if editMode {
             for ct in conts { for r in 0..<n { for c in 0..<ct.cols {
                 let rect = CGRect(x: CGFloat(c) * ct.u + gap / 2, y: CGFloat(r) * unit + gap / 2, width: ct.u - gap, height: unit - gap)
-                cells.append(Cell(r: r, c: ct.c0 + c, rect: rect, t: ct.base, inv: ct.base.inverted()))
+                cells.append(Cell(r: r, c: ct.c0 + c, rect: rect, t: ct.base, inv: ct.base.inverted(), path: UIBezierPath(roundedRect: rect, cornerRadius: viewPrefs.radius).cgPath))
             } } }
         }
 
@@ -610,7 +698,7 @@ final class KeyboardView: UIView {
         centerZone = split && !editMode ? zone(keyEdge(true, inner: true), keyEdge(false, inner: true)) : nil
         let outer: [CursorZone] = editMode ? [] : [zone(vertical(areaLeft), keyEdge(true, inner: false)),
             zone(keyEdge(false, inner: false), vertical(areaLeft + areaW))].compactMap { $0 }
-        let emptyCursor = settings.emptySide == .cursor
+        let emptyCursor = viewPrefs.emptySide == .cursor
         let minSpace: CGFloat = emptyCursor ? 0 : 40
         leftSpace = areaLeft > 0 && areaLeft >= minSpace ? CGRect(x: 0, y: strip, width: areaLeft, height: y0 + hc - strip) : nil
         rightSpace = width - (areaLeft + areaW) > 0 && width - (areaLeft + areaW) >= minSpace ? CGRect(x: areaLeft + areaW, y: strip, width: width - areaLeft - areaW, height: y0 + hc - strip) : nil
@@ -657,6 +745,9 @@ final class KeyboardView: UIView {
         slideViewWidth = width
         layoutHeight = ceil(reserve ? total(s) : Swift.max(target, total(s)))
         builtWidth = width
+        handlePath = UIBezierPath(roundedRect: CGRect(x: handleRect.midX - 22, y: handleRect.midY - 2, width: 44, height: 4), cornerRadius: 2).cgPath
+        prepareFaces()
+        prepareWheelWords()
         rebuildAccessibilityElements(layoutChanged: accessibilityLayoutChanged)
         return layoutHeight
     }
@@ -666,9 +757,8 @@ final class KeyboardView: UIView {
         let n = item.keys.count
         let j = item.idx % n
         let k = item.keys[j]
-        if n > 1 && KeyText.isLayerKey(k) && KeyText.layerOf(k) != state.layer,
-           let match = item.keys.firstIndex(where: { KeyText.isLayerKey($0) && KeyText.layerOf($0) == state.layer }) {
-            return match
+        if n > 1 && KeyText.isLayerKey(k) && KeyText.layerOf(k) != state.layer {
+            for i in item.keys.indices where KeyText.isLayerKey(item.keys[i]) && KeyText.layerOf(item.keys[i]) == state.layer { return i }
         }
         return j
     }
@@ -699,7 +789,7 @@ final class KeyboardView: UIView {
             UIAccessibility.post(notification: .announcement, argument: name)
         }
         if capsChanged { UIAccessibility.post(notification: .announcement, argument: state.capsLock ? "Caps lock on" : "Caps lock off") }
-        var signature = [state.language, "\(settings.languages.count)", "\(state.layer)", "\(state.capsLock)", "\(state.shift)", enterLabel ?? "", "\(editMode)", "\(history.isEmpty)"]
+        var signature = [state.language, "\(viewPrefs.languages)", "\(state.layer)", "\(state.capsLock)", "\(state.shift)", enterLabel ?? "", "\(editMode)", "\(history.isEmpty)"]
         signature.append(contentsOf: placed.map { "\(KeyText.spoken($0.item.keys[shownIdx($0.item)], state, enterLabel)):\($0.item.keys.count)" })
         signature.append("\(armedWheel?.side ?? -1):" + (armedWord ?? ""))
         signature.append(contentsOf: wheels.map { words($0).isEmpty ? "" : wordAt(words($0), $0.index) })
@@ -724,11 +814,11 @@ final class KeyboardView: UIView {
         }
         for (index, pk) in placed.enumerated() {
             let face = KeyText.spoken(pk.item.keys[shownIdx(pk.item)], state, enterLabel)
-            let label = pk.item.isStack ? "\(face), swipe key, \(pk.item.keys.count) options" : (pk.item.isSpace && settings.languages.count > 1 ? "Space, " + state.language.uppercased() + ", swipe to change language" : face)
+            let label = pk.item.isStack ? "\(face), swipe key, \(pk.item.keys.count) options" : (pk.item.isSpace && viewPrefs.languages > 1 ? "Space, " + state.language.uppercased() + ", swipe to change language" : face)
             let traits: UIAccessibilityTraits = pk.item.isStack ? [.keyboardKey, .adjustable] : .keyboardKey
             let e = element("key\(index)", pk.rect.applying(pk.t), label, traits)
             e.activate = { [weak self] in self?.activateAccessibleKey(index) ?? false }
-            if !KeyText.alternatives(pk.item.keys[shownIdx(pk.item)], state, settings.showHints).isEmpty {
+            if !KeyText.alternatives(pk.item.keys[shownIdx(pk.item)], state, viewPrefs.showHints).isEmpty {
                 e.accessibilityCustomActions = [UIAccessibilityCustomAction(name: "Show alternatives") { [weak self] _ in
                     self?.openPopup(pk, nil) ?? false
                 }]
@@ -744,7 +834,7 @@ final class KeyboardView: UIView {
                     })
                 }
                 e.accessibilityCustomActions = actions
-                if settings.languages.count > 1 {
+                if viewPrefs.languages > 1 {
                     e.accessibilityTraits.insert(.adjustable)
                     e.increment = { [weak self] in self?.delegate?.switchLanguage(1) }
                     e.decrement = { [weak self] in self?.delegate?.switchLanguage(-1) }
@@ -876,7 +966,6 @@ final class KeyboardView: UIView {
     override func draw(_ rect: CGRect) {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
         if builtWidth != bounds.width { layoutFor(bounds.width) }
-        rebuildAccessibilityElements()
         palette.background.setFill()
         ctx.fill(bounds)
         ctx.saveGState()
@@ -891,8 +980,6 @@ final class KeyboardView: UIView {
             // Under the keys, so it shows through the split and the spaces between keys.
             drawWave(ctx)
         }
-        let radius = CGFloat(settings.int(Prefs.cornerRadius))
-        let pressed = Set(trackers.values.compactMap { $0.pk?.item.id })
         let now = CACurrentMediaTime()
         for pk in placed {
             ctx.saveGState()
@@ -902,17 +989,17 @@ final class KeyboardView: UIView {
                 ctx.rotate(by: wiggle(pk.item, now))
                 ctx.translateBy(x: -pk.rect.midX, y: -pk.rect.midY)
             }
-            drawKey(ctx, pk.item, pk.rect, radius, pressed.contains(pk.item.id), drag?.item === pk.item ? 0.3 : 1)
-            drawDropMark(pk, radius)
+            drawKey(ctx, pk.item, pk.shape, isPressed(pk.item), drag?.item === pk.item ? 0.3 : 1)
+            drawDropMark(ctx, pk)
             ctx.restoreGState()
         }
         drawHandle()
-        if let d = drag { drawGhost(ctx, d, radius) }
+        if let d = drag { drawGhost(ctx, d) }
         drawGlide(ctx, now)
         drawPopup()
         ctx.restoreGState()
         if !editMode && !isSliding {
-            if settings.emptySide == .slideArrow {
+            if viewPrefs.emptySide == .slideArrow {
                 if let l = leftSpace { drawArrow(l, pointsLeft: true) }
                 if let r = rightSpace { drawArrow(r, pointsLeft: false) }
             } else if let button = switchRect {
@@ -924,16 +1011,19 @@ final class KeyboardView: UIView {
     }
 
     private func drawGlide(_ ctx: CGContext, _ now: TimeInterval) {
-        guard trail.count > 1 else { return }
+        let points: [GlidePoint]
+        if let id = glideID, let tracker = trackers[id] { points = tracker.points } else { points = trail }
+        guard points.count > 1 else { return }
         ctx.saveGState()
         ctx.setLineWidth(4)
         ctx.setLineCap(.round)
         ctx.setLineJoin(.round)
-        for i in 1..<trail.count {
-            let a = trail[i - 1], b = trail[i]
+        for i in 1..<points.count {
+            let a = points[i - 1], b = points[i]
             let alpha = reducedMotion ? 1 : max(0, min(1, 1 - (now - b.time) / 0.3))
             if alpha <= 0 { continue }
-            ctx.setStrokeColor(palette.accent.withAlphaComponent(CGFloat(alpha * 0.86)).cgColor)
+            ctx.setAlpha(CGFloat(alpha * 0.86))
+            ctx.setStrokeColor(palette.accent.cgColor)
             ctx.move(to: a.position); ctx.addLine(to: b.position); ctx.strokePath()
         }
         ctx.restoreGState()
@@ -943,7 +1033,13 @@ final class KeyboardView: UIView {
         CGFloat(1.6 * Double.pi / 180 * sin(2 * Double.pi * now.truncatingRemainder(dividingBy: 0.32) / 0.32 + Double(item.id) * 0.9))
     }
 
-    private func drawKey(_ ctx: CGContext, _ item: GridKey, _ rect: CGRect, _ radius: CGFloat, _ pressed: Bool, _ alpha: CGFloat) {
+    private func isPressed(_ item: GridKey) -> Bool {
+        for tracker in trackers.values where tracker.pk?.item === item { return true }
+        return false
+    }
+
+    private func drawKey(_ ctx: CGContext, _ item: GridKey, _ shape: KeyShape, _ pressed: Bool, _ alpha: CGFloat) {
+        let rect = shape.rect
         let keyAlpha: CGFloat = highContrast ? 1 : alpha
         let face = shownIdx(item)
         let code = item.keys[face]
@@ -956,34 +1052,32 @@ final class KeyboardView: UIView {
         else if accentBg { bg = palette.accent }
         else if KeyText.isLayerKey(code) || code == Keys.backspace { bg = palette.functionKey }
         else { bg = palette.key }
-        bg.withAlphaComponent(keyAlpha).setFill()
-        UIBezierPath(roundedRect: rect, cornerRadius: radius).fill()
-        if !highContrast, !editMode, let key = code.lowercased().first, code.count == 1, chordHighlight.contains(key) {
-            palette.accent.withAlphaComponent(0.43).setFill()
-            UIBezierPath(roundedRect: rect, cornerRadius: radius).fill()
+        ctx.saveGState()
+        ctx.setAlpha(keyAlpha)
+        bg.setFill(); ctx.addPath(shape.body); ctx.fillPath()
+        let key = faceLetters[code]
+        let weight: Double
+        let chord: Bool
+        if let key = key { weight = keyWeights[key] ?? 0; chord = chordHighlight.contains(key) }
+        else { weight = 0; chord = false }
+        if !highContrast, !editMode, let key = key, code.count == 1, chordHighlight.contains(key) {
+            ctx.setAlpha(0.43); palette.accent.setFill(); ctx.addPath(shape.body); ctx.fillPath()
         }
-        if !highContrast && settings.keyTint && state.layer == .abc && !editMode && !pressed && !item.isStack &&
+        if !highContrast && viewPrefs.keyTint && state.layer == .abc && !editMode && !pressed && !item.isStack &&
            code.count == 1 && code.first!.isLetter && !keyWeights.isEmpty {
-            let weight = keyWeights[code.lowercased().first!] ?? 0
-            palette.accent.withAlphaComponent(CGFloat(0.22 * weight)).setFill()
-            UIBezierPath(roundedRect: rect, cornerRadius: radius).fill()
+            ctx.setAlpha(CGFloat(0.22 * weight))
+            palette.accent.setFill(); ctx.addPath(shape.body); ctx.fillPath()
         }
+        ctx.setAlpha(keyAlpha)
         if highContrast {
-            palette.text.setStroke()
-            let outline = UIBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), cornerRadius: radius)
-            outline.lineWidth = 2; outline.stroke()
+            palette.text.setStroke(); ctx.addPath(shape.outline); ctx.setLineWidth(2); ctx.strokePath()
         }
-        let key = code.lowercased().first
-        let highlighted = accentBg || oneShot || pressed || (key.map { chordHighlight.contains($0) } ?? false) ||
-            (settings.keyTint && !editMode && (key.flatMap { keyWeights[$0] } ?? 0) > 0.1)
+        let highlighted = accentBg || oneShot || pressed || chord || (viewPrefs.keyTint && !editMode && weight > 0.1)
         if (editMode && reducedMotion) || (highContrast && highlighted) {
-            palette.accent.setStroke()
-            let pad: CGFloat = highContrast ? 4 : 1
-            let outline = UIBezierPath(roundedRect: rect.insetBy(dx: pad, dy: pad), cornerRadius: radius)
-            outline.lineWidth = 2; outline.stroke()
+            palette.accent.setStroke(); ctx.addPath(highContrast ? shape.inset : shape.outline)
+            ctx.setLineWidth(2); ctx.strokePath()
         }
-        let fg = (highContrast ? palette.text : (accentBg && !pressed ? palette.onAccent : (oneShot ? palette.accent : palette.text))).withAlphaComponent(keyAlpha)
-
+        let fg = highContrast ? palette.text : (accentBg && !pressed ? palette.onAccent : (oneShot ? palette.accent : palette.text))
         ctx.saveGState()
         ctx.clip(to: rect)
         let dy: CGFloat = swipe?.item === item ? (swipe?.dy ?? 0) : 0
@@ -994,114 +1088,160 @@ final class KeyboardView: UIView {
             drawFace(item.keys[(face + n - 1) % n], rect, -rect.height + dy, fg)
         }
         ctx.restoreGState()
-
         if item.isStack {
             let n = item.keys.count
             let step: CGFloat = 5
             let top = rect.midY - CGFloat(n - 1) * step / 2
+            fg.setFill()
             for i in 0..<n {
-                fg.withAlphaComponent(keyAlpha * (i == face ? 0.9 : 0.3)).setFill()
-                UIBezierPath(ovalIn: CGRect(x: rect.minX + 3.5, y: top + CGFloat(i) * step - 1.5, width: 3, height: 3)).fill()
+                ctx.setAlpha(keyAlpha * (i == face ? 0.9 : 0.3))
+                ctx.fillEllipse(in: CGRect(x: rect.minX + 3.5, y: top + CGFloat(i) * step - 1.5, width: 3, height: 3))
             }
         }
-        if !item.isStack && grid.rows == 4 && settings.showHints, let h = KeyText.hint(code, state) {
-            drawText(h, center: CGPoint(x: rect.maxX - rect.height * 0.14, y: rect.minY + rect.height * 0.16), size: min(rect.height * 0.2 * labelScale, min(rect.width * 0.35, rect.height * 0.32)), color: palette.hint.withAlphaComponent(keyAlpha))
+        ctx.setAlpha(keyAlpha)
+        if !item.isStack && grid.rows == 4 && viewPrefs.showHints, let h = faceHints[code] {
+            drawText(h, center: CGPoint(x: rect.maxX - rect.height * 0.14, y: rect.minY + rect.height * 0.16), size: min(rect.height * 0.2 * labelScale, min(rect.width * 0.35, rect.height * 0.32)), color: palette.hint)
         }
         if editMode && item.isStack {
+            ctx.setAlpha(1)
             palette.accent.setFill()
             let c = CGPoint(x: rect.maxX - 8, y: rect.minY + 8)
-            UIBezierPath(ovalIn: CGRect(x: c.x - 7, y: c.y - 7, width: 14, height: 14)).fill()
+            ctx.fillEllipse(in: CGRect(x: c.x - 7, y: c.y - 7, width: 14, height: 14))
             palette.onAccent.setStroke()
-            let x = UIBezierPath()
-            x.move(to: CGPoint(x: c.x - 2.5, y: c.y - 2.5)); x.addLine(to: CGPoint(x: c.x + 2.5, y: c.y + 2.5))
-            x.move(to: CGPoint(x: c.x - 2.5, y: c.y + 2.5)); x.addLine(to: CGPoint(x: c.x + 2.5, y: c.y - 2.5))
-            x.lineWidth = 1.5
-            x.stroke()
+            ctx.move(to: CGPoint(x: c.x - 2.5, y: c.y - 2.5)); ctx.addLine(to: CGPoint(x: c.x + 2.5, y: c.y + 2.5))
+            ctx.move(to: CGPoint(x: c.x - 2.5, y: c.y + 2.5)); ctx.addLine(to: CGPoint(x: c.x + 2.5, y: c.y - 2.5))
+            ctx.setLineWidth(1.5); ctx.strokePath()
         }
+        ctx.restoreGState()
     }
 
     private func drawFace(_ code: String, _ rect: CGRect, _ offset: CGFloat, _ color: UIColor) {
         let r = rect.offsetBy(dx: 0, dy: offset)
         let scale = labelScale
-        let icon = Swift.min(r.width, r.height) * 0.42 * CGFloat(settings.int(Prefs.textScale)) / 100
+        let icon = Swift.min(r.width, r.height) * 0.42 * viewPrefs.textScale
         let center = CGPoint(x: r.midX, y: r.midY)
         switch code {
-        case Keys.backspace: drawDelete(center, icon, color)
+        case Keys.backspace: drawIcon(Self.deletePaths, center, icon, color)
         case Keys.enter:
             if let l = enterLabel { drawText(l, center: center, size: r.height * 0.3 * scale, color: color, maxWidth: r.width * 0.85, maxHeight: r.height * 0.85) }
-            else { drawReturn(center, icon, color) }
+            else { drawIcon(Self.returnPaths, center, icon, color) }
         case Keys.space:
-            if settings.languages.count > 1 && !editMode {
-                drawText(state.language.uppercased(), center: center, size: Swift.min(12, r.height * 0.25) * scale, color: palette.hint, maxWidth: r.width * 0.85, maxHeight: r.height * 0.85)
+            if viewPrefs.languages > 1 && !editMode {
+                drawText(languageLabel, center: center, size: Swift.min(12, r.height * 0.25) * scale, color: palette.hint, maxWidth: r.width * 0.85, maxHeight: r.height * 0.85)
             }
         default:
-            let label = KeyText.label(code, state)
+            let label = faceLabels[code] ?? code
             let size = Swift.min(r.height * 0.42, 22) * scale
             drawText(label, center: center, size: label.count > 1 ? size * 0.72 : size, color: color, maxWidth: r.width * 0.85, maxHeight: r.height * 0.85)
         }
     }
 
-    private func drawText(_ s: String, center: CGPoint, size: CGFloat, color: UIColor, maxWidth: CGFloat? = nil, maxHeight: CGFloat? = nil) {
-        guard size > 0 else { return }
-        var font = UIFont.systemFont(ofSize: size, weight: highContrast ? .bold : .regular)
+    private struct TextKey: Hashable {
+        let text: String
+        let size: CGFloat
+        let width: CGFloat?
+        let height: CGFloat?
+        let bold: Bool
+        let color: ObjectIdentifier
+    }
+    private final class TextRun {
+        let text: NSAttributedString
+        let size: CGSize
+        init(_ text: NSAttributedString, _ size: CGSize) { self.text = text; self.size = size }
+        func draw(at point: CGPoint) { text.draw(at: point) }
+    }
+    private var textRuns: [TextKey: TextRun] = [:]
+    private var symbols: [String: UIImage] = [:]
+    private var acrossGradient: CGGradient?
+    private var downGradient: CGGradient?
+    private var cachedWheelFont = UIFont.systemFont(ofSize: 15)
+
+    func trimDrawingCaches() { textRuns.removeAll() }
+
+    private func prepareDrawingResources() {
+        _ = Self.deletePaths; _ = Self.returnPaths; _ = Self.arrowPaths
+        cachedWheelFont = .systemFont(ofSize: 15 * labelScale, weight: highContrast ? .bold : .regular)
+        let config = UIImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        for name in ["gearshape", "globe", "arrow.uturn.backward"] {
+            symbols[name] = UIImage(systemName: name, withConfiguration: config)?
+                .withTintColor(name == "arrow.uturn.backward" ? palette.text : palette.hint, renderingMode: .alwaysOriginal)
+        }
+        let space = CGColorSpaceCreateDeviceRGB()
+        let color = waveColor
+        acrossGradient = CGGradient(colorsSpace: space,
+            colors: [CGFloat(0), 0.12, 0.5, 1, 0.5, 0.12, 0].map { color.withAlphaComponent($0).cgColor } as CFArray,
+            locations: [0, 0.15, 0.3, 0.5, 0.7, 0.85, 1])
+        downGradient = CGGradient(colorsSpace: space,
+            colors: [UIColor.clear.cgColor, UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor] as CFArray,
+            locations: [0, 0.2, 0.8, 1])
+    }
+
+    private func textRun(_ s: String, size: CGFloat, color: UIColor, maxWidth: CGFloat? = nil,
+                         maxHeight: CGFloat? = nil, bold: Bool? = nil) -> TextRun {
+        let weight = bold ?? highContrast
+        let key = TextKey(text: s, size: size, width: maxWidth, height: maxHeight, bold: weight, color: ObjectIdentifier(color))
+        if let run = textRuns[key] { return run }
+        // Misses occur only when text, theme, size or key state changes; steady frames reuse the run.
+        if textRuns.count >= 512 { textRuns.removeAll(keepingCapacity: true) }
+        var font = UIFont.systemFont(ofSize: size, weight: weight ? .bold : .regular)
         var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
-        var sz = (s as NSString).size(withAttributes: attrs)
-        if let mw = maxWidth, sz.width > mw, sz.width > 0 {
-            font = font.withSize(size * mw / sz.width)
-            attrs[.font] = font
-            sz = (s as NSString).size(withAttributes: attrs)
+        var measured = (s as NSString).size(withAttributes: attrs)
+        if let width = maxWidth, measured.width > width, measured.width > 0 {
+            font = font.withSize(size * width / measured.width); attrs[.font] = font
+            measured = (s as NSString).size(withAttributes: attrs)
         }
-        if let mh = maxHeight, sz.height > mh, sz.height > 0 {
-            font = font.withSize(font.pointSize * mh / sz.height)
-            attrs[.font] = font
-            sz = (s as NSString).size(withAttributes: attrs)
+        if let height = maxHeight, measured.height > height, measured.height > 0 {
+            font = font.withSize(font.pointSize * height / measured.height); attrs[.font] = font
+            measured = (s as NSString).size(withAttributes: attrs)
         }
-        (s as NSString).draw(at: CGPoint(x: center.x - sz.width / 2, y: center.y - sz.height / 2), withAttributes: attrs)
+        let run = TextRun(NSAttributedString(string: s, attributes: attrs), measured)
+        textRuns[key] = run
+        return run
     }
 
-    private func poly(_ c: CGPoint, _ s: CGFloat, _ close: Bool, _ p: [CGFloat]) -> UIBezierPath {
-        let path = UIBezierPath()
-        path.move(to: CGPoint(x: c.x + p[0] * s, y: c.y + p[1] * s))
+    private func drawText(_ s: String, center: CGPoint, size: CGFloat, color: UIColor, maxWidth: CGFloat? = nil, maxHeight: CGFloat? = nil, bold: Bool? = nil) {
+        guard size > 0 else { return }
+        let run = textRun(s, size: size, color: color, maxWidth: maxWidth, maxHeight: maxHeight, bold: bold)
+        run.draw(at: CGPoint(x: center.x - run.size.width / 2, y: center.y - run.size.height / 2))
+    }
+
+    private static func iconPath(_ points: [CGFloat], closed: Bool = false) -> CGPath {
+        let p = CGMutablePath()
+        p.move(to: CGPoint(x: points[0], y: points[1]))
         var i = 2
-        while i < p.count { path.addLine(to: CGPoint(x: c.x + p[i] * s, y: c.y + p[i + 1] * s)); i += 2 }
-        if close { path.close() }
-        path.lineWidth = s * 0.09
-        path.lineCapStyle = .round
-        path.lineJoinStyle = .round
-        return path
+        while i < points.count { p.addLine(to: CGPoint(x: points[i], y: points[i + 1])); i += 2 }
+        if closed { p.closeSubpath() }
+        return p
     }
+    private static let deletePaths = [
+        iconPath([-0.55, 0, -0.22, -0.38, 0.55, -0.38, 0.55, 0.38, -0.22, 0.38], closed: true),
+        iconPath([0, -0.15, 0.3, 0.15]), iconPath([0, 0.15, 0.3, -0.15]),
+    ]
+    private static let returnPaths = [iconPath([0.45, -0.4, 0.45, 0.1, -0.45, 0.1]), iconPath([-0.2, -0.15, -0.45, 0.1, -0.2, 0.35])]
+    private static let arrowPaths = [iconPath([0.25, -0.5, -0.25, 0, 0.25, 0.5])]
 
-    private func drawDelete(_ c: CGPoint, _ s: CGFloat, _ color: UIColor) {
-        color.setStroke()
-        poly(c, s, true, [-0.55, 0, -0.22, -0.38, 0.55, -0.38, 0.55, 0.38, -0.22, 0.38]).stroke()
-        poly(c, s, false, [0, -0.15, 0.3, 0.15]).stroke()
-        poly(c, s, false, [0, 0.15, 0.3, -0.15]).stroke()
-    }
-
-    private func drawReturn(_ c: CGPoint, _ s: CGFloat, _ color: UIColor) {
-        color.setStroke()
-        poly(c, s, false, [0.45, -0.4, 0.45, 0.1, -0.45, 0.1]).stroke()
-        poly(c, s, false, [-0.2, -0.15, -0.45, 0.1, -0.2, 0.35]).stroke()
+    private func drawIcon(_ paths: [CGPath], _ center: CGPoint, _ size: CGFloat, _ color: UIColor, mirror: Bool = false, lineWidth: CGFloat = 0.09) {
+        guard let ctx = UIGraphicsGetCurrentContext() else { return }
+        ctx.saveGState()
+        ctx.translateBy(x: center.x, y: center.y); ctx.scaleBy(x: mirror ? -size : size, y: size)
+        color.setStroke(); ctx.setLineWidth(lineWidth); ctx.setLineCap(.round); ctx.setLineJoin(.round)
+        for path in paths { ctx.addPath(path); ctx.strokePath() }
+        ctx.restoreGState()
     }
 
     private func drawArrow(_ area: CGRect, pointsLeft: Bool) {
-        let s = Swift.min(area.width * 0.35, 18)
-        let d: CGFloat = pointsLeft ? 1 : -1
-        palette.hint.setStroke()
-        let path = poly(CGPoint(x: area.midX, y: area.midY), s, false, [0.25 * d, -0.5, -0.25 * d, 0, 0.25 * d, 0.5])
-        path.lineWidth = s * 0.135
-        path.stroke()
+        drawIcon(Self.arrowPaths, CGPoint(x: area.midX, y: area.midY), Swift.min(area.width * 0.35, 18), palette.hint,
+                 mirror: !pointsLeft, lineWidth: 0.135)
     }
 
     private func drawHandle() {
-        palette.hint.setFill()
-        UIBezierPath(roundedRect: CGRect(x: handleRect.midX - 22, y: handleRect.midY - 2, width: 44, height: 4), cornerRadius: 2).fill()
+        guard let ctx = UIGraphicsGetCurrentContext(), let path = handlePath else { return }
+        palette.hint.setFill(); ctx.addPath(path); ctx.fillPath()
     }
 
     private func drawSymbol(_ name: String, in rect: CGRect, color: UIColor) {
-        let config = UIImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-        guard rect.width >= 20, let img = UIImage(systemName: name, withConfiguration: config)?
-            .withTintColor(color, renderingMode: .alwaysOriginal) else { return }
+        guard rect.width >= 20 else { return }
+        guard let img = symbols[name] else { return }
         img.draw(at: CGPoint(x: rect.midX - img.size.width / 2, y: rect.midY - img.size.height / 2))
     }
 
@@ -1138,21 +1278,18 @@ final class KeyboardView: UIView {
     }
 
     private func drawWave(_ ctx: CGContext) {
-        guard let t = trackers.values.first(where: { $0.kind == .cursor }) else { return }
+        var cursor: Tracker?
+        for tracker in trackers.values where tracker.kind == .cursor { cursor = tracker; break }
+        guard let t = cursor else { return }
         let half: CGFloat = 44
         let peak = 0.22 + 0.14 * CGFloat(Swift.min(1, abs(t.joystick.push)))
-        let color = waveColor
-        // A bell-shaped falloff across, and a fade at the top and bottom, so no edge is ever hard.
-        let falloff: [CGFloat] = [0, 0.12, 0.5, 1, 0.5, 0.12, 0]
-        let space = CGColorSpaceCreateDeviceRGB()
-        guard let across = CGGradient(colorsSpace: space, colors: falloff.map { color.withAlphaComponent(peak * $0).cgColor } as CFArray,
-                                      locations: [0, 0.15, 0.3, 0.5, 0.7, 0.85, 1]),
-              let down = CGGradient(colorsSpace: space, colors: [UIColor.clear.cgColor, UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor] as CFArray,
-                                    locations: [0, 0.2, 0.8, 1]) else { return }
+        guard let across = acrossGradient, let down = downGradient else { return }
         let box = CGRect(x: t.waveX - half, y: stripH, width: half * 2, height: handleRect.minY - stripH)
         ctx.saveGState()
         ctx.clip(to: box)
+        ctx.setAlpha(peak)
         ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+        ctx.setAlpha(1)
         ctx.drawLinearGradient(across, start: CGPoint(x: box.minX, y: 0), end: CGPoint(x: box.maxX, y: 0), options: [])
         ctx.setBlendMode(.destinationIn)
         ctx.drawLinearGradient(down, start: CGPoint(x: 0, y: box.minY), end: CGPoint(x: 0, y: box.maxY), options: [])
@@ -1163,36 +1300,69 @@ final class KeyboardView: UIView {
     private func drawGear() { drawSymbol("gearshape", in: gearRect, color: palette.hint) }
 
     private func drawToolbar() {
-        drawSymbol("arrow.uturn.backward", in: undoRect, color: palette.text.withAlphaComponent(history.isEmpty ? 0.3 : 1))
+        guard let ctx = UIGraphicsGetCurrentContext() else { return }
+        ctx.saveGState(); ctx.setAlpha(history.isEmpty ? 0.3 : 1)
+        drawSymbol("arrow.uturn.backward", in: undoRect, color: palette.text)
+        ctx.restoreGState()
         drawText(editHint ?? "Drag keys to rearrange", center: CGPoint(x: hintRect.midX, y: hintRect.midY), size: 13,
                  color: editHint != nil ? palette.accent : palette.hint, maxWidth: hintRect.width * 0.95)
         drawSymbol("gearshape", in: moreRect, color: palette.hint)
-        let attrs: [NSAttributedString.Key: Any] = [.font: UIFont.boldSystemFont(ofSize: 15), .foregroundColor: palette.accent]
-        let size = ("Done" as NSString).size(withAttributes: attrs)
-        ("Done" as NSString).draw(at: CGPoint(x: doneRect.midX - size.width / 2, y: doneRect.midY - size.height / 2), withAttributes: attrs)
+        drawText("Done", center: CGPoint(x: doneRect.midX, y: doneRect.midY), size: 15, color: palette.accent, bold: true)
     }
 
+    private static let cellDash: [CGFloat] = [4, 4]
     private func drawCells(_ ctx: CGContext) {
-        let radius = CGFloat(settings.int(Prefs.cornerRadius))
         for (i, cell) in cells.enumerated() {
             let isTarget = drag?.target?.cellIndex == i
-            ctx.saveGState()
-            ctx.concatenate(cell.t)
-            (isTarget ? palette.accent : palette.hint.withAlphaComponent(0.5)).setStroke()
-            let path = UIBezierPath(roundedRect: cell.rect, cornerRadius: radius)
-            path.lineWidth = isTarget ? 2 : 1
-            path.setLineDash([4, 4], count: 2, phase: 0)
-            path.stroke()
+            ctx.saveGState(); ctx.concatenate(cell.t)
+            ctx.setAlpha(isTarget ? 1 : 0.5)
+            (isTarget ? palette.accent : palette.hint).setStroke()
+            ctx.addPath(cell.path); ctx.setLineWidth(isTarget ? 2 : 1)
+            ctx.setLineDash(phase: 0, lengths: Self.cellDash); ctx.strokePath()
             ctx.restoreGState()
         }
     }
 
     // MARK: - Suggestion wheels
 
-    private var wheelFont: UIFont { .systemFont(ofSize: 15 * labelScale, weight: highContrast ? .bold : .regular) }
+    private var wheelFont: UIFont { cachedWheelFont }
     private func words(_ w: Wheel) -> [String] { w.side == 0 ? sugLeft : sugRight }
     private func wordAt(_ list: [String], _ i: Int) -> String { list[((i % list.count) + list.count) % list.count] }
-    private func textWidth(_ s: String) -> CGFloat { (s as NSString).size(withAttributes: [.font: wheelFont]).width }
+
+    private final class WheelWord {
+        let whole: TextRun
+        let pre: TextRun?
+        let rest: TextRun?
+        let bold: TextRun
+        let pill: CGPath
+        init(whole: TextRun, pre: TextRun?, rest: TextRun?, bold: TextRun) {
+            self.whole = whole; self.pre = pre; self.rest = rest; self.bold = bold
+            let box = CGRect(x: -bold.size.width / 2 - 8, y: -bold.size.height / 2 - 4,
+                             width: bold.size.width + 16, height: bold.size.height + 8)
+            pill = UIBezierPath(roundedRect: box, cornerRadius: box.height / 2).cgPath
+        }
+    }
+
+    private func prepareWheelWords() {
+        let lowerPrefix = prefix.lowercased()
+        for wh in wheels {
+            wh.rendered = words(wh).map { word in
+                let whole = textRun(word, size: 15 * labelScale, color: palette.text)
+                let bold = textRun(word, size: 15 * labelScale, color: palette.accent, bold: true)
+                var pre: TextRun?, rest: TextRun?
+                if !prefix.isEmpty && word.count >= prefix.count && word.lowercased().hasPrefix(lowerPrefix) {
+                    pre = textRun(String(word.prefix(prefix.count)), size: 15 * labelScale, color: palette.accent)
+                    rest = textRun(String(word.dropFirst(prefix.count)), size: 15 * labelScale, color: palette.text)
+                }
+                return WheelWord(whole: whole, pre: pre, rest: rest, bold: bold)
+            }
+        }
+    }
+
+    private func renderedWord(_ wh: Wheel, _ index: Int) -> WheelWord {
+        let count = wh.rendered.count
+        return wh.rendered[((index % count) + count) % count]
+    }
 
     /// Neighbours drawn on each side, never more than the list holds, so no word shows twice.
     private func wheelRange(_ n: Int) -> ClosedRange<Int> {
@@ -1200,64 +1370,56 @@ final class KeyboardView: UIView {
         return -back...Swift.min(3, n - 1 - back)
     }
 
-    /// Horizontal offset of the word `k` places from the chosen one.
-    private func offsetOf(_ list: [String], _ index: Int, _ k: Int) -> CGFloat {
+    private func offsetOf(_ wh: Wheel, _ k: Int) -> CGFloat {
         let gap: CGFloat = 22
-        func w(_ j: Int) -> CGFloat { textWidth(wordAt(list, index + j)) }
         var x: CGFloat = 0
-        if k > 0 { for j in 0..<k { x += w(j) / 2 + gap + w(j + 1) / 2 } }
-        else if k < 0 { for j in stride(from: 0, to: k, by: -1) { x -= w(j) / 2 + gap + w(j - 1) / 2 } }
+        if k > 0 {
+            for j in 0..<k { x += renderedWord(wh, wh.index + j).whole.size.width / 2 + gap + renderedWord(wh, wh.index + j + 1).whole.size.width / 2 }
+        } else if k < 0 {
+            for j in stride(from: 0, to: k, by: -1) { x -= renderedWord(wh, wh.index + j).whole.size.width / 2 + gap + renderedWord(wh, wh.index + j - 1).whole.size.width / 2 }
+        }
         return x
     }
 
     private struct WheelTapTarget { let index: Int; let center: CGFloat; let width: CGFloat }
-
-    private func wheelTargets(_ wh: Wheel) -> [WheelTapTarget] {
-        let list = words(wh)
-        return wheelRange(list.count).map { k in
-            WheelTapTarget(index: wh.index + k, center: wh.rect.midX + offsetOf(list, wh.index, k) + wh.dragDx,
-                           width: textWidth(wordAt(list, wh.index + k)))
-        }
+    private func wheelTarget(_ wh: Wheel, _ k: Int) -> WheelTapTarget {
+        WheelTapTarget(index: wh.index + k, center: wh.rect.midX + offsetOf(wh, k) + wh.dragDx,
+                       width: renderedWord(wh, wh.index + k).whole.size.width)
     }
 
     private func wheelTapIndex(_ wh: Wheel, _ x: CGFloat) -> Int {
-        let visible = wheelTargets(wh).filter { $0.center + $0.width / 2 > wh.rect.minX && $0.center - $0.width / 2 < wh.rect.maxX }
-        return (visible.first { abs(x - $0.center) <= $0.width / 2 }
-            ?? visible.min { abs(x - $0.center) < abs(x - $1.center) })?.index ?? wh.index
+        var nearest = wh.index, distance = CGFloat.infinity
+        for k in wheelRange(wh.rendered.count) {
+            let target = wheelTarget(wh, k)
+            guard target.center + target.width / 2 > wh.rect.minX && target.center - target.width / 2 < wh.rect.maxX else { continue }
+            let delta = abs(x - target.center)
+            if delta <= target.width / 2 { return target.index }
+            if delta < distance { distance = delta; nearest = target.index }
+        }
+        return nearest
     }
 
     private func drawWheels(_ ctx: CGContext) {
         for wh in wheels {
-            let list = words(wh)
-            if list.isEmpty || wh.rect.width < 10 { continue }
-            ctx.saveGState()
-            ctx.clip(to: wh.rect)
+            if wh.rendered.isEmpty || wh.rect.width < 10 { continue }
+            ctx.saveGState(); ctx.clip(to: wh.rect)
             let y = wh.rect.midY - wheelFont.lineHeight / 2
-            for target in wheelTargets(wh) {
-                let k = target.index - wh.index
-                let word = wordAt(list, target.index)
+            for k in wheelRange(wh.rendered.count) {
+                let target = wheelTarget(wh, k)
+                let word = renderedWord(wh, target.index)
                 let cx = target.center
-                let alpha: CGFloat = highContrast || k == 0 ? 1 : 0.4
-                let x = cx - textWidth(word) / 2
+                let x = cx - word.whole.size.width / 2
                 if armedWheel === wh && k == 0 {
-                    let font = UIFont.systemFont(ofSize: 15 * labelScale, weight: .bold)
-                    let size = (word as NSString).size(withAttributes: [.font: font])
-                    let pill = CGRect(x: cx - size.width / 2 - 8, y: wh.rect.midY - size.height / 2 - 4,
-                                      width: size.width + 16, height: size.height + 8)
-                    palette.accent.withAlphaComponent(0.2).setFill()
-                    UIBezierPath(roundedRect: pill, cornerRadius: pill.height / 2).fill()
-                    (word as NSString).draw(at: CGPoint(x: cx - size.width / 2, y: wh.rect.midY - size.height / 2),
-                                           withAttributes: [.font: font, .foregroundColor: palette.accent])
-                    continue
-                }
-                // The part you've already typed is highlighted.
-                if !prefix.isEmpty && word.count >= prefix.count && word.lowercased().hasPrefix(prefix.lowercased()) {
-                    let pre = String(word.prefix(prefix.count))
-                    let rest = String(word.dropFirst(prefix.count))
-                    (pre as NSString).draw(at: CGPoint(x: x, y: y), withAttributes: [.font: wheelFont, .foregroundColor: palette.accent.withAlphaComponent(alpha)])
-                    (rest as NSString).draw(at: CGPoint(x: x + textWidth(pre), y: y), withAttributes: [.font: wheelFont, .foregroundColor: palette.text.withAlphaComponent(alpha)])
+                    ctx.saveGState(); ctx.translateBy(x: cx, y: wh.rect.midY)
+                    ctx.setAlpha(0.2); palette.accent.setFill(); ctx.addPath(word.pill); ctx.fillPath()
+                    ctx.setAlpha(1)
+                    word.bold.draw(at: CGPoint(x: -word.bold.size.width / 2, y: -word.bold.size.height / 2))
+                    ctx.restoreGState()
                 } else {
-                    (word as NSString).draw(at: CGPoint(x: x, y: y), withAttributes: [.font: wheelFont, .foregroundColor: palette.text.withAlphaComponent(alpha)])
+                    ctx.setAlpha(highContrast || k == 0 ? 1 : 0.4)
+                    if let pre = word.pre, let rest = word.rest {
+                        pre.draw(at: CGPoint(x: x, y: y)); rest.draw(at: CGPoint(x: x + pre.size.width, y: y))
+                    } else { word.whole.draw(at: CGPoint(x: x, y: y)) }
                 }
             }
             ctx.restoreGState()
@@ -1271,16 +1433,18 @@ final class KeyboardView: UIView {
     private final class AccentPopup {
         let choices: [String]
         let rects: [CGRect]
+        let paths: [CGPath]
         let owner: Tracker?
         var selected: Int?
         init(_ choices: [String], _ rects: [CGRect], _ owner: Tracker?) {
             self.choices = choices; self.rects = rects; self.owner = owner
+            paths = rects.map { UIBezierPath(roundedRect: $0, cornerRadius: 6).cgPath }
         }
     }
     private var popup: AccentPopup?
 
     @discardableResult private func openPopup(_ pk: Placed, _ owner: Tracker?) -> Bool {
-        let choices = owner?.pressChoices ?? KeyText.alternatives(pk.item.keys[shownIdx(pk.item)], state, settings.showHints)
+        let choices = owner?.pressChoices ?? KeyText.alternatives(pk.item.keys[shownIdx(pk.item)], state, viewPrefs.showHints)
         guard !choices.isEmpty else { return false }
         dismissPopup()
         let anchor = pk.rect.applying(pk.t)
@@ -1314,15 +1478,13 @@ final class KeyboardView: UIView {
     }
 
     private func drawPopup() {
-        guard let p = popup else { return }
+        guard let p = popup, let ctx = UIGraphicsGetCurrentContext() else { return }
         for i in p.choices.indices {
             let r = p.rects[i]
             (p.selected == i ? palette.accent : palette.functionKey).setFill()
-            let shape = UIBezierPath(roundedRect: r, cornerRadius: 6)
-            shape.fill()
-            palette.text.setStroke()
-            shape.lineWidth = highContrast ? 2 : 1
-            shape.stroke()
+            ctx.addPath(p.paths[i]); ctx.fillPath()
+            palette.text.setStroke(); ctx.setLineWidth(highContrast ? 2 : 1)
+            ctx.addPath(p.paths[i]); ctx.strokePath()
             drawText(p.choices[i], center: CGPoint(x: r.midX, y: r.midY), size: Swift.min(22 * labelScale, r.height * 0.5),
                      color: p.selected == i ? palette.onAccent : palette.text, maxWidth: r.width * 0.85, maxHeight: r.height * 0.85)
         }
@@ -1342,7 +1504,7 @@ final class KeyboardView: UIView {
         var tapPoint = CGPoint.zero
         var lastX: CGFloat = 0
         var lastY: CGFloat = 0
-        let joystick = CursorJoystick()
+        lazy var joystick = CursorJoystick()
         var cursorZone: CursorZone?
         /// The keyboard-wide wave's position and velocity (pt, pt/s), sprung toward where the push points.
         var waveX: CGFloat = 0
@@ -1380,7 +1542,11 @@ final class KeyboardView: UIView {
     }
 
     private func updateCursorLink() {
-        guard trackers.values.contains(where: { $0.kind == .cursor && ($0.joystick.speed != 0 || $0.waveMoving) }) else {
+        var moving = false
+        for tracker in trackers.values where tracker.kind == .cursor {
+            if tracker.joystick.speed != 0 || tracker.waveMoving { moving = true; break }
+        }
+        guard moving else {
             cursorDisplayLink?.invalidate(); cursorDisplayLink = nil
             return
         }
@@ -1393,7 +1559,7 @@ final class KeyboardView: UIView {
 
     @objc private func cursorTick() {
         let now = CACurrentMediaTime()
-        for t in Array(trackers.values) where t.kind == .cursor {
+        for t in trackers.values where t.kind == .cursor {
             moveCursor(t, t.joystick.advance(now), now)
             t.waveMoving = stepWave(t, now)
         }
@@ -1418,12 +1584,24 @@ final class KeyboardView: UIView {
         setNeedsDisplay()
     }
 
+    func endTypingSession() {
+        cancelTouches()
+        lastKeyTaps.removeAll(keepingCapacity: true)
+        editMode = false
+    }
+
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         if builtWidth != bounds.width { layoutFor(bounds.width) }
         guard !isSliding else { return }
-        for t in touches.sorted(by: { $0.timestamp < $1.timestamp }) {
+        if touches.count == 1, let t = touches.first {
             let p = t.location(in: self)
             if editMode { editBegan(t, p) } else { down(ObjectIdentifier(t), p, t.timestamp) }
+        } else {
+            // Multitouch ordering is rare, and matters for chord rollover.
+            for t in touches.sorted(by: { $0.timestamp < $1.timestamp }) {
+                let p = t.location(in: self)
+                if editMode { editBegan(t, p) } else { down(ObjectIdentifier(t), p, t.timestamp) }
+            }
         }
     }
 
@@ -1433,8 +1611,8 @@ final class KeyboardView: UIView {
             let p = t.location(in: self)
             if editMode { editMoved(t, p) } else {
                 let id = ObjectIdentifier(t)
-                for sample in event?.coalescedTouches(for: t) ?? [] {
-                    if let tracker = trackers[id] { _ = recordGlide(id, tracker, sample.location(in: self), sample.timestamp) }
+                if let tracker = trackers[id], tracker.glideEligible, let samples = event?.coalescedTouches(for: t) {
+                    for sample in samples { _ = recordGlide(id, tracker, sample.location(in: self), sample.timestamp) }
                 }
                 move(id, p, t.timestamp)
             }
@@ -1446,10 +1624,11 @@ final class KeyboardView: UIView {
         for t in touches {
             if editMode { editEnded(t) } else {
                 let id = ObjectIdentifier(t)
-                trackers[id]?.tapPoint = t.location(in: self)
-                if let tracker = trackers[id] { _ = recordGlide(id, tracker, t.location(in: self), t.timestamp) }
-                if let tracker = trackers[id], popup?.owner === tracker || tracker.kind == .wheel || tracker.kind == .cursor || (tracker.pk?.item.isSpace == true && settings.languages.count > 1) {
-                    move(id, t.location(in: self), t.timestamp)
+                let point = t.location(in: self)
+                trackers[id]?.tapPoint = point
+                if let tracker = trackers[id] { _ = recordGlide(id, tracker, point, t.timestamp) }
+                if let tracker = trackers[id], popup?.owner === tracker || tracker.kind == .wheel || tracker.kind == .cursor || (tracker.pk?.item.isSpace == true && viewPrefs.languages > 1) {
+                    move(id, point, t.timestamp)
                 }
                 up(id)
             }
@@ -1463,7 +1642,7 @@ final class KeyboardView: UIView {
 
     private func startLongPress(_ t: Tracker) {
         t.longTimer?.invalidate()
-        t.longTimer = Timer.scheduledTimer(withTimeInterval: Double(settings.int(Prefs.longPressMs)) / 1000, repeats: false) { [weak self, weak t] _ in
+        t.longTimer = Timer.scheduledTimer(withTimeInterval: viewPrefs.longPress, repeats: false) { [weak self, weak t] _ in
             guard let self = self, let t = t else { return }
             self.longPress(t)
         }
@@ -1474,12 +1653,13 @@ final class KeyboardView: UIView {
         let zone = cursorZone(at: p)
         let onControl = zone != nil || gearRect.contains(p) || handleRect.contains(p) || wheels.contains { $0.rect.contains(p) } ||
             leftSpace?.contains(p) == true || rightSpace?.contains(p) == true
-        if !onControl, let pk = findKey(p), !acceptKeyTap(pk.item, time) { return }
+        var initialHit = onControl ? nil : findKey(p)
+        if !onControl, let pk = initialHit, !acceptKeyTap(pk.item, time) { return }
         let chordKey: Placed?
-        if settings.chording, state.layer == .abc, !editMode, popup == nil,
+        if viewPrefs.chording, state.layer == .abc, !editMode, popup == nil,
            zone == nil, !gearRect.contains(p), !handleRect.contains(p), !wheels.contains(where: { $0.rect.contains(p) }),
            leftSpace?.contains(p) != true, rightSpace?.contains(p) != true,
-           let pk = findKey(p), !pk.item.isStack, pk.item.keys[0].count == 1, pk.item.keys[0].first!.isLetter {
+           let pk = initialHit, pk.letter != nil {
             chordKey = pk
         } else { chordKey = nil }
         for (otherID, other) in trackers {
@@ -1489,9 +1669,11 @@ final class KeyboardView: UIView {
         let prepared = chordTouches.prepareDown(time, chordKey != nil)
         for otherID in prepared.rollover { trackers[otherID]?.stop(); trackers[otherID]?.consumed = true }
         finishChords(prepared.completions)
+        if !prepared.completions.isEmpty { initialHit = nil }
         // Chord members defer rollover; every other touch keeps the existing path.
-        for (otherID, t) in Array(trackers) where t.kind == .key && !t.consumed && !chordTouches.contains(otherID) {
+        for (otherID, t) in trackers where t.kind == .key && !t.consumed && !chordTouches.contains(otherID) {
             t.stop(); t.consumed = true; commit(t)
+            initialHit = nil
         }
         if gearRect.contains(p) { trackers[id] = Tracker(kind: .gear, pk: nil); return }
         if globeRect.contains(p) { click(); delegate?.switchKeyboard(); return }
@@ -1503,7 +1685,7 @@ final class KeyboardView: UIView {
             let t = Tracker(kind: .handle, pk: nil); t.x0 = p.x; t.lastX = p.x; trackers[id] = t
             return
         }
-        if switchRect?.contains(p) == true || (settings.emptySide == .slideArrow &&
+        if switchRect?.contains(p) == true || (viewPrefs.emptySide == .slideArrow &&
             (leftSpace?.contains(p) == true || rightSpace?.contains(p) == true)) { moveToward(p); return }
         let hit = findKey(p, strict: true)
         if hit == nil, let zone = zone {
@@ -1516,7 +1698,7 @@ final class KeyboardView: UIView {
             return
         }
         if hit == nil && (centerZone?.contains(p) == true || leftSpace?.contains(p) == true || rightSpace?.contains(p) == true) { return }
-        guard let pk = chordKey ?? findKey(p) else { return }
+        guard let pk = chordKey ?? initialHit ?? findKey(p) else { return }
         if chordKey == nil { click() }
         if pk.item.isStack {
             let t = Tracker(kind: .stack, pk: pk); t.x0 = p.x; t.y0 = p.y; t.tapPoint = p; trackers[id] = t
@@ -1529,7 +1711,7 @@ final class KeyboardView: UIView {
         let t = Tracker(kind: .key, pk: pk)
         t.tapPoint = p
         t.x0 = p.x; t.y0 = p.y; t.glideWidth = pk.rect.width
-        t.glideEligible = glideAllowed && settings.swipeTyping && state.layer == .abc &&
+        t.glideEligible = glideAllowed && viewPrefs.swipeTyping && state.layer == .abc &&
             pk.item.keys[0].count == 1 && pk.item.keys[0].first!.isLetter
         if t.glideEligible { t.points.append(GlidePoint(position: p, time: time)) }
         trackers[id] = t
@@ -1568,7 +1750,6 @@ final class KeyboardView: UIView {
             updateWiggle()
         }
         if glideID == id {
-            trail = t.points
             updateWiggleIfNeeded()
             setNeedsDisplay()
             return true
@@ -1580,11 +1761,11 @@ final class KeyboardView: UIView {
         guard let t = trackers[id] else { return }
         t.tapPoint = p
         if let popup = popup, popup.owner === t {
-            popup.selected = popup.rects.firstIndex(where: { $0.contains(p) })
-            setNeedsDisplay()
+            let selection = popup.rects.firstIndex(where: { $0.contains(p) })
+            if selection != popup.selected { popup.selected = selection; setNeedsDisplay() }
             return
         }
-        if let pk = t.pk, pk.item.isSpace, !t.consumed, settings.languages.count > 1 {
+        if let pk = t.pk, pk.item.isSpace, !t.consumed, viewPrefs.languages > 1 {
             let dx = p.x - t.x0
             if abs(dx) > 8 { t.longTimer?.invalidate() }
             if abs(dx) > pk.rect.width / CGFloat(pk.item.w) && abs(p.y - t.y0) < unit {
@@ -1628,6 +1809,7 @@ final class KeyboardView: UIView {
                 sw.stepped = true
                 sw.dy = 0
                 delegate?.stackFace(item.keys[j])
+                rebuildAccessibilityElements()
                 click()
             }
             setNeedsDisplay()
@@ -1660,6 +1842,7 @@ final class KeyboardView: UIView {
             return
         }
         if glideID == id {
+            trail = t.points
             glideID = nil
             if reducedMotion { trail = []; updateWiggle() }
             delegate?.glideFinished(t.points, letterCentres, letterWidth)
@@ -1683,7 +1866,7 @@ final class KeyboardView: UIView {
                 var best = 0
                 var bestDist = CGFloat.greatestFiniteMagnitude
                 for k in wheelRange(list.count) {
-                    let d = abs(offsetOf(list, wh.index, k) + wh.dragDx)
+                    let d = abs(offsetOf(wh, k) + wh.dragDx)
                     if d < bestDist { bestDist = d; best = k }
                 }
                 wh.index = ((wh.index + best) % list.count + list.count) % list.count
@@ -1737,7 +1920,7 @@ final class KeyboardView: UIView {
 
     private func acceptKeyTap(_ item: GridKey, _ time: TimeInterval) -> Bool {
         if let previous = lastKeyTaps[item.id], time >= previous,
-           time - previous < Double(settings.int(Prefs.keyRepeatGuard)) / 1000 { return false }
+           time - previous < viewPrefs.repeatGuard { return false }
         lastKeyTaps[item.id] = time
         return true
     }
@@ -1747,10 +1930,11 @@ final class KeyboardView: UIView {
     }
 
     private func emitKey(_ code: String, _ tap: CGPoint? = nil) {
-        if let output = KeyText.output(code, state) {
+        let output = KeyText.output(code, state)
+        if let output = output {
             for t in trackers.values where t.pressedText != nil { t.followingText += output }
         } else { invalidatePressAccents() }
-        if let tap = tap, let output = KeyText.output(code, state), output.count == 1,
+        if let tap = tap, let output = output, output.count == 1,
            let ch = output.first, ch.isLetter || ch.isNumber {
             for i in tapDistances.indices { tapDistances[i] = 100 }
             for pk in placed {
@@ -1758,10 +1942,8 @@ final class KeyboardView: UIView {
                 let width = max(1, pk.rect.width)
                 let dx = (point.x - pk.rect.midX) / width
                 let dy = (point.y - pk.rect.midY) / width
-                for text in pk.item.keys {
-                    guard text.count == 1, let letter = text.lowercased().first, letter.isLetter,
-                          let code = letter.unicodeScalars.first?.value, code < UInt32(ComposingTaps.letters) else { continue }
-                    tapDistances[Int(code)] = min(tapDistances[Int(code)], Float(dx * dx + dy * dy))
+                for code in pk.tapLetters {
+                    tapDistances[code] = min(tapDistances[code], Float(dx * dx + dy * dy))
                 }
             }
             delegate?.keyTapped(code, distances: tapDistances)
@@ -1771,9 +1953,9 @@ final class KeyboardView: UIView {
     private func pressLetter(_ t: Tracker) {
         guard let item = t.pk?.item else { return }
         let code = item.keys[shownIdx(item)]
-        guard settings.typeOnPress, state.layer == .abc, code.count == 1, code.first!.isLetter,
+        guard viewPrefs.typeOnPress, state.layer == .abc, code.count == 1, code.first!.isLetter,
               let output = KeyText.output(code, state) else { return }
-        t.pressChoices = KeyText.alternatives(code, state, settings.showHints)
+        t.pressChoices = KeyText.alternatives(code, state, viewPrefs.showHints)
         emitKey(code, t.tapPoint)
         t.pressedText = output
         t.consumed = true
@@ -1816,27 +1998,23 @@ final class KeyboardView: UIView {
 
     /// The key under a point. Gaps and edges belong to the nearest key, so taps never fall through.
     private func findKey(_ p: CGPoint, strict: Bool = false, skip: GridKey? = nil) -> Placed? {
-        let baseSlack = CGFloat(settings.int(Prefs.keyGap)) / 2 + 1
-        let slack = baseSlack + CGFloat(settings.int(Prefs.touchSlack))
+        let baseSlack = viewPrefs.baseSlack
+        let slack = viewPrefs.tapSlack
         // Existing targets win before extra slack, including on narrow, rotated split layouts.
         let hit = placed.reversed().first { $0.item !== skip && $0.rect.insetBy(dx: -baseSlack, dy: -baseSlack).contains(p.applying($0.inv)) }
             ?? placed.reversed().first { $0.item !== skip && $0.rect.insetBy(dx: -slack, dy: -slack).contains(p.applying($0.inv)) }
-        func isLetter(_ pk: Placed) -> Bool {
-            let code = pk.item.keys[0]
-            return !pk.item.isStack && code.count == 1 && code.first!.isLetter
-        }
-        if !strict && !editMode && state.layer == .abc && settings.smartTargets && !keyWeights.isEmpty &&
-           (hit == nil || isLetter(hit!)) {
+        if !strict && !editMode && state.layer == .abc && viewPrefs.smartTargets && !keyWeights.isEmpty &&
+           (hit == nil || hit?.letter != nil) {
             var best: Placed?
             var bestScore = -Double.infinity
-            for pk in placed where pk.item !== skip && isLetter(pk) {
+            for pk in placed where pk.item !== skip && pk.letter != nil {
                 let local = p.applying(pk.inv)
                 let r = pk.rect
                 if r.insetBy(dx: r.width * 0.15, dy: r.height * 0.15).contains(local) { return pk }
                 if !r.insetBy(dx: -r.width * 0.35, dy: -r.height * 0.35).contains(local) { continue }
                 let dx = Double((local.x - r.midX) / r.width)
                 let dy = Double((local.y - r.midY) / r.height)
-                let weight = keyWeights[pk.item.keys[0].lowercased().first!] ?? 0
+                let weight = keyWeights[pk.letter!] ?? 0
                 let score = -(dx * dx + dy * dy) / (2 * 0.35 * 0.35) + log(0.05 + weight)
                 if score > bestScore { bestScore = score; best = pk }
             }
@@ -1847,8 +2025,7 @@ final class KeyboardView: UIView {
         var best: Placed?
         var bestDist = CGFloat.greatestFiniteMagnitude
         for pk in placed where pk.item !== skip {
-            let c = CGPoint(x: pk.rect.midX, y: pk.rect.midY).applying(pk.t)
-            let d = hypot(c.x - p.x, c.y - p.y)
+            let d = hypot(pk.centre.x - p.x, pk.centre.y - p.y)
             if d < bestDist { bestDist = d; best = pk }
         }
         return bestDist < unit * 1.2 ? best : nil
@@ -1882,7 +2059,7 @@ final class KeyboardView: UIView {
     }
 
     private func click() {
-        if settings.clicks { UIDevice.current.playInputClick() }
+        if viewPrefs.clicks { UIDevice.current.playInputClick() }
     }
 
     // MARK: - Edit mode: drag and drop
@@ -1902,10 +2079,14 @@ final class KeyboardView: UIView {
     private final class Drag {
         let item: GridKey
         let size: CGSize
+        let shape: KeyShape
         var p: CGPoint
         let off: CGPoint
         var target: Target?
-        init(item: GridKey, size: CGSize, p: CGPoint, off: CGPoint) { self.item = item; self.size = size; self.p = p; self.off = off }
+        init(item: GridKey, size: CGSize, p: CGPoint, off: CGPoint, radius: CGFloat) {
+            self.item = item; self.size = size; self.p = p; self.off = off
+            shape = KeyShape(CGRect(x: -size.width / 2, y: -size.height / 2, width: size.width, height: size.height), radius)
+        }
     }
 
     private var drag: Drag?
@@ -1914,7 +2095,7 @@ final class KeyboardView: UIView {
     private func updateWiggle() {
         displayLink?.invalidate()
         displayLink = nil
-        guard !reducedMotion && (editMode || !trail.isEmpty) else { return }
+        guard !reducedMotion && (editMode || glideID != nil || !trail.isEmpty) else { return }
         let link = CADisplayLink(target: self, selector: #selector(tick))
         link.add(to: .main, forMode: .common)
         displayLink = link
@@ -1955,7 +2136,7 @@ final class KeyboardView: UIView {
             return
         }
         editTouch = t
-        drag = Drag(item: pk.item, size: pk.rect.size, p: p, off: CGPoint(x: q.x - pk.rect.midX, y: q.y - pk.rect.midY))
+        drag = Drag(item: pk.item, size: pk.rect.size, p: p, off: CGPoint(x: q.x - pk.rect.midX, y: q.y - pk.rect.midY), radius: viewPrefs.radius)
         setNeedsDisplay()
     }
 
@@ -2044,7 +2225,7 @@ final class KeyboardView: UIView {
         }
     }
 
-    private func drawDropMark(_ pk: Placed, _ radius: CGFloat) {
+    private func drawDropMark(_ ctx: CGContext, _ pk: Placed) {
         guard let t = drag?.target, t.pk === pk else { return }
         let r = pk.rect
         palette.accent.setFill()
@@ -2052,17 +2233,15 @@ final class KeyboardView: UIView {
         if t.type == .insert {
             UIRectFill(t.before ? CGRect(x: r.minX, y: r.minY, width: 4, height: r.height) : CGRect(x: r.maxX - 4, y: r.minY, width: 4, height: r.height))
         } else {
-            let path = UIBezierPath(roundedRect: r, cornerRadius: radius)
-            path.lineWidth = t.type == .combine ? 3 : 2
-            path.stroke()
+            ctx.addPath(pk.shape.body); ctx.setLineWidth(t.type == .combine ? 3 : 2); ctx.strokePath()
         }
     }
 
-    private func drawGhost(_ ctx: CGContext, _ d: Drag, _ radius: CGFloat) {
+    private func drawGhost(_ ctx: CGContext, _ d: Drag) {
         ctx.saveGState()
         ctx.translateBy(x: d.p.x - d.off.x, y: d.p.y - d.off.y)
         ctx.scaleBy(x: 1.1, y: 1.1)
-        drawKey(ctx, d.item, CGRect(x: -d.size.width / 2, y: -d.size.height / 2, width: d.size.width, height: d.size.height), radius, false, 0.92)
+        drawKey(ctx, d.item, d.shape, false, 0.92)
         ctx.restoreGState()
     }
 }

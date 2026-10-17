@@ -13,6 +13,8 @@ enum EnglishModel {
         }
         return model
     }
+    /// Only call on worker, after the old context has released its state/score buffers.
+    static func release() { model = nil; attempted = false }
 }
 
 /// Same tokens and sentence framing as tools/lm/prepare.py and Android EnglishTokens.
@@ -75,6 +77,7 @@ final class EnglishContext {
     private var requested: String?
     private var generation: UInt64 = 0, epoch: UInt64 = 0
     private var running = false, failed = false
+    private var cancelled = false
     private var published: Scores?
     // Worker-owned fields.
     private var model: NextWordModel?
@@ -91,10 +94,33 @@ final class EnglishContext {
         requested = nil; generation &+= 1; epoch &+= 1; published = nil
     }
 
+    func cancel() {
+        lock.lock(); cancelled = true; requested = nil; published = nil; generation &+= 1; lock.unlock()
+        trimMemory()
+    }
+
+    func trimMemory() {
+        reset()
+        EnglishModel.worker.async { [weak self] in
+            guard let self = self else { EnglishModel.release(); return }
+            self.lock.lock()
+            self.published = nil
+            // Only retry if fresh input arrived while trimming. An idle keyboard should
+            // not immediately reload the weights it just released under memory pressure.
+            let notify = !self.cancelled && self.requested != nil
+            self.requested = nil; self.generation &+= 1; self.epoch &+= 1
+            self.lock.unlock()
+            self.model = nil; self.state = nil; self.front = nil; self.back = nil; self.computed = nil
+            self.tokens.removeAll(); self.workerEpoch = nil
+            EnglishModel.release()
+            if notify { self.onReady() }
+        }
+    }
+
     func update(_ before: String, _ prefix: String) {
         let committed = before.dropLast(prefix.count)
         lock.lock()
-        if failed || requested.map({ $0[...] == committed }) == true { lock.unlock(); return }
+        if cancelled || failed || requested.map({ $0[...] == committed }) == true { lock.unlock(); return }
         requested = String(committed); generation &+= 1; published = nil
         let schedule = !running
         running = true
@@ -108,6 +134,10 @@ final class EnglishContext {
     }
 
     private func drain() {
+        lock.lock()
+        let stop = cancelled
+        lock.unlock()
+        if stop { lock.lock(); running = false; lock.unlock(); return }
         if model == nil, let m = EnglishModel.load() {
             model = m; state = m.initialState()
             let ids = words.map { m.normalizedIdOf($0) }
@@ -120,6 +150,7 @@ final class EnglishContext {
         }
         while true {
             lock.lock()
+            if cancelled { running = false; lock.unlock(); return }
             let text = requested, version = generation, resetEpoch = epoch
             lock.unlock()
             let next = EnglishTokens.context(text ?? "")
@@ -129,7 +160,14 @@ final class EnglishContext {
                 state.reset(); start = 0
             }
             workerEpoch = resetEpoch
-            if start < next.count { for i in start..<next.count { m.step(state, wordId: m.idOf(next[i])) } }
+            if start < next.count { for i in start..<next.count {
+                lock.lock()
+                let stop = cancelled
+                if stop { running = false }
+                lock.unlock()
+                if stop { return }
+                m.step(state, wordId: m.idOf(next[i]))
+            } }
             tokens = next
             let output = unchanged ? computed! : back!
             output.version = version
@@ -141,7 +179,7 @@ final class EnglishContext {
                 computed = output
             }
             lock.lock()
-            if version == generation {
+            if version == generation && !cancelled {
                 if front !== output { let spare = front; front = output; back = spare }
                 published = text == nil ? nil : output
                 running = false
