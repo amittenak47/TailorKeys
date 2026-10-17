@@ -299,3 +299,27 @@ Modified by TailorKeys: lowercased and tokenized into letters/apostrophes;
 counted adjacent vocabulary-only pairs/triples within sentences; retained
 counts >= 3, limited each asset to the highest-count 100,000 entries.
 This attribution covers bigrams_fr.txt and trigrams_fr.txt.
+
+English neural next-word model (lm_en.bin)
+
+Tatoeba English sentences by Tatoeba contributors: https://tatoeba.org/
+Source: https://downloads.tatoeba.org/exports/per_language/eng/eng_sentences.tsv.bz2
+License: Creative Commons Attribution 2.0 France (CC BY 2.0 FR)
+License URL: https://creativecommons.org/licenses/by/2.0/fr/
+
+SODA: Kim et al. (2023), Allen Institute for AI.
+SODA: Million-scale Dialogue Distillation with Social Commonsense Contextualization.
+Source: https://huggingface.co/datasets/allenai/soda
+Paper: https://arxiv.org/abs/2212.10465
+License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+License URL: https://creativecommons.org/licenses/by/4.0/
+
+Courtesy credit: Common Voice contributors / Mozilla, English sentence text.
+Source: https://github.com/common-voice/common-voice/tree/main/server/data/en
+License: CC0 1.0 Universal, https://creativecommons.org/publicdomain/zero/1.0/
+Only approved sentence files were used; europarl-* and wiki* files were excluded.
+
+Modified by TailorKeys: normalized and tokenized text, deterministic held-out
+split and deduplication, balanced sampling, vocabulary restriction, CIFG LSTM
+training and per-row signed-int8 weight quantization. Only dialogue turns from
+SODA were used. This attribution accompanies the generated lm_en.bin asset.
