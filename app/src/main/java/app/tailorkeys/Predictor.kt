@@ -25,12 +25,15 @@ class Predictor internal constructor(
     onReady: () -> Unit = {},
     enableModel: Boolean = true,
     modelLoader: () -> NextWordModel? = { EnglishModel.load(openAsset) },
+    private val indexed: Boolean = true,
 ) {
     constructor(context: Context, language: String = "en", onReady: () -> Unit = {}) :
         this({ context.assets.open(it) }, context.filesDir, language, true, onReady)
     private val base: List<String>
+    private val candidateIndex: CandidateIndex
     private val rank = HashMap<String, Int>()
     private val user = HashMap<String, Int>()
+    private val learnedWords = java.util.TreeSet<String>()
     // Context IDs -> sorted packed (word ID, count) rows. No retained n-gram strings.
     private data class SeedTables(val pairs: Map<Long, LongArray>, val triples: Map<Long, LongArray>,
                                   val frequencies: DoubleArray = doubleArrayOf(), val common: List<String> = emptyList())
@@ -46,6 +49,7 @@ class Predictor internal constructor(
     private val pairFile = File(filesDir, "user_bigrams${suffix}.txt")
     private val tripleFile = File(filesDir, "user_trigrams${suffix}.txt")
     private var dirty = false
+    @Volatile private var saveFailed = false
     private var cachedPrefix: String? = null
     private var cachedPrev: String? = null
     private var cachedPrev2: String? = null
@@ -57,10 +61,10 @@ class Predictor internal constructor(
     internal val english: EnglishContext?
 
     init {
-        val words = openAsset("words${suffix}.txt").bufferedReader().use { it.readLines() }
-            .map { it.trim().lowercase() }.filter { it.isNotEmpty() }
+        val words = DictionaryWords.read(openAsset, language)
         words.forEachIndexed { i, w -> rank.putIfAbsent(w, i) }
         base = words.distinct()
+        candidateIndex = CandidateIndex(base)
         english = if (language == "en" && enableModel) EnglishContext(base,
             modelLoader, asynchronous, onReady) else null
         if (userFile.exists()) userFile.readLines().forEach { line ->
@@ -77,6 +81,7 @@ class Predictor internal constructor(
                 userTriples.getOrPut("${parts[0]}\t${parts[1]}") { HashMap() }[parts[2]] = it
             }
         } }
+        learnedWords.addAll(user.keys)
         // Only these base words and learned words can enter the frequency top 300.
         topWords = (base.take(300) + user.keys).distinct()
             .sortedWith(compareByDescending<String> { frequency(it) }.thenBy { it }).take(300)
@@ -292,7 +297,12 @@ class Predictor internal constructor(
             for (w in pool) add(w)
         } else {
             for (w in user.keys) add(w)
-            for (w in base) if (!user.containsKey(w)) add(w)
+            if (indexed) candidateIndex.visit(p, limit,
+                firstAllowed = { c -> if (taps?.hasTap(0) == true) taps.cost(0, c) <= 6
+                    else p[0] == c || neighbours[p[0]]?.contains(c) == true },
+                substitution = { i, c -> if (taps?.hasTap(i) == true) taps.cost(i, c) else gridCost(p[i], c) },
+                accept = { w -> if (!user.containsKey(w)) add(w) })
+            else for (w in base) if (!user.containsKey(w)) add(w)
         }
         val result = if (scores == null && p.isEmpty() && prev != null) {
             // Trigram followers, then remaining bigram followers, then frequency fallback.
@@ -327,7 +337,7 @@ class Predictor internal constructor(
 
     fun isDeadEnd(prefix: String): Boolean {
         val p = prefix.lowercase()
-        return prefix.length >= 2 && user.keys.none { it.startsWith(p) } && base.none { it.startsWith(p) }
+        return prefix.length >= 2 && !candidateIndex.hasPrefix(p) && learnedWords.ceiling(p)?.startsWith(p) != true
     }
 
     fun closest(prefix: String, prev: String? = null, prev2: String? = null, n: Int = 8, taps: ComposingTaps? = null): List<String> {
@@ -367,6 +377,7 @@ class Predictor internal constructor(
         val w = word.lowercase()
         if (w.length < 2 || !w.all { it.isLetter() || it == '\'' }) return
         user[w] = (user[w] ?: 0) + 1
+        learnedWords.add(w)
         if (prev != null) {
             val pairs = userPairs.getOrPut(prev) { HashMap() }
             pairs[w] = (pairs[w] ?: 0) + 1
@@ -379,16 +390,15 @@ class Predictor internal constructor(
         dirty = true
     }
 
-    fun save() {
-        if (!dirty) return
-        userFile.writeText(user.entries.joinToString("\n") { "${it.key}\t${it.value}" })
-        pairFile.writeText(userPairs.entries.flatMap { (prev, pairs) ->
-            pairs.map { (word, count) -> "$prev\t$word\t$count" }
-        }.joinToString("\n"))
-        tripleFile.writeText(userTriples.entries.flatMap { (context, triples) ->
-            triples.map { (word, count) -> "$context\t$word\t$count" }
-        }.joinToString("\n"))
+    fun save(): java.util.concurrent.Future<*>? {
+        if (!dirty && !saveFailed) return null
+        val snapshot = PersonalStore.Snapshot(user, userPairs, userTriples)
         dirty = false
+        saveFailed = false
+        return PersonalStore.submit {
+            try { snapshot.write(userFile, pairFile, tripleFile) }
+            catch (e: java.io.IOException) { saveFailed = true; throw e }
+        }
     }
 
     private fun matchCase(w: String, prefix: String) = when {
@@ -430,4 +440,7 @@ class Predictor internal constructor(
         // Calibrated with real candidate generation; spatial tap costs remain in tenths.
         const val MODEL_TYPO_WEIGHT = 32.0
     }
+
+    internal fun rankedCandidates(prefix: String, prev: String?, prev2: String?, taps: ComposingTaps?) =
+        candidates(prefix, prev, prev2, taps).map { Triple(it.word, it.score, it.correction) }
 }

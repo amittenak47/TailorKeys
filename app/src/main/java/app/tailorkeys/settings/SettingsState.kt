@@ -7,7 +7,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import app.tailorkeys.Chords
-import app.tailorkeys.Predictor
+import app.tailorkeys.DictionaryWords
 import app.tailorkeys.Align
 import app.tailorkeys.BoolPref
 import app.tailorkeys.IntPref
@@ -30,7 +30,9 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
     }
     /** Called on a worker thread by the list dialog. */
     @Synchronized fun chordList(language: String, letters: Set<Char>): List<Chords.Chord> =
-        chordLibraries.getOrPut(language) { Chords(Predictor(appContext, language).chordWords()) }.forLetters(letters)
+        chordLibraries.getOrPut(language) {
+            Chords(DictionaryWords.read({ appContext.assets.open(it) }, language, 20_000, unique = true))
+        }.forLetters(letters)
 
     private var revision by mutableIntStateOf(0)
     val preview = KeyboardView(context, settings).apply {
