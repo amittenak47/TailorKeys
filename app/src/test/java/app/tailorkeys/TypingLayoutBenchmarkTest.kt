@@ -3,12 +3,57 @@ package app.tailorkeys
 import app.tailorkeys.layout.KeyGrid
 import org.junit.Assume.assumeTrue
 import org.junit.Test
+import org.junit.Assert.assertEquals
 import java.io.File
 import java.nio.file.Files
 import kotlin.system.measureNanoTime
 
-/** TK_PERF=1; median of seven batches, identical workloads before/after optimization. */
+/**
+ * TK_PERF=1; median of seven batches, identical workloads before/after optimization.
+ * Baseline c600a17 (JDK 23, 256 MB test heap): keystroke 3.592183 ms, resize 0.155319 ms,
+ * cached tilt 0.003616 ms. Loading, editor IPC and Android rendering are excluded.
+ */
 class TypingLayoutBenchmarkTest {
+    @Test fun frameMathAllocatesNothingAfterWarmup() {
+        assumeTrue(System.getenv("TK_PERF") == "1")
+        // Android's compile classpath omits java.management; reflection is confined to this JVM test.
+        val bean = Class.forName("java.lang.management.ManagementFactory").getMethod("getThreadMXBean").invoke(null)
+        val api = Class.forName("com.sun.management.ThreadMXBean")
+        assumeTrue(api.getMethod("isThreadAllocatedMemorySupported").invoke(bean) as Boolean)
+        api.getMethod("setThreadAllocatedMemoryEnabled", Boolean::class.javaPrimitiveType).invoke(bean, true)
+        val readBytes = api.getMethod("getThreadAllocatedBytes", Long::class.javaPrimitiveType)
+        val joystick = CursorJoystick()
+        val cursor = CursorRead()
+        val editorText = "a".repeat(1024)
+        var checksum = 0
+        var time = 0L
+        fun frames() { repeat(20_000) {
+            time += 16
+            checksum += joystick.displace(15f, time)
+            checksum += joystick.advance(time + 8)
+            checksum += slideOffset(150f, time % 300, false).toBits()
+            cursor.set(editorText, 0, 500, 500)
+            checksum += cursor.target(-1, false)
+        } }
+        repeat(5) { frames() }
+        val id = Thread.currentThread().id
+        fun bytes() = readBytes.invoke(bean, id) as Long
+        repeat(100) { bytes() }
+        val samples = LongArray(7)
+        for (i in samples.indices) {
+            val probeStart = bytes()
+            val probeCost = bytes() - probeStart
+            val before = bytes()
+            frames()
+            samples[i] = bytes() - before - probeCost
+        }
+        // Ignore one-time JVM/JIT initialization; persistent per-frame allocations affect every batch.
+        samples.sort()
+        val allocated = samples[3]
+        println("TK_PERF frame_math_allocated_bytes=$allocated frames=20000 samples=${samples.toList()} checksum=$checksum")
+        assertEquals(0L, allocated)
+    }
+
     @Test fun typingAndLayout() {
         assumeTrue(System.getenv("TK_PERF") == "1")
         val dir = Files.createTempDirectory("tk-perf").toFile()
