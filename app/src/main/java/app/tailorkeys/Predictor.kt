@@ -23,6 +23,8 @@ class Predictor internal constructor(
     val language: String = "en",
     asynchronous: Boolean = false,
     onReady: () -> Unit = {},
+    enableModel: Boolean = true,
+    modelLoader: () -> NextWordModel? = { EnglishModel.load(openAsset) },
 ) {
     constructor(context: Context, language: String = "en", onReady: () -> Unit = {}) :
         this({ context.assets.open(it) }, context.filesDir, language, true, onReady)
@@ -50,12 +52,17 @@ class Predictor internal constructor(
     private var cachedCandidates: List<Candidate>? = null
     private var cachedTaps: ComposingTaps? = null
     private var cachedTapRevision = -1L
+    private var cachedScores: EnglishContext.Scores? = null
+    private var cachedScoreVersion = -1L
+    internal val english: EnglishContext?
 
     init {
         val words = openAsset("words${suffix}.txt").bufferedReader().use { it.readLines() }
             .map { it.trim().lowercase() }.filter { it.isNotEmpty() }
         words.forEachIndexed { i, w -> rank.putIfAbsent(w, i) }
         base = words.distinct()
+        english = if (language == "en" && enableModel) EnglishContext(base,
+            modelLoader, asynchronous, onReady) else null
         if (userFile.exists()) userFile.readLines().forEach { line ->
             val parts = line.split('\t')
             if (parts.size == 2) parts[1].toIntOrNull()?.let { user[parts[0]] = it }
@@ -100,6 +107,10 @@ class Predictor internal constructor(
         if (asynchronous) Thread(loadTables, "TailorKeys-ngrams").apply { isDaemon = true; start() }
         else loadTables()
     }
+
+    /** Exclude the composing word; repeated letters reuse the distribution without model work. */
+    fun updateContext(before: CharSequence, prefix: String) { english?.update(before, prefix.length) }
+    fun resetContext() { english?.reset() }
 
     fun setLayout(grid: KeyGrid) {
         cachedCandidates = null
@@ -223,13 +234,19 @@ class Predictor internal constructor(
     }
 
     private fun candidates(prefix: String, prev: String?, prev2: String?, input: ComposingTaps?): List<Candidate> {
+        return english?.withScores { candidates(prefix, prev, prev2, input, it) }
+            ?: candidates(prefix, prev, prev2, input, null)
+    }
+
+    private fun candidates(prefix: String, prev: String?, prev2: String?, input: ComposingTaps?, scores: EnglishContext.Scores?): List<Candidate> {
         val p = prefix.lowercase()
         val taps = input?.takeIf { it.hasTaps(prefix) }
         val tapRevision = taps?.revision ?: -1L
         val tables = seedTables
         cachedCandidates?.let {
             if (cachedPrefix == p && cachedPrev == prev && cachedPrev2 == prev2 && cachedTables === tables &&
-                cachedTaps === taps && cachedTapRevision == tapRevision) return it
+                cachedTaps === taps && cachedTapRevision == tapRevision && cachedScores === scores &&
+                cachedScoreVersion == (scores?.version ?: -1L)) return it
         }
         val prevId = rank[prev]
         val prev2Id = rank[prev2]
@@ -242,36 +259,42 @@ class Predictor internal constructor(
         val rows = Array(3) { IntArray(p.length + 1) }
         val all = ArrayList<Candidate>()
         fun add(w: String) {
-            if (w == p) return
+            if (w.startsWith("<") || w == p) return
             val completion = w.startsWith(p)
             val cost = if (completion) 0 else if (p.length >= 2) cost(p, w, limit, rows, taps) else return
             if (cost > limit) return
             val id = rank[w]
-            val seedPair = count(pairs, id)
+            val seedPair = if (scores == null) count(pairs, id) else 0
             val userPair = learnedPairs?.get(w) ?: 0
-            val seedTriple = count(triples, id)
+            val seedTriple = if (scores == null) count(triples, id) else 0
             val userTriple = learnedTriples?.get(w) ?: 0
-            // User triples receive the same logarithmic personal weighting as pairs.
-            val context = ln(1.0 + seedPair) + 1.5 * ln(1.0 + userPair) +
-                1.2 * (ln(1.0 + seedTriple) + 1.5 * ln(1.0 + userTriple))
-            val score = ln(frequency(w, tables)) + 1.5 * context - 2.5 * cost / 10.0
+            val score = if (scores != null) {
+                scores.probability(w, id) + personalScore(w, userPair, userTriple) - MODEL_TYPO_WEIGHT * cost / 10.0
+            } else {
+                val context = ln(1.0 + seedPair) + 1.5 * ln(1.0 + userPair) +
+                    1.2 * (ln(1.0 + seedTriple) + 1.5 * ln(1.0 + userTriple))
+                ln(frequency(w, tables)) + 1.5 * context - 2.5 * cost / 10.0
+            }
             all.add(Candidate(w, score, !completion, seedPair + userPair, seedTriple + userTriple))
         }
         if (p.isEmpty()) {
             // No dictionary scan: only this context's followers plus the load-time top 300.
             val pool = LinkedHashSet<String>()
-            triples?.forEach { pool.add(base[(it ushr 32).toInt()]) }
-            pairs?.forEach { pool.add(base[(it ushr 32).toInt()]) }
+            if (scores != null) scores.top.forEach { pool.add(scores.model.vocabulary[it]) }
+            else {
+                triples?.forEach { pool.add(base[(it ushr 32).toInt()]) }
+                pairs?.forEach { pool.add(base[(it ushr 32).toInt()]) }
+                pool.addAll(topWords)
+                tables?.common?.let { pool.addAll(it) }
+            }
             learnedTriples?.keys?.let { pool.addAll(it) }
             learnedPairs?.keys?.let { pool.addAll(it) }
-            pool.addAll(topWords)
-            tables?.common?.let { pool.addAll(it) }
             for (w in pool) add(w)
         } else {
             for (w in user.keys) add(w)
             for (w in base) if (!user.containsKey(w)) add(w)
         }
-        val result = if (p.isEmpty() && prev != null) {
+        val result = if (scores == null && p.isEmpty() && prev != null) {
             // Trigram followers, then remaining bigram followers, then frequency fallback.
             all.sortedWith(compareByDescending<Candidate> { if (it.tripleCount > 0) 2 else if (it.pairCount > 0) 1 else 0 }
                 .thenByDescending { if (it.tripleCount > 0) it.tripleCount else it.pairCount }
@@ -285,6 +308,8 @@ class Predictor internal constructor(
         cachedTables = tables
         cachedTaps = taps
         cachedTapRevision = tapRevision
+        cachedScores = scores
+        cachedScoreVersion = scores?.version ?: -1L
         cachedCandidates = result
         return result
     }
@@ -381,9 +406,28 @@ class Predictor internal constructor(
     fun gestureFrequency(word: String): Double = frequency(word)
     /** The previous-word part of the suggestion score, for ranking swiped words the same way. */
     fun contextScore(prev: String?, word: String): Double {
+        english?.withScores { scores ->
+            if (scores != null) return@withScores scores.probability(word, rank[word]) + personalScore(word, prev, scores.previous2)
+            null
+        }?.let { return it }
         val pairs = rank[prev]?.let { seedTables?.pairs?.get(it.toLong()) }
         val seedPair = count(pairs, rank[word])
         val userPair = userPairs[prev]?.get(word) ?: 0
         return 1.5 * (ln(1.0 + seedPair) + 1.5 * ln(1.0 + userPair))
+    }
+
+    private fun personalScore(word: String, prev: String?, prev2: String?): Double {
+        val triple = if (prev2 != null && prev != null) userTriples["$prev2\t$prev"]?.get(word) ?: 0 else 0
+        return personalScore(word, userPairs[prev]?.get(word) ?: 0, triple)
+    }
+
+    private fun personalScore(word: String, pair: Int, triple: Int): Double {
+        val wordBoost = ln(1.0 + (user[word] ?: 0) * 0.05 * ((rank[word] ?: 5000) + 10))
+        return wordBoost + 2.25 * ln(1.0 + pair) + 2.7 * ln(1.0 + triple)
+    }
+
+    internal companion object {
+        // Calibrated with real candidate generation; spatial tap costs remain in tenths.
+        const val MODEL_TYPO_WEIGHT = 32.0
     }
 }

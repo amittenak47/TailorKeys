@@ -47,6 +47,7 @@ class NextWordModel private constructor(
     }
 
     fun idOf(word: String): Int = ids[word.lowercase(Locale.ROOT).replace('\u2019', '\'').replace('\u2018', '\'')] ?: 2
+    internal fun normalizedIdOf(word: String): Int = ids[word] ?: 2
     fun initialState(): State = State(this)
 
     /** Updates and returns state. No allocations; states must not be used concurrently. */

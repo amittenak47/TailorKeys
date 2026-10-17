@@ -15,6 +15,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private var loading = Set<String>()
     private let loader = DispatchQueue(label: "app.tailorkeys.languages", qos: .userInitiated)
     private var modelReady = false
+    private var modelDocument: UUID?
 
     private func makeModel(_ lang: String) -> LanguageModel {
         let p = Predictor(lang) { [weak self] in
@@ -426,6 +427,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         let needsSpace = before.last.map { $0.isLetter || $0.isNumber } ?? false
         let prev = previousWord(needsSpace ? before + " " : before)
+        predictor.updateContext(before, "")
         let matches = gestureDecoder.decode(points, prev, frequency: predictor.gestureFrequency, context: predictor.contextScore)
         guard !matches.isEmpty else { return }
         changingGlide = true
@@ -704,6 +706,10 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         }
         let before = textDocumentProxy.documentContextBeforeInput ?? ""
         keyboard.glideAllowed = suggestAllowed
+        if modelDocument != textDocumentProxy.documentIdentifier {
+            models.values.forEach { $0.predictor.resetContext() }
+            modelDocument = textDocumentProxy.documentIdentifier
+        }
         if !settings.swipeTyping { clearGlide() }
         if !suggestAllowed {
             clearGlide()
@@ -719,6 +725,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         }
         if currentGlide() {
             keyboard.keyWeights = [:]
+            predictor.updateContext(before, "")
             keyboard.setSuggestions(left: glideExplore, right: Array(glideCandidates.prefix(8)), prefix: "")
             return
         }
@@ -726,6 +733,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         taps.sync(prefix)
         let prev = previousWord(before)
         let prev2 = previousWord2(before)
+        predictor.updateContext(before, prefix)
         keyboard.keyWeights = (settings.keyTint || settings.smartTargets) ? predictor.nextLetters(prefix, prev, prev2, taps: taps) : [:]
         keyboard.setSuggestions(left: predictor.explore(prefix, prev, prev2, taps: taps), right: predictor.closest(prefix, prev, prev2, taps: taps), prefix: prefix)
     }
