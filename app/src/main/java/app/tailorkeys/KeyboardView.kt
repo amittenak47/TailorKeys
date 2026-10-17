@@ -46,7 +46,7 @@ import kotlin.math.sin
 /**
  * Draws the suggestion wheels and the key grid, and turns touches into key presses.
  *
- * In [editMode] (the gear in the suggestion bar, or the settings screen) the keys lay flat and wiggle, and
+ * In [editMode] (Rearrange in quick options, or the settings screen) the keys lay flat and wiggle, and
  * dragging a key moves it: onto an empty cell, onto another key's edge (insert and shift), onto its middle
  * (combine into a swipe key), or onto a spacebar (sit on its inner side while it shrinks). The suggestion bar
  * turns into a toolbar with undo, a hint for the current drag and, inside the keyboard, settings and Done.
@@ -70,6 +70,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         fun onSelectMode(on: Boolean) {}
         fun onEdited() {}
         fun onOpenSettings() {}
+        fun onQuickOptions() {}
     }
 
     var listener: Listener? = null
@@ -143,6 +144,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val doneRect = RectF()
     private var leftSpace: RectF? = null
     private var rightSpace: RectF? = null
+    val suggestionStripHeight get() = stripH.toInt()
     private var stripH = 0f
     private var unit = 0f
     private var letterCentres = emptyMap<Char, GestureDecoder.Point>()
@@ -587,7 +589,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         else -> when (id) {
         A_WHEEL_LEFT -> "More suggestions"
         A_WHEEL_RIGHT -> "Suggestions"
-        A_GEAR -> "Rearrange keys"
+        A_GEAR -> "Quick options"
         A_CURSOR -> "Cursor"
         A_UNDO -> "Undo"
         A_SETTINGS -> "Settings"
@@ -686,7 +688,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         accessibilityEvent(id, AccessibilityEvent.TYPE_VIEW_CLICKED)
         when (id) {
             A_WHEEL_LEFT, A_WHEEL_RIGHT -> { val w = wheels[id - A_WHEEL_LEFT]; listener?.onSuggestion(wordAt(words(w), w.index)); clearArmedWord() }
-            A_GEAR -> editMode = true
+            A_GEAR -> listener?.onQuickOptions()
             A_UNDO -> { if (history.isEmpty()) return false; undo() }
             A_SETTINGS -> listener?.onOpenSettings()
             A_DONE -> editMode = false
@@ -1050,20 +1052,12 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         canvas.drawPath(shape(area.centerX(), area.centerY(), s, false, 0.25f * dir, -0.5f, -0.25f * dir, 0f, 0.25f * dir, 0.5f), strokeIn(palette.hint, s * 1.5f, 255))
     }
 
-    /**
-     * While a finger holds still at the start of a gap drag, a soft glow grows outward from it over half a second.
-     * Full size means text selection is on; it then follows the finger. Once the finger moves first, no glow.
-     */
+    /** Selection presses get the full accent glow immediately. */
     private fun drawCursor(canvas: Canvas, radius: Float) {
-        val t = trackers.values.firstOrNull { it.kind == K_CURSOR } ?: return
-        if (t.moved && !t.select) return
-        val held = (SystemClock.uptimeMillis() - t.holdAt).toFloat() / SELECT_HOLD_MS
-        val p = if (t.select) 1f else held.coerceIn(0f, 1f).let { it * it * (3 - 2 * it) }
-        if (!t.select) postInvalidateOnAnimation()
-        if (p <= 0.02f) return
-        val r = 64 * density * p
+        val t = trackers.values.firstOrNull { it.kind == K_CURSOR && it.select } ?: return
+        val r = 64 * density
         val rgb = palette.accent and 0x00FFFFFF
-        fill.shader = RadialGradient(t.fx, t.fy, r, intArrayOf(rgb or ((120 * p).toInt() shl 24), rgb), null, Shader.TileMode.CLAMP)
+        fill.shader = RadialGradient(t.fx, t.fy, r, intArrayOf(rgb or (120 shl 24), rgb), null, Shader.TileMode.CLAMP)
         canvas.save()
         path.reset()
         path.addRoundRect(cursorRect, radius, radius, Path.Direction.CW)
@@ -1117,6 +1111,16 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         return -back..min(3, n - 1 - back)
     }
 
+    private fun wheelTargets(wh: Wheel): List<WheelTapTarget> {
+        wheelText.textSize = 15 * density * labelScale
+        wheelText.isFakeBoldText = highContrast
+        val list = words(wh)
+        return wheelRange(list.size).map { k ->
+            WheelTapTarget(wh.index + k, wh.rect.centerX() + offsetOf(list, wh.index, k) + wh.dragDx,
+                wheelText.measureText(wordAt(list, wh.index + k)))
+        }
+    }
+
     private fun drawWheels(canvas: Canvas) {
         wheelText.textSize = 15 * density * labelScale
         wheelText.isFakeBoldText = highContrast
@@ -1130,9 +1134,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             canvas.save()
             canvas.clipRect(wh.rect)
             val baseline = wh.rect.centerY() - (wheelText.descent() + wheelText.ascent()) / 2
-            for (k in wheelRange(list.size)) {
-                val word = wordAt(list, wh.index + k)
-                val cx = wh.rect.centerX() + offsetOf(list, wh.index, k) + wh.dragDx
+            for (target in wheelTargets(wh)) {
+                val k = target.index - wh.index
+                val word = wordAt(list, target.index)
+                val cx = target.center
                 val alpha = if (highContrast || k == 0) 255 else 100
                 var x = cx - wheelText.measureText(word) / 2
                 if (armedWheel === wh && k == 0) {
@@ -1226,10 +1231,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         var x0 = 0f
         var y0 = 0f
         var lastX = 0f
-        var holdX = 0f
-        var holdY = 0f
-        var holdAt = 0L
-        var lastT = 0L
+        val joystick = CursorJoystick()
+        var lastCursorHaptic = Long.MIN_VALUE
         var fx = 0f
         var fy = 0f
         var select = false
@@ -1259,7 +1262,30 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private var glideId: Int? = null
     private var trail: List<GestureDecoder.Point> = emptyList()
 
+    private val gapPresses = GapPresses()
+    private val cursorFrame = object : Runnable {
+        override fun run() {
+            val now = SystemClock.uptimeMillis()
+            for (t in trackers.values.toList()) if (t.kind == K_CURSOR) {
+                moveCursor(t, t.joystick.advance(now), now)
+            }
+            if (trackers.values.any { it.kind == K_CURSOR && it.joystick.speed != 0.0 }) postOnAnimation(this)
+        }
+    }
+
+    private fun moveCursor(t: Tracker, steps: Int, now: Long) {
+        if (steps == 0) return
+        invalidatePressAccents()
+        listener?.onCursor(steps, select = t.select)
+        if (t.lastCursorHaptic == Long.MIN_VALUE || now - t.lastCursorHaptic >= 80) {
+            haptic(HapticFeedbackConstants.CLOCK_TICK)
+            t.lastCursorHaptic = now
+        }
+    }
+
     fun cancelTouches() {
+        removeCallbacks(cursorFrame)
+        gapPresses.clear()
         chordTouches.cancel()
         timers.removeCallbacks(clearChordHighlight)
         chordHighlight = emptySet()
@@ -1291,10 +1317,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 val i = e.actionIndex
                 trackers[e.getPointerId(i)]?.let { recordGlide(e.getPointerId(i), it, e.getX(i), e.getY(i), e.eventTime) }
                 trackers[e.getPointerId(i)]?.let { t ->
-                    if (popup?.owner === t || t.pk?.item?.isSpace == true && settings.languages().size > 1)
+                    if (popup?.owner === t || t.kind == K_WHEEL || t.kind == K_CURSOR || t.pk?.item?.isSpace == true && settings.languages().size > 1)
                         pointerMove(e.getPointerId(i), e.getX(i), e.getY(i), e.eventTime)
                 }
-                pointerUp(e.getPointerId(i))
+                pointerUp(e.getPointerId(i), e.eventTime)
             }
             MotionEvent.ACTION_CANCEL -> cancelTouches()
         }
@@ -1327,7 +1353,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             return
         }
         wheels.firstOrNull { it.rect.contains(x, y) && words(it).isNotEmpty() }?.let {
-            trackers[id] = Tracker(K_WHEEL, null).also { t -> t.wheel = it; t.x0 = x }
+            trackers[id] = Tracker(K_WHEEL, null).also { t -> t.wheel = it; t.x0 = x; t.lastX = x }
             return
         }
         if (handleRect.contains(x, y)) {
@@ -1340,11 +1366,15 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         }
         val hit = findKey(x, y, strict = true)
         if (hit == null && cursorRect.contains(x, y)) {
+            if (trackers.values.any { it.kind == K_CURSOR }) return
             trackers[id] = Tracker(K_CURSOR, null).also {
-                it.x0 = x; it.holdX = x; it.holdY = y; it.fx = x; it.fy = y
-                it.holdAt = SystemClock.uptimeMillis()
-                it.lastX = x; it.lastT = it.holdAt
-                timers.postDelayed(it.longPress, SELECT_HOLD_MS)
+                it.x0 = x; it.y0 = y; it.fx = x; it.fy = y
+                it.select = gapPresses.isSelection(time, x / density, y / density)
+                if (it.select) {
+                    listener?.onSelectMode(true)
+                    haptic(HapticFeedbackConstants.LONG_PRESS)
+                    it.lastCursorHaptic = SystemClock.uptimeMillis()
+                }
             }
             invalidate()
             return
@@ -1420,6 +1450,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         if (chordTouches.isCandidate(id)) return
         when (t.kind) {
             K_WHEEL -> {
+                t.lastX = x
                 val dx = x - t.x0
                 if (abs(dx) > 8 * density) t.moved = true
                 if (t.moved) { clearArmedWord(); t.wheel!!.dragDx = dx; invalidate() }
@@ -1427,28 +1458,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             K_HANDLE -> { t.lastX = x; if (abs(x - t.x0) > 8 * density) t.moved = true }
             K_CURSOR -> {
                 t.fx = x; t.fy = y
-                invalidate()
-                // Selection only starts from a hold at the very start; once the finger moves, it's cursor movement
-                // for the rest of the gesture (slow drags used to trip selection mid-way).
-                if (!t.select && !t.moved && hypot(x - t.holdX, y - t.holdY) > 6 * density) {
-                    t.moved = true
-                    timers.removeCallbacks(t.longPress)
-                }
-                // Mouse-style acceleration: 9 dp per character when moving slowly, down to ~2 dp when flicking,
-                // so a long move doesn't run the finger into the keys.
                 val now = SystemClock.uptimeMillis()
-                val speed = abs(x - t.lastX) / density / max(1L, now - t.lastT)
-                t.lastX = x; t.lastT = now
-                val step = 9 * density / (1f + min(3.5f, speed * 3f))
-                val steps = ((x - t.x0) / step).toInt()
-                if (steps != 0) {
-                    if (!t.moved) { t.moved = true; timers.removeCallbacks(t.longPress) }
-                    invalidatePressAccents()
-                    listener?.onCursor(steps, select = t.select)
-                    t.x0 += steps * step
-                    // One tick per step reads as a buzz on fast flicks; cap it.
-                    repeat(min(abs(steps), 3)) { haptic(HapticFeedbackConstants.CLOCK_TICK) }
-                }
+                moveCursor(t, t.joystick.displace((x - t.x0) / density, now), now)
+                removeCallbacks(cursorFrame)
+                if (t.joystick.speed != 0.0) postOnAnimation(cursorFrame)
+                invalidate()
             }
             K_STACK -> {
                 // One swipe moves exactly one face; the rest of the gesture is ignored.
@@ -1486,7 +1500,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         }
     }
 
-    private fun pointerUp(id: Int) {
+    private fun pointerUp(id: Int, time: Long) {
         val t = trackers.remove(id) ?: return
         stopTimers(t)
         popup?.takeIf { it.owner === t }?.let {
@@ -1533,7 +1547,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     accessibilityEvent(A_WHEEL_LEFT + wh.side, AccessibilityEvent.TYPE_VIEW_SELECTED)
                 } else if (list.isNotEmpty()) {
                     invalidatePressAccents()
-                    listener?.onSuggestion(wordAt(list, wh.index))
+                    listener?.onSuggestion(wordAt(list, wheelTapIndex(wheelTargets(wh), t.lastX, wh.rect.left, wh.rect.right)))
                 }
                 wh.dragDx = 0f
             }
@@ -1543,8 +1557,12 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 if (!t.moved && !t.consumed) emitKey(t.pk!!.item.keys[shownIdx(t.pk!!.item)])
             }
             K_KEY -> if (!t.consumed) commit(t)
-            K_GEAR -> editMode = true
-            K_CURSOR -> if (t.select) listener?.onSelectMode(false)
+            K_GEAR -> listener?.onQuickOptions()
+            K_CURSOR -> {
+                removeCallbacks(cursorFrame)
+                gapPresses.lift(time, t.fx / density, t.fy / density)
+                if (t.select) listener?.onSelectMode(false)
+            }
         }
         invalidate()
     }
@@ -1632,13 +1650,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun onLongPress(t: Tracker) {
-        if (t.kind == K_CURSOR) {
-            t.select = true
-            haptic(HapticFeedbackConstants.LONG_PRESS)
-            listener?.onSelectMode(true)
-            invalidate()
-            return
-        }
         val item = t.pk?.item ?: return
         val code = item.keys[shownIdx(item)]
         if (code == Keys.SPACE) {
@@ -1926,8 +1937,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         const val K_HANDLE = 3
         const val K_GEAR = 4
         const val K_CURSOR = 5
-        /** Holding still this long at the start of a centre-gap drag switches it to text selection. */
-        const val SELECT_HOLD_MS = 500L
         const val MAX_UNDO = 50
         const val T_MOVE = 0
         const val T_SPACE = 1

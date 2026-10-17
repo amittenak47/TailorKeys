@@ -18,6 +18,7 @@ protocol KeyboardViewDelegate: AnyObject {
     func switchLanguage(_ direction: Int)
     /// The globe in the suggestion bar (only on iPhones that need one).
     func switchKeyboard()
+    func openQuickOptions()
     func openSettings()
     func moveCursor(_ steps: Int)
     func gridEdited()
@@ -25,6 +26,7 @@ protocol KeyboardViewDelegate: AnyObject {
 }
 
 extension KeyboardViewDelegate {
+    func openQuickOptions() {}
     func wheelChosen() {}
     func choiceInterrupted() {}
     func chordTyped(_ word: String) {}
@@ -112,6 +114,7 @@ final class KeyboardView: UIView {
     private var doneRect = CGRect.zero
     private var leftSpace: CGRect?
     private var rightSpace: CGRect?
+    var suggestionStripHeight: CGFloat { stripH }
     private var stripH: CGFloat = 0
     private var unit: CGFloat = 0
     private var letterCentres: [Character: CGPoint] = [:]
@@ -120,6 +123,7 @@ final class KeyboardView: UIView {
     private var restoreWidth: Int?
     private var palette: Palette
     private var displayLink: CADisplayLink?
+    private var cursorDisplayLink: CADisplayLink?
 
     private static let raise: [[CGFloat]] = [[0, 0.22, 0.38, 0.28, 0.16], [0.16, 0.28, 0.38, 0.22, 0]]
     private static let ang: [[CGFloat]] = [[-9, -4, 0, 3, 6], [-6, -3, 0, 4, 9]]
@@ -616,10 +620,10 @@ final class KeyboardView: UIView {
                 e.increment = { [weak self] in self?.adjustAccessibleWheel(index, 1) }
                 e.decrement = { [weak self] in self?.adjustAccessibleWheel(index, -1) }
             }
-            let gear = element("gear", gearRect, "Rearrange keys", .button)
+            let gear = element("gear", gearRect, "Quick options", .button)
             gear.activate = { [weak self] in
                 guard let self = self else { return false }
-                self.editMode = true
+                self.delegate?.openQuickOptions()
                 return true
             }
         }
@@ -955,6 +959,22 @@ final class KeyboardView: UIView {
         return x
     }
 
+    private struct WheelTapTarget { let index: Int; let center: CGFloat; let width: CGFloat }
+
+    private func wheelTargets(_ wh: Wheel) -> [WheelTapTarget] {
+        let list = words(wh)
+        return wheelRange(list.count).map { k in
+            WheelTapTarget(index: wh.index + k, center: wh.rect.midX + offsetOf(list, wh.index, k) + wh.dragDx,
+                           width: textWidth(wordAt(list, wh.index + k)))
+        }
+    }
+
+    private func wheelTapIndex(_ wh: Wheel, _ x: CGFloat) -> Int {
+        let visible = wheelTargets(wh).filter { $0.center + $0.width / 2 > wh.rect.minX && $0.center - $0.width / 2 < wh.rect.maxX }
+        return (visible.first { abs(x - $0.center) <= $0.width / 2 }
+            ?? visible.min { abs(x - $0.center) < abs(x - $1.center) })?.index ?? wh.index
+    }
+
     private func drawWheels(_ ctx: CGContext) {
         for wh in wheels {
             let list = words(wh)
@@ -962,9 +982,10 @@ final class KeyboardView: UIView {
             ctx.saveGState()
             ctx.clip(to: wh.rect)
             let y = wh.rect.midY - wheelFont.lineHeight / 2
-            for k in wheelRange(list.count) {
-                let word = wordAt(list, wh.index + k)
-                let cx = wh.rect.midX + offsetOf(list, wh.index, k) + wh.dragDx
+            for target in wheelTargets(wh) {
+                let k = target.index - wh.index
+                let word = wordAt(list, target.index)
+                let cx = target.center
                 let alpha: CGFloat = highContrast || k == 0 ? 1 : 0.4
                 let x = cx - textWidth(word) / 2
                 if armedWheel === wh && k == 0 {
@@ -1068,7 +1089,8 @@ final class KeyboardView: UIView {
         var x0: CGFloat = 0
         var y0: CGFloat = 0
         var lastX: CGFloat = 0
-        var lastTime: CFTimeInterval = 0
+        let joystick = CursorJoystick()
+        var lastCursorClick: TimeInterval = -.infinity
         var deferredClick = false
         var glideEligible = false
         var glideWidth: CGFloat = 1
@@ -1091,7 +1113,33 @@ final class KeyboardView: UIView {
     private var glideID: ObjectIdentifier?
     private var trail: [GlidePoint] = []
 
+    private func moveCursor(_ t: Tracker, _ steps: Int, _ now: TimeInterval) {
+        guard steps != 0 else { return }
+        invalidatePressAccents()
+        delegate?.moveCursor(steps)
+        if now - t.lastCursorClick >= 0.08 { click(); t.lastCursorClick = now }
+    }
+
+    private func updateCursorLink() {
+        guard trackers.values.contains(where: { $0.kind == .cursor && $0.joystick.speed != 0 }) else {
+            cursorDisplayLink?.invalidate(); cursorDisplayLink = nil
+            return
+        }
+        if cursorDisplayLink == nil {
+            let link = CADisplayLink(target: self, selector: #selector(cursorTick))
+            link.add(to: .main, forMode: .common)
+            cursorDisplayLink = link
+        }
+    }
+
+    @objc private func cursorTick() {
+        let now = CACurrentMediaTime()
+        for t in Array(trackers.values) where t.kind == .cursor { moveCursor(t, t.joystick.advance(now), now) }
+        updateCursorLink()
+    }
+
     func cancelTouches() {
+        cursorDisplayLink?.invalidate(); cursorDisplayLink = nil
         chordTouches.cancel()
         chordHighlightWork?.cancel()
         chordHighlight.removeAll()
@@ -1132,7 +1180,7 @@ final class KeyboardView: UIView {
             if editMode { editEnded(t) } else {
                 let id = ObjectIdentifier(t)
                 if let tracker = trackers[id] { _ = recordGlide(id, tracker, t.location(in: self), t.timestamp) }
-                if let tracker = trackers[id], popup?.owner === tracker || (tracker.pk?.item.isSpace == true && settings.languages.count > 1) {
+                if let tracker = trackers[id], popup?.owner === tracker || tracker.kind == .wheel || tracker.kind == .cursor || (tracker.pk?.item.isSpace == true && settings.languages.count > 1) {
                     move(id, t.location(in: self), t.timestamp)
                 }
                 up(id)
@@ -1179,7 +1227,7 @@ final class KeyboardView: UIView {
         if gearRect.contains(p) { trackers[id] = Tracker(kind: .gear, pk: nil); return }
         if globeRect.contains(p) { click(); delegate?.switchKeyboard(); return }
         if let wh = wheels.first(where: { $0.rect.contains(p) && !words($0).isEmpty }) {
-            let t = Tracker(kind: .wheel, pk: nil); t.wheel = wh; t.x0 = p.x; trackers[id] = t
+            let t = Tracker(kind: .wheel, pk: nil); t.wheel = wh; t.x0 = p.x; t.lastX = p.x; trackers[id] = t
             return
         }
         if handleRect.contains(p) {
@@ -1189,7 +1237,8 @@ final class KeyboardView: UIView {
         if leftSpace?.contains(p) == true || rightSpace?.contains(p) == true { moveToward(p); return }
         let hit = findKey(p, strict: true)
         if hit == nil && cursorRect.contains(p) {
-            let t = Tracker(kind: .cursor, pk: nil); t.x0 = p.x; t.lastX = p.x; t.lastTime = CACurrentMediaTime(); trackers[id] = t
+            guard !trackers.values.contains(where: { $0.kind == .cursor }) else { return }
+            let t = Tracker(kind: .cursor, pk: nil); t.x0 = p.x; trackers[id] = t
             setNeedsDisplay()
             return
         }
@@ -1272,6 +1321,7 @@ final class KeyboardView: UIView {
         if chordTouches.isCandidate(id) { return }
         switch t.kind {
         case .wheel:
+            t.lastX = p.x
             let dx = p.x - t.x0
             if abs(dx) > 8 { t.moved = true }
             if t.moved { clearArmedWord(); t.wheel?.dragDx = dx; setNeedsDisplay() }
@@ -1279,20 +1329,9 @@ final class KeyboardView: UIView {
             t.lastX = p.x
             if abs(p.x - t.x0) > 8 { t.moved = true }
         case .cursor:
-            // UITextDocumentProxy has no API to select text.
-            // Mouse-style acceleration: 9 pt per character when moving slowly, down to ~2 pt when flicking,
-            // so a long move doesn't run the finger into the keys.
             let now = CACurrentMediaTime()
-            let speed = abs(p.x - t.lastX) / CGFloat(Swift.max(0.001, now - t.lastTime) * 1000)
-            t.lastX = p.x; t.lastTime = now
-            let step = 9 / (1 + Swift.min(3.5, speed * 3))
-            let steps = Int((p.x - t.x0) / step)
-            if steps != 0 {
-                invalidatePressAccents()
-                delegate?.moveCursor(steps)
-                t.x0 += CGFloat(steps) * step
-                for _ in 0..<Swift.min(abs(steps), 3) { click() }
-            }
+            moveCursor(t, t.joystick.displace(p.x - t.x0, now), now)
+            updateCursorLink()
         case .stack:
             // One swipe moves exactly one face; the rest of the gesture is ignored.
             guard let sw = swipe, !t.consumed, !sw.stepped, let pk = t.pk else { return }
@@ -1372,7 +1411,7 @@ final class KeyboardView: UIView {
                 armWheel(wh)
             } else if !list.isEmpty {
                 invalidatePressAccents()
-                delegate?.suggestionPicked(wordAt(list, wh.index))
+                delegate?.suggestionPicked(wordAt(list, wheelTapIndex(wh, t.lastX)))
             }
             wh.dragDx = 0
         case .handle:
@@ -1383,9 +1422,9 @@ final class KeyboardView: UIView {
         case .key:
             if !t.consumed { commit(t) }
         case .gear:
-            editMode = true
+            delegate?.openQuickOptions()
         case .cursor:
-            break
+            updateCursorLink()
         }
         setNeedsDisplay()
     }
@@ -1728,5 +1767,33 @@ final class KeyboardView: UIView {
         ctx.scaleBy(x: 1.1, y: 1.1)
         drawKey(ctx, d.item, CGRect(x: -d.size.width / 2, y: -d.size.height / 2, width: d.size.width, height: d.size.height), radius, false, 0.92)
         ctx.restoreGState()
+    }
+}
+
+/// Rate control independent of event frequency and reduced-motion preferences.
+private final class CursorJoystick {
+    private(set) var speed = 0.0
+    private var fraction = 0.0
+    private var lastTime: TimeInterval?
+
+    func displace(_ dx: CGFloat, _ now: TimeInterval) -> Int {
+        var steps = advance(now)
+        let magnitude = abs(Double(dx))
+        let next = magnitude <= 6 ? 0 : min(45, 4 + 1.2 * (magnitude - 6)) * (dx < 0 ? -1.0 : 1.0)
+        if next == 0 || next * speed < 0 { fraction = 0 }
+        if next != 0 && speed == 0 { steps += next < 0 ? -1 : 1 }
+        speed = next
+        return steps
+    }
+
+    func advance(_ now: TimeInterval) -> Int {
+        let previous = lastTime
+        lastTime = now
+        guard let previous = previous else { return 0 }
+        fraction += speed * max(0, now - previous)
+        // Avoid losing a whole character to floating-point error at an exact boundary.
+        let steps = Int(fraction + (fraction > 0 ? 1e-9 : -1e-9))
+        fraction -= Double(steps)
+        return steps
     }
 }

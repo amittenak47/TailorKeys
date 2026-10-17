@@ -152,6 +152,28 @@ final class KeyboardSettings {
     func setAlignFor(_ l: Bool, _ a: Align) { for o in orientations(l) { d.set(a.rawValue, forKey: Prefs.alignKey(o)) } }
     func setSplitFor(_ l: Bool, _ on: Bool) { for o in orientations(l) { d.set(on, forKey: Prefs.splitKey(o)) } }
 
+    func quickOneHand(_ l: Bool) -> Align { int(Prefs.width(l)) < 100 ? align(l) : .center }
+
+    func cycleQuickOneHand(_ l: Bool) {
+        let next: Align
+        switch quickOneHand(l) { case .center: next = .left; case .left: next = .right; case .right: next = .center }
+        setFor(l, Prefs.width, next == .center ? 100 : (split(l) ? 70 : 78))
+        setAlignFor(l, next)
+    }
+
+    func adjustQuickHeight(_ l: Bool, _ delta: Int) { setFor(l, Prefs.height, int(Prefs.height(l)) + delta) }
+
+    func cycleQuickTheme() {
+        let themes: [ThemeName] = [.system, .light, .dark, .highContrast]
+        theme = themes[((themes.firstIndex(of: theme) ?? -1) + 1) % themes.count]
+    }
+
+    func cycleLanguage(_ direction: Int) {
+        let enabled = languages
+        let index = enabled.firstIndex(of: currentLanguage) ?? 0
+        currentLanguage = enabled[((index + direction) % enabled.count + enabled.count) % enabled.count]
+    }
+
     func linkOrientations(from l: Bool) {
         for pref in [Prefs.height, Prefs.width, Prefs.bottomPadding, Prefs.splitGap, Prefs.tilt, Prefs.spaceTilt] { set(pref(!l), int(pref(l))) }
         d.set(align(l).rawValue, forKey: Prefs.alignKey(!l))

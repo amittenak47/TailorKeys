@@ -156,6 +156,29 @@ class KeyboardSettings(context: Context) {
         e.apply()
     }
 
+    fun quickOneHand(landscape: Boolean): Align =
+        if (int(Prefs.width(landscape)) < 100) align(landscape) else Align.CENTER
+
+    fun cycleQuickOneHand(landscape: Boolean) {
+        val next = when (quickOneHand(landscape)) { Align.CENTER -> Align.LEFT; Align.LEFT -> Align.RIGHT; Align.RIGHT -> Align.CENTER }
+        setFor(landscape, Prefs::width, if (next == Align.CENTER) 100 else if (split(landscape)) 70 else 78)
+        setAlignFor(landscape, next)
+    }
+
+    fun adjustQuickHeight(landscape: Boolean, delta: Int) =
+        setFor(landscape, Prefs::height, int(Prefs.height(landscape)) + delta)
+
+    fun cycleQuickTheme() {
+        val themes = listOf(ThemeName.SYSTEM, ThemeName.LIGHT, ThemeName.DARK, ThemeName.HIGH_CONTRAST)
+        setTheme(themes[(themes.indexOf(theme()) + 1) % themes.size])
+    }
+
+    fun cycleLanguage(direction: Int) {
+        val enabled = languages()
+        val index = enabled.indexOf(currentLanguage())
+        setCurrentLanguage(enabled[((index + direction) % enabled.size + enabled.size) % enabled.size])
+    }
+
     /** Turns on shared orientations, copying one orientation's size and split settings to the other. */
     fun linkOrientations(from: Boolean) {
         val to = !from

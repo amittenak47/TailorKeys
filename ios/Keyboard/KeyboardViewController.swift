@@ -66,6 +66,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private var keyboard: KeyboardView!
     private var heightConstraint: NSLayoutConstraint?
     private var panel: SettingsPanel?
+    private var quickOptions: QuickOptions?
     private var lastSpace: CFTimeInterval = 0
     private var lastAbcTap: CFTimeInterval = 0
     private var chosenBefore: String?
@@ -228,11 +229,14 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         coordinator.animate(alongsideTransition: nil) { [weak self] _ in
             self?.keyboard?.relayout()
             self?.panel?.orientationChanged()
+            self?.quickOptions?.refresh()
         }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         choiceInterrupted()
+        closeQuickOptions()
+        keyboard?.cancelTouches()
         super.viewWillDisappear(animated)
     }
 
@@ -436,13 +440,45 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     func switchLanguage(_ direction: Int) {
         choiceInterrupted()
-        let enabled = settings.languages
-        guard enabled.count > 1, let index = enabled.firstIndex(of: settings.currentLanguage) else { return }
-        settings.currentLanguage = enabled[(index + direction + enabled.count) % enabled.count]
+        guard settings.languages.count > 1 else { return }
+        settings.cycleLanguage(direction)
         activateLanguage()
         keyboard.reloadSettings()
         updateSuggestions()
         UIAccessibility.post(notification: .announcement, argument: Prefs.languageNames[state.language])
+    }
+
+    func openQuickOptions() {
+        guard quickOptions == nil else { return }
+        choiceInterrupted()
+        keyboard.cancelTouches()
+        keyboard.accessibilityElementsHidden = true
+        let p = QuickOptions(settings: settings, stripHeight: { [weak self] in self?.keyboard.suggestionStripHeight ?? 40 })
+        p.onClose = { [weak self] in self?.closeQuickOptions() }
+        p.onRearrange = { [weak self] in self?.closeQuickOptions(); self?.keyboard.editMode = true }
+        p.onSettings = { [weak self] in self?.closeQuickOptions(); self?.openSettings() }
+        p.onLanguage = { [weak self] in self?.switchLanguage(1) }
+        p.onChange = { [weak self] in
+            self?.keyboard.reloadSettings()
+            self?.updateSuggestions()
+        }
+        p.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(p)
+        NSLayoutConstraint.activate([
+            p.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            p.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            p.topAnchor.constraint(equalTo: view.topAnchor),
+            p.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        quickOptions = p
+        UIAccessibility.post(notification: .screenChanged, argument: p)
+    }
+
+    private func closeQuickOptions() {
+        quickOptions?.removeFromSuperview()
+        quickOptions = nil
+        keyboard?.accessibilityElementsHidden = false
+        UIAccessibility.post(notification: .layoutChanged, argument: keyboard)
     }
 
     /// The gear in the rearranging toolbar: leaves rearranging and shows the settings panel.

@@ -77,6 +77,8 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private var glideCandidates = emptyList<String>()
     private var glideExplore = emptyList<String>()
     private var keyboardView: KeyboardView? = null
+    private var keyboardContainer: android.widget.FrameLayout? = null
+    private var quickOptions: QuickOptions? = null
     private val state = InputState()
     private var grid: KeyGrid = KeyGrid.default()
     private var lastSpaceAt = 0L
@@ -178,6 +180,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             }
         }
         keyboardView?.reloadSettings()
+        quickOptions?.refresh()
         updateSuggestions()
     }
 
@@ -204,14 +207,55 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         super.onDestroy()
     }
 
-    override fun onCreateInputView(): View = KeyboardView(this, settings).also {
-        it.chordLibrary = models[state.language]?.chords
-        it.listener = this
-        it.state = state
-        it.grid = grid
-        it.inKeyboard = true
-        it.glideAllowed = suggest
-        keyboardView = it
+    override fun onCreateInputView(): View {
+        closeQuickOptions()
+        val keyboard = KeyboardView(this, settings).also {
+            it.chordLibrary = models[state.language]?.chords
+            it.listener = this
+            it.state = state
+            it.grid = grid
+            it.inKeyboard = true
+            it.glideAllowed = suggest
+            keyboardView = it
+        }
+        // Only the keyboard determines height; the scrollable overlay must never enlarge the IME.
+        return object : android.widget.FrameLayout(this) {
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                keyboard.measure(widthMeasureSpec, heightMeasureSpec)
+                setMeasuredDimension(keyboard.measuredWidth, keyboard.measuredHeight)
+                for (i in 1 until childCount) getChildAt(i).measure(
+                    View.MeasureSpec.makeMeasureSpec(measuredWidth, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(measuredHeight, View.MeasureSpec.EXACTLY))
+            }
+        }.also {
+            keyboardContainer = it
+            it.addView(keyboard, android.widget.FrameLayout.LayoutParams(-1, -2))
+        }
+    }
+
+    override fun onQuickOptions() {
+        val container = keyboardContainer ?: return
+        val keyboard = keyboardView ?: return
+        if (quickOptions != null) return
+        onChoiceInterrupted()
+        keyboard.cancelTouches()
+        keyboard.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        val panel = QuickOptions(this, settings,
+            landscape = { resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE },
+            stripHeight = { keyboard.suggestionStripHeight },
+            close = { closeQuickOptions() },
+            rearrange = { closeQuickOptions(); keyboard.editMode = true },
+            language = { onSwitchLanguage(1) },
+            allSettings = { closeQuickOptions(); onOpenSettings() })
+        quickOptions = panel
+        container.addView(panel, android.widget.FrameLayout.LayoutParams(-1, -1))
+        panel.sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
+    }
+
+    private fun closeQuickOptions() {
+        quickOptions?.let { keyboardContainer?.removeView(it) }
+        quickOptions = null
+        keyboardView?.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
     }
 
     // Landscape "extract mode" covers the app with a full-screen text box. Keep the app visible instead.
@@ -251,6 +295,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     override fun onFinishInputView(finishingInput: Boolean) {
         onChoiceInterrupted()
+        closeQuickOptions()
         keyboardView?.let { it.cancelTouches(); it.editMode = false }
         models.values.forEach { it.predictor.save() }
         super.onFinishInputView(finishingInput)
@@ -394,8 +439,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         onChoiceInterrupted()
         val enabled = settings.languages()
         if (enabled.size < 2) return
-        val index = enabled.indexOf(settings.currentLanguage())
-        settings.setCurrentLanguage(enabled[(index + direction + enabled.size) % enabled.size])
+        settings.cycleLanguage(direction)
         keyboardView?.announceForAccessibility(Prefs.LANGUAGE_NAMES.getValue(settings.currentLanguage()))
     }
 
