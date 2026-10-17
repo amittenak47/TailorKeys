@@ -2,6 +2,16 @@ import Foundation
 import CoreGraphics
 
 enum Align: String, CaseIterable { case left, center, right }
+enum CursorControl: String, CaseIterable {
+    case auto = "AUTO", centerGap = "CENTER_GAP", outerEdges = "OUTER_EDGES", off = "OFF"
+    var title: String {
+        switch self { case .auto: return "Auto"; case .centerGap: return "Center gap"; case .outerEdges: return "Outer edges"; case .off: return "Off" }
+    }
+}
+enum EmptySide: String, CaseIterable {
+    case slideArrow = "SLIDE_ARROW", cursor = "CURSOR"
+    var title: String { self == .slideArrow ? "Slide arrow" : "Cursor" }
+}
 
 struct IntPref {
     let key: String
@@ -34,6 +44,8 @@ enum Prefs {
     static let typeOnPress = "type_on_press"
     static let numberRow = "number_row"
     static let showHints = "show_hints"
+    static let cursorControl = "cursor_control"
+    static let emptySide = "empty_side"
     static let spaceAccepts = "space_accepts"
     static let autoCap = "auto_cap"
     static let doubleSpace = "double_space_period"
@@ -132,6 +144,14 @@ final class KeyboardSettings {
     var typeOnPress: Bool { bool(Prefs.typeOnPress, false) }
     var numberRow: Bool { bool(Prefs.numberRow, true) }
     var showHints: Bool { bool(Prefs.showHints, true) }
+    var cursorControl: CursorControl {
+        get { CursorControl(rawValue: d.string(forKey: Prefs.cursorControl) ?? "") ?? .auto }
+        set { d.set(newValue.rawValue, forKey: Prefs.cursorControl) }
+    }
+    var emptySide: EmptySide {
+        get { EmptySide(rawValue: d.string(forKey: Prefs.emptySide) ?? "") ?? .slideArrow }
+        set { d.set(newValue.rawValue, forKey: Prefs.emptySide) }
+    }
     var spaceAccepts: Bool { bool(Prefs.spaceAccepts, true) }
     var autoCap: Bool { bool(Prefs.autoCap, true) }
     var doubleSpace: Bool { bool(Prefs.doubleSpace, true) }
@@ -209,7 +229,7 @@ final class KeyboardSettings {
     func resetAll() {
         // Leave learned words, migration and setup metadata intact in either store.
         var keys = [Prefs.curve.key, Prefs.keyGap.key, Prefs.cornerRadius.key, Prefs.textScale.key,
-                    Prefs.longPressMs.key, Prefs.numberRow, Prefs.showHints, Prefs.spaceAccepts, Prefs.autoCap, Prefs.doubleSpace,
+                    Prefs.longPressMs.key, Prefs.cursorControl, Prefs.emptySide, Prefs.numberRow, Prefs.showHints, Prefs.spaceAccepts, Prefs.autoCap, Prefs.doubleSpace,
                     Prefs.clicks, Prefs.keyTint, Prefs.smartTargets, Prefs.swipeTyping, Prefs.lockSize, Prefs.sameOrientations,
                     Prefs.theme, Prefs.layout, Prefs.languages, Prefs.currentLanguage]
         for l in [false, true] {

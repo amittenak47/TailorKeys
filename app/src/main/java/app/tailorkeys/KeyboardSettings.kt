@@ -63,6 +63,8 @@ object Prefs {
     /** The first-run guide has been finished or skipped. */
     val ONBOARDED = BoolPref("onboarded", false)
 
+    const val CURSOR_CONTROL = "cursor_control"
+    const val EMPTY_SIDE = "empty_side"
     const val THEME = "theme"
     const val LAYOUT = "layout"
     const val LANGUAGES = "languages"
@@ -110,6 +112,11 @@ class KeyboardSettings(context: Context) {
     fun bool(p: BoolPref) = prefs.getBoolean(p.key, p.default)
     fun set(p: IntPref, value: Int) = prefs.edit().putInt(p.key, value.coerceIn(p.min, p.max)).apply()
     fun set(p: BoolPref, value: Boolean) = prefs.edit().putBoolean(p.key, value).apply()
+
+    fun cursorControl() = CursorControl.entries.firstOrNull { it.name == prefs.getString(Prefs.CURSOR_CONTROL, null) } ?: CursorControl.AUTO
+    fun setCursorControl(value: CursorControl) = prefs.edit().putString(Prefs.CURSOR_CONTROL, value.name).apply()
+    fun emptySide() = EmptySide.entries.firstOrNull { it.name == prefs.getString(Prefs.EMPTY_SIDE, null) } ?: EmptySide.SLIDE_ARROW
+    fun setEmptySide(value: EmptySide) = prefs.edit().putString(Prefs.EMPTY_SIDE, value.name).apply()
 
     fun align(landscape: Boolean): Align {
         val name = prefs.getString(Prefs.alignKey(landscape), null)

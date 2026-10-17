@@ -260,6 +260,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         if (quickOptions != null) return
         onChoiceInterrupted()
         keyboard.cancelTouches()
+        keyboard.setOptionsCovered(true)
         keyboard.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         val panel = QuickOptions(this, settings,
             landscape = { resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE },
@@ -276,6 +277,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private fun closeQuickOptions() {
         quickOptions?.let { keyboardContainer?.removeView(it) }
         quickOptions = null
+        keyboardView?.setOptionsCovered(false)
         keyboardView?.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
     }
 

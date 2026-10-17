@@ -125,6 +125,14 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
     }
 
     private func buildLayoutTab() {
+        let landscape = UIScreen.main.bounds.width > UIScreen.main.bounds.height
+        if settings.int(Prefs.width(landscape)) < 100 {
+            stack.addArrangedSubview(menuRow("Empty side", current: settings.emptySide.title, options: EmptySide.allCases.map { $0.title }) { [weak self] title in
+                guard let self = self, let value = EmptySide.allCases.first(where: { $0.title == title }) else { return }
+                self.settings.emptySide = value; self.changed(rebuild: true)
+            })
+            addNote("Use the space beside a one-hand keyboard to switch sides, or to move the cursor.")
+        }
         // Templates and sharing. Codes go through the text field because the keyboard has no clipboard access.
         stack.addArrangedSubview(menuRow("Start from", current: "Choose", options: Template.allCases.map { $0.title }) { [weak self] title in
             guard let t = Template.allCases.first(where: { $0.title == title }) else { return }
@@ -258,6 +266,12 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
         stack.addArrangedSubview(switchRow("Key click sound", settings.clicks) { [weak self] on in self?.settings.set(Prefs.clicks, on) })
         stack.addArrangedSubview(sliderRow("Long-press delay", Prefs.longPressMs, format: { "\($0) ms" }))
 
+        stack.addArrangedSubview(menuRow("Cursor control", current: settings.cursorControl.title, options: CursorControl.allCases.map { $0.title }) { [weak self] title in
+            guard let self = self, let value = CursorControl.allCases.first(where: { $0.title == title }) else { return }
+            self.settings.cursorControl = value; self.changed(rebuild: true)
+        })
+        addNote("Hold and push in the empty space to move the cursor.")
+
         let accessibility = label("Accessibility")
         accessibility.font = .boldSystemFont(ofSize: 15)
         stack.addArrangedSubview(accessibility)
@@ -327,6 +341,12 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
     }
 
     // MARK: - Row builders
+
+    private func addNote(_ text: String) {
+        let note = label(text)
+        note.font = .systemFont(ofSize: 12); note.textColor = .secondaryLabel; note.numberOfLines = 0
+        stack.addArrangedSubview(note)
+    }
 
     private func label(_ text: String) -> UILabel {
         let l = UILabel()

@@ -106,6 +106,15 @@ struct SettingsScreen: View {
                     .disabled(true)
                 }
             }
+            if prefs.profile(UIScreen.main.bounds.width > UIScreen.main.bounds.height).widthPercent < 100 {
+                Section(footer: Text("Use the space beside a one-hand keyboard to switch sides, or to move the cursor.")) {
+                    Picker("Empty side", selection: Binding(get: { prefs.emptySide }, set: { value in
+                        prefs.emptySide = value; model.changed()
+                    })) {
+                        ForEach(EmptySide.allCases, id: \.self) { value in Text(value.title).tag(value) }
+                    }
+                }
+            }
             Section {
                 Button { model.editing.toggle() } label: {
                     Label(model.editing ? "Done" : "Edit layout", systemImage: model.editing ? "checkmark" : "pencil")
@@ -296,6 +305,14 @@ struct SettingsScreen: View {
                 Toggle("Key sounds", isOn: model.bool(Prefs.clicks, default: true))
                 SettingSlider(title: "Long-press time", pref: Prefs.longPressMs,
                               value: model.integer(Prefs.longPressMs), suffix: " ms")
+            }
+            .disabled(!model.fullAccessConfirmed)
+            Section(footer: Text("Hold and push in the empty space to move the cursor.")) {
+                Picker("Cursor control", selection: Binding(get: { prefs.cursorControl }, set: { value in
+                    prefs.cursorControl = value; model.changed()
+                })) {
+                    ForEach(CursorControl.allCases, id: \.self) { value in Text(value.title).tag(value) }
+                }
             }
             .disabled(!model.fullAccessConfirmed)
             Section(header: Text("Accessibility").textCase(nil).font(.system(size: 15, weight: .semibold))) {

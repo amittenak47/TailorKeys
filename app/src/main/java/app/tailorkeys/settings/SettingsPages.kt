@@ -29,6 +29,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.tailorkeys.CursorControl
+import app.tailorkeys.EmptySide
 import app.tailorkeys.Align
 import app.tailorkeys.OnboardingActivity
 import app.tailorkeys.Prefs
@@ -46,6 +48,18 @@ internal fun LazyListScope.layoutOptions(state: SettingsState, editing: Boolean,
         val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
         SettingsDropdown("Preset", state.templateName(), Template.entries.map { it.title } + "Custom") { index ->
             Template.entries.getOrNull(index)?.let { state.applyTemplate(it, landscape) }
+        }
+    }
+    item("emptySide") {
+        val land = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+        if (state.profile(land).widthPercent < 100) {
+            Column {
+                SettingsDropdown("Empty side", state.emptySide().title, EmptySide.entries.map { it.title }) {
+                    state.settings.setEmptySide(EmptySide.entries[it])
+                }
+                Text("Use the space beside a one-hand keyboard to switch sides, or to move the cursor.",
+                    Modifier.padding(16.dp, 8.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
     item("edit") {
@@ -278,6 +292,15 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
         OptionGroup {
             val time = state.int(Prefs.LONG_PRESS_MS)
             SettingSlider("Long-press time", time, Prefs.LONG_PRESS_MS, "$time ms") { state.set(Prefs.LONG_PRESS_MS, it) }
+        }
+    }
+    item("cursorControl") {
+        Column {
+            SettingsDropdown("Cursor control", state.cursorControl().title, CursorControl.entries.map { it.title }) {
+                state.settings.setCursorControl(CursorControl.entries[it])
+            }
+            Text("Hold and push in the empty space to move the cursor.", Modifier.padding(16.dp, 8.dp),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
     item("accessibility") {
