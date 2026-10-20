@@ -13,8 +13,6 @@ The keyboard's fallback panel types a code into the text field, and imports a co
 
 ## Build on a Mac
 
-Full step-by-step instructions, including free-account signing and what to test, are in [MAC_BUILD.md](MAC_BUILD.md).
-
 1. Open this repository on a Mac with Xcode installed.
 2. Install XcodeGen: `brew install xcodegen`.
 3. In `ios/`, run `xcodegen`.
