@@ -137,7 +137,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             (settings.automaticPunctuation && TextInputRules.wordForms(autoWord ?? "", exists: predictor.hasWord).contains(text)))
     }
     @discardableResult private func automaticSpace(_ word: String) -> Bool {
-        guard TextInputRules.addSpace(settings.automaticSpace, document.after, password: !suggestAllowed) else { return false }
+        guard TextInputRules.addSpace(settings.automaticSpace && !settings.swipeLetters, document.after, password: !suggestAllowed) else { return false }
         let attached = document.before?.hasSuffix(word) == true
         insertRaw(" ")
         autoWord = attached ? word : nil; autoBefore = document.before; autoAfter = document.after; autoDocument = document.identifier
@@ -435,6 +435,20 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         updateSuggestions()
     }
 
+    func forwardDelete() {
+        beginDocumentOperation()
+        defer { endDocumentOperation() }
+        armedUndo = nil
+        clearTaps(); clearChoice(); clearGlide(); clearAutomaticSpace()
+        if !(document.selected ?? "").isEmpty { deleteRaw() }
+        else if let next = document.after?.first {
+            // Proxy offsets use UTF-16; Character keeps combining marks and emoji together.
+            adjustRaw(String(next).utf16.count)
+            deleteRaw()
+        }
+        updateSuggestions()
+    }
+
     func keyTapped(_ code: String) { handleKey(code, nil) }
     func keyTapped(_ code: String, distances: [Float]) { handleKey(code, distances) }
 
@@ -546,7 +560,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         let original = spaced ? (autoWord ?? "") : (currentGlide() && !hasAutomaticSpace() ? glideWord! : currentWord(before))
         let prev = previousWord(spaced ? String(before.dropLast()) : before)
         let prev2 = previousWord2(spaced ? String(before.dropLast()) : before)
-        let plan = TextInputRules.replacement(original.count, read.after ?? "", automaticSpace: settings.automaticSpace && suggestAllowed,
+        let plan = TextInputRules.replacement(original.count, read.after ?? "", automaticSpace: settings.automaticSpace && !settings.swipeLetters && suggestAllowed,
             selected: !(read.selected ?? "").isEmpty, spacedWordLength: spaced ? original.count : 0)
         clearTaps(); clearGlide(); clearAutomaticSpace()
         if (read.selected ?? "").isEmpty {

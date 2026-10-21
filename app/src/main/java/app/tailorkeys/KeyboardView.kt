@@ -60,6 +60,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     interface Listener {
         fun onChord(word: String) {}
+        fun onForwardDelete() {}
         fun onKey(code: String)
         fun onTapKey(code: String, distances: FloatArray) { onKey(code) }
         fun onReplacePressText(original: String, following: String, replacement: String) {}
@@ -1980,6 +1981,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun emitKey(code: String, tapX: Float = Float.NaN, tapY: Float = Float.NaN) {
+        if (code == Keys.BACKSPACE && state.layer == Layer.ABC && trackers.values.any { it.pk?.item?.keys?.contains(Keys.ABC) == true }) {
+            listener?.onForwardDelete(); return
+        }
         val output = KeyText.output(code, state)
         if (output == null) invalidatePressAccents()
         else for (t in trackers.values) if (t.pressedText != null) t.followingText += output

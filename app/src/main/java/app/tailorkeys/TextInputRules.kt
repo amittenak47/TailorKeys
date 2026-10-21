@@ -8,8 +8,8 @@ object TextInputRules {
         while (n < after.length && wordChar(after[n])) n++
         return n
     }
-    fun addSpace(enabled: Boolean, after: CharSequence, password: Boolean = false): Boolean =
-        enabled && !password && (after.isEmpty() || after[0].isLetterOrDigit())
+    fun addSpace(enabled: Boolean, after: CharSequence, password: Boolean = false, letters: Boolean = false): Boolean =
+        enabled && !password && !letters && (after.isEmpty() || after[0].isLetterOrDigit())
 
     data class Replacement(val before: Int, val after: Int, val space: Boolean)
     fun replacement(prefixLength: Int, after: String, automaticSpace: Boolean, selected: Boolean = false,

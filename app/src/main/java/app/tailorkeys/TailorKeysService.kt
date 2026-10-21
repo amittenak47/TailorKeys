@@ -1,5 +1,6 @@
 package app.tailorkeys
 
+import android.media.AudioManager
 import android.content.Intent
 import android.content.SharedPreferences
 import android.inputmethodservice.InputMethodService
@@ -104,7 +105,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         (text == autoWord || glideCandidates.contains(text) ||
             settings.bool(Prefs.AUTOMATIC_PUNCTUATION) && TextInputRules.wordForms(autoWord.orEmpty(), predictor::hasWord).contains(text))
     private fun automaticSpace(word: String): Boolean {
-        if (!TextInputRules.addSpace(settings.bool(Prefs.AUTOMATIC_SPACE), editor().after, !suggest)) return false
+        if (!TextInputRules.addSpace(settings.bool(Prefs.AUTOMATIC_SPACE), editor().after, !suggest, settings.bool(Prefs.SWIPE_LETTERS))) return false
         val attached = editor().before.endsWith(word)
         currentInputConnection?.commitText(" ", 1); editorRead = null
         rememberAutomaticSpace(if (attached) word else null)
@@ -549,6 +550,34 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         keyboardView?.refreshInputState()
     }
 
+    private val audio by lazy { getSystemService(AudioManager::class.java) }
+    private fun sound(code: String) {
+        if (!settings.bool(Prefs.SOUND)) return
+        val effect = when (code) {
+            Keys.SPACE -> AudioManager.FX_KEYPRESS_SPACEBAR
+            Keys.BACKSPACE -> AudioManager.FX_KEYPRESS_DELETE
+            Keys.ENTER -> AudioManager.FX_KEYPRESS_RETURN
+            else -> AudioManager.FX_KEYPRESS_STANDARD
+        }
+        audio?.playSoundEffect(effect, settings.int(Prefs.SOUND_VOLUME) / 100f)
+    }
+
+    override fun onForwardDelete() = editorPhase {
+        sound(Keys.BACKSPACE)
+        armedUndo = null
+        clearTaps(); clearChoice(); clearGlide(); clearAutomaticSpace()
+        val read = editor()
+        if (read.selected) currentInputConnection?.commitText("", 1)
+        else if (read.after.isNotEmpty()) {
+            val length = Graphemes.move(read.after, 0, 1)
+            // Do not split a grapheme clipped by the editor's bounded response.
+            if (length < read.after.length || read.after.length < 64)
+                currentInputConnection?.deleteSurroundingText(0, length)
+        }
+        editorRead = null
+        updateSuggestions()
+    }
+
     override fun onKey(code: String) { handleKey(code, null) }
 
     override fun onTapKey(code: String, distances: FloatArray) { handleKey(code, distances) }
@@ -556,6 +585,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private fun handleKey(code: String, distances: FloatArray?) = editorPhase { handleKeyPhase(code, distances) }
 
     private fun handleKeyPhase(code: String, distances: FloatArray?) {
+        sound(code)
         liveGlide = null
         validateTaps()
         if (code == Keys.BACKSPACE && undoArmedCommit()) {
@@ -700,7 +730,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val original = if (spaced) autoWord.orEmpty() else if (currentGlide() && !hasAutomaticSpace()) glideWord.orEmpty() else currentWord(before)
         val prev = previousWord(if (spaced) before.dropLast(1) else before)
         val prev2 = previousWord2(if (spaced) before.dropLast(1) else before)
-        val plan = TextInputRules.replacement(original.length, read.after, settings.bool(Prefs.AUTOMATIC_SPACE) && suggest,
+        val plan = TextInputRules.replacement(original.length, read.after, settings.bool(Prefs.AUTOMATIC_SPACE) && !settings.bool(Prefs.SWIPE_LETTERS) && suggest,
             read.selected, if (spaced) original.length else 0)
         clearTaps(); clearGlide(); clearAutomaticSpace()
         ic.beginBatchEdit()

@@ -18,6 +18,8 @@ final class SwipeTrace {
     private var anchor = CGPoint.zero, pivot = CGPoint.zero, dwell = CGPoint.zero, last = CGPoint.zero
     private var dwellAt: TimeInterval = 0
     private var dwellLetter: Character = " "
+    private var paused = false
+    private var pivotAt: TimeInterval = 0
     private var fired = false
     private var travel: CGFloat = 0
     private var end: Character = " "
@@ -44,13 +46,14 @@ final class SwipeTrace {
         if first {
             first = false; append(ch)
             anchor = point; pivot = point; dwell = point; last = point
-            dwellAt = time; dwellLetter = ch
+            dwellAt = time; dwellLetter = ch; pivotAt = time
         }
         end = ch
         travel += distance(point, last); last = point
         if ch != dwellLetter || distance(point, dwell) > width * 0.35 || (!fired && (travel > width * 0.22 || distance(point, dwell) > width * 0.12)) {
-            dwell = point; dwellAt = time; dwellLetter = ch; fired = false; travel = 0
+            dwell = point; dwellAt = time; dwellLetter = ch; fired = false; paused = false; travel = 0
         }
+        if !paused, time - dwellAt >= 0.110, distance(point, dwell) <= width * 0.12 { append(ch); paused = true }
         if !fired, time - dwellAt >= 0.210, let centre = keys[ch], distance(point, centre) <= width * 0.55 {
             append(ch); letters.append(ch)
             hints.append(DoubleLetterHint(letter: ch, pathIndex: index))
@@ -59,9 +62,12 @@ final class SwipeTrace {
         let ax = pivot.x - anchor.x, ay = pivot.y - anchor.y
         let bx = point.x - pivot.x, by = point.y - pivot.y
         let a = hypot(ax, ay), b = hypot(bx, by)
-        if b >= width * 0.28 {
-            if a >= width * 0.28 && (ax * bx + ay * by) / (a * b) < 0.65 { append(nearest(pivot)) }
-            anchor = pivot; pivot = point
+        let speed = b / CGFloat(max(0.001, time - pivotAt)) / width
+        let span = width * (speed > 25 ? 0.38 : 0.28)
+        let cosine: CGFloat = speed > 25 ? 0.30 : 0.58
+        if b >= span {
+            if a >= width * 0.28 && (ax * bx + ay * by) / (a * b) < cosine { append(nearest(pivot)) }
+            anchor = pivot; pivot = point; pivotAt = time
         }
     }
     func text() -> String { end == " " || letters.last == end ? letters : letters + String(end) }

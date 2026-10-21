@@ -239,8 +239,15 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
     }
     item("typing") {
         OptionGroup {
-            for ((label, pref) in listOf("Auto-capitalize" to Prefs.AUTO_CAP, "Vibrate on tap" to Prefs.HAPTICS)) {
-                ToggleRow(label, state.bool(pref)) { state.set(pref, it) }
+            ToggleRow("Auto-capitalize", state.bool(Prefs.AUTO_CAP)) { state.set(Prefs.AUTO_CAP, it) }
+            val vibrator = LocalContext.current.getSystemService(android.os.Vibrator::class.java)
+            if (vibrator?.hasVibrator() == true) {
+                ToggleRow("Vibrate on tap", state.bool(Prefs.HAPTICS)) { state.set(Prefs.HAPTICS, it) }
+            }
+            ToggleRow("Sound on keypress", state.bool(Prefs.SOUND)) { state.set(Prefs.SOUND, it) }
+            if (state.bool(Prefs.SOUND)) {
+                val volume = state.int(Prefs.SOUND_VOLUME)
+                SettingSlider("Sound volume", volume, Prefs.SOUND_VOLUME, "$volume%") { state.set(Prefs.SOUND_VOLUME, it) }
             }
             ToggleRow("Automatic space", state.bool(Prefs.AUTOMATIC_SPACE), note = "Add a space after swiped and picked words.") { state.set(Prefs.AUTOMATIC_SPACE, it) }
             ToggleRow("Automatic punctuation", state.bool(Prefs.AUTOMATIC_PUNCTUATION), note = "Attach punctuation and close brackets and quotes.") { state.set(Prefs.AUTOMATIC_PUNCTUATION, it) }
@@ -300,6 +307,7 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
             GroupTitle("Assist")
             OptionGroup {
                 for ((label, pref) in listOf("Space accepts chosen word" to Prefs.SPACE_ACCEPTS, "Swipe typing" to Prefs.SWIPE_TYPING, "Highlight likely keys" to Prefs.KEY_TINT, "Smart tap areas" to Prefs.SMART_TARGETS, "Vibrate on typos" to Prefs.TYPO_BUZZ, "Chords" to Prefs.CHORDING)) {
+                    if (pref == Prefs.TYPO_BUZZ && LocalContext.current.getSystemService(android.os.Vibrator::class.java)?.hasVibrator() != true) continue
                     val blocked = state.bool(Prefs.TYPE_ON_PRESS) && (pref == Prefs.SWIPE_TYPING || pref == Prefs.CHORDING)
                     ToggleRow(label, !blocked && state.bool(pref), enabled = !blocked,
                         note = if (blocked) "Off while Type on press is on" else null) { state.set(pref, it) }

@@ -57,6 +57,7 @@ final class ComposingTaps {
 
 protocol KeyboardViewDelegate: AnyObject {
     func chordTyped(_ word: String)
+    func forwardDelete()
     func keyTapped(_ code: String)
     func keyTapped(_ code: String, distances: [Float])
     func replacePressText(_ original: String, following: String, replacement: String)
@@ -80,6 +81,7 @@ protocol KeyboardViewDelegate: AnyObject {
 }
 
 extension KeyboardViewDelegate {
+    func forwardDelete() {}
     func editDone() {}
     func keyTapped(_ code: String, distances: [Float]) { keyTapped(code) }
     func openQuickOptions() {}
@@ -2063,6 +2065,9 @@ final class KeyboardView: UIView {
     }
 
     private func emitKey(_ code: String, _ tap: CGPoint? = nil) {
+        if code == Keys.backspace && state.layer == .abc && trackers.values.contains(where: { $0.pk?.item.keys.contains(Keys.abc) == true }) {
+            delegate?.forwardDelete(); return
+        }
         let output = KeyText.output(code, state)
         if let output = output {
             for t in trackers.values where t.pressedText != nil { t.followingText += output }
@@ -2192,6 +2197,7 @@ final class KeyboardView: UIView {
     }
 
     private func click() {
+        // Standard input clicks require Full Access for a keyboard extension.
         if viewPrefs.clicks { UIDevice.current.playInputClick() }
     }
 
