@@ -22,12 +22,12 @@ object TextInputRules {
     data class Edit(val deleteBefore: Int = 0, val insert: String = "", val move: Int = 0)
     /** Null is the ordinary insertion path: no allocation per typed letter. */
     fun punctuation(text: String, before: CharSequence, after: CharSequence, automaticSpace: Boolean,
-                    enabled: Boolean, password: Boolean = false): Edit? {
+                    enabled: Boolean, password: Boolean = false, trailingSpace: Boolean = true): Edit? {
         if (!enabled || password || text.length != 1) return null
         val ch = text[0]
         if (ch in ")]}\"" && after.firstOrNull() == ch) return Edit(move = 1)
         if (automaticSpace && before.lastOrNull() == ' ') {
-            if (ch in ".,?!:;") return Edit(1, "$ch ")
+            if (ch in ".,?!:;") return Edit(1, ch.toString() + if (trailingSpace) " " else "")
             if (ch == '\'') return Edit(1, "'")
         }
         // A quote only opens at the start of a word, so 5" (inches) and mid-word quotes stay single.

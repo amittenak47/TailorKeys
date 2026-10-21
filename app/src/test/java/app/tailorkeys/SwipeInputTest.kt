@@ -74,6 +74,7 @@ class SwipeInputTest {
             assertFalse(TextInputRules.addSpace(false, after))
             assertFalse(TextInputRules.addSpace(true, after, letters = true))
             assertFalse(TextInputRules.replacement(3, after, false).space)
+            assertEquals(".", TextInputRules.punctuation(".", "swipe ", after, true, true, trailingSpace = false)?.insert)
         }
     }
     private val wordKeys = "corlay".mapIndexed { i, ch -> ch to GestureDecoder.Point(i * 100f, if (i % 2 == 0) 0f else 100f) }.toMap()
@@ -84,6 +85,15 @@ class SwipeInputTest {
         val matches = decoder.decode(path("corolary"), null, { 1.0 }, { _, _ -> 0.0 }, listOf(GestureDecoder.DoubleHint('l', 4)))
         assertEquals("corollary", matches.first().word)
         assertTrue(matches[0].score - matches[1].score > 5)
+    }
+    @Test fun forgettingRemovesLearnedGestureEntries() {
+        val decoder = GestureDecoder(listOf("corollary"))
+        decoder.setKeys(wordKeys, 100f)
+        decoder.setUserWords(setOf("corolary"))
+        assertTrue(decoder.decode(path("corolary"), null, { 1.0 }, { _, _ -> 0.0 }).any { it.word == "corolary" })
+        decoder.setUserWords(emptySet())
+        assertFalse(decoder.decode(path("corolary"), null, { 1.0 }, { _, _ -> 0.0 }).any { it.word == "corolary" })
+        assertTrue(decoder.decode(path("corolary"), null, { 1.0 }, { _, _ -> 0.0 }).any { it.word == "corollary" })
     }
     @Test fun typedPrefixConstrainsRemainingPath() {
         val decoder = GestureDecoder(listOf("corollary", "ollary", "corolary", "collary"))

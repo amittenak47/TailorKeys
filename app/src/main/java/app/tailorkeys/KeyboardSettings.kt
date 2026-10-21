@@ -53,6 +53,9 @@ object Prefs {
     val AUTO_CAP = BoolPref("auto_cap", true)
     // Retain the old key as the child of Automatic punctuation; existing choices migrate unchanged.
     val DOUBLE_SPACE_PERIOD = BoolPref("double_space_period", true)
+    val AUTOCORRECT = IntPref("autocorrect", 1, 0, 2)
+    val LEARNING = BoolPref("learning", true)
+    const val LEARNING_REVISION = "learning_revision"
     val SOUND = BoolPref("sound", true)
     val SOUND_VOLUME = IntPref("sound_volume", 50, 0, 100)
     val HAPTICS = BoolPref("haptics", true)

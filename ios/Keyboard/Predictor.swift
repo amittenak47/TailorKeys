@@ -16,6 +16,7 @@ final class Predictor {
         let correction: Bool
         let pairCount: Int
         let tripleCount: Int
+        let distance: Int
     }
     private let base: [Word]
     private var rank: [String: Int] = [:]
@@ -42,11 +43,13 @@ final class Predictor {
     private var userTriples: [String: [String: Int]] = [:]
     private var neighbours: [Character: Set<Character>] = [:]
     private var gridCosts = [UInt8](repeating: 10, count: ComposingTaps.letters * ComposingTaps.letters)
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
+    private var observed: [String: Int] = [:]
+    private var lastUse: [String: Double] = [:]
+    private var decayedAt = Date().timeIntervalSince1970
+    private var learningRevision: String?
+    private var suffix: String { LearningStore.suffix(language) }
     let language: String
-    private let userKey: String
-    private let pairKey: String
-    private let tripleKey: String
     private var cachedPrefix: String?
     private var cachedPrev: String?
     private var cachedPrev2: String?
@@ -56,8 +59,8 @@ final class Predictor {
     private var english: EnglishContext?
     private var cachedScores: EnglishContext.Scores?
     private var cachedScoreVersion: UInt64?
-    private static let persistence = DispatchQueue(label: "app.tailorkeys.learning", qos: .utility)
-    private static let wordLimit = 2048, contextLimit = 256, followerLimit = 32
+    private static let persistence = LearningStore.queue
+    private static let wordLimit = 5000, contextLimit = 256, followerLimit = 32
     private var learningDirty = false
     private var saveWork: DispatchWorkItem?
 
@@ -68,21 +71,21 @@ final class Predictor {
         let words: [String: Int]
         let pairs: [String: [String: Int]]
         let triples: [String: [String: Int]]
-        let wordKey: String, pairKey: String, tripleKey: String
+        let seen: [String: Int], used: [String: Double], decayed: Double, suffix: String
+        let store: UserDefaults, revision: String?
         func write() {
-            let store = UserDefaults.standard
-            store.set(words, forKey: wordKey)
-            store.set(pairs, forKey: pairKey)
-            store.set(triples, forKey: tripleKey)
+            guard store.string(forKey: LearningStore.revisionKey) == revision else { return }
+            let bundle: [String: Any] = ["words": words, "bigrams": pairs, "trigrams": triples,
+                "seen": seen, "used": used, "decay": decayed, "revision": revision ?? ""]
+            store.set(bundle, forKey: "user_bundle" + suffix)
         }
     }
 
-    init(_ language: String = "en", onReady: @escaping () -> Void = {}) {
+    init(_ language: String = "en", store: UserDefaults = .standard, onReady: @escaping () -> Void = {}) {
         self.language = language
+        defaults = store
+        learningRevision = store.string(forKey: LearningStore.revisionKey)
         let suffix = language == "en" ? "" : "_" + language
-        userKey = "user_words" + suffix
-        pairKey = "user_bigrams" + suffix
-        tripleKey = "user_trigrams" + suffix
         var words: [Word] = []
         words.reserveCapacity(60_000)
         if let url = Bundle.main.url(forResource: "words" + suffix, withExtension: "txt") {
@@ -94,15 +97,7 @@ final class Predictor {
         base = words
         for (i, w) in base.enumerated() where rank[w.text] == nil { rank[w.text] = i }
         if language == "en" { english = EnglishContext(base.map { $0.text }, onReady) }
-        user = defaults.dictionary(forKey: userKey) as? [String: Int] ?? [:]
-        userPairs = defaults.dictionary(forKey: pairKey) as? [String: [String: Int]] ?? [:]
-        userTriples = defaults.dictionary(forKey: tripleKey) as? [String: [String: Int]] ?? [:]
-        boundLearning()
-        // Only these base words and learned words can enter the frequency top 300.
-        topWords = Array(Set(base.prefix(300).map { $0.text } + Array(user.keys))).sorted {
-            let a = frequency($0), b = frequency($1)
-            return a == b ? $0 < $1 : a > b
-        }.prefix(300).map { $0 }
+        reloadLearning()
         // The non-UIKit factory calls this initializer on its serial loader. Parse here so
         // an obsolete request cannot leave a second language's n-gram worker alive.
         let pairs = Self.loadCounts("bigrams" + suffix, 2, rank)
@@ -212,27 +207,28 @@ final class Predictor {
 
     // Costs are tenths. Three bounded rows are reused for every dictionary entry in a lookup.
     private func cost(_ p: [Character], _ w: CompactLetters, _ limit: Int,
-                      _ older: inout [Int], _ previous: inout [Int], _ current: inout [Int], _ taps: ComposingTaps?) -> Int {
+                      _ older: inout [Int], _ previous: inout [Int], _ current: inout [Int], _ taps: ComposingTaps?, complete: Bool = false) -> Int {
         guard let first = w.first else { return 1000 }
         let transposed = w.count > 1 && p[0] == w[1] && p[1] == w[0]
         let firstSpatial = taps?.hasTap(0) == true
         let firstCost = firstSpatial ? taps!.cost(0, first) : 0
         if !transposed && (firstSpatial ? firstCost > 6 : (p[0] != first && neighbours[p[0]]?.contains(first) != true)) { return 1000 }
-        let extra = firstSpatial ? (transposed ? min(3, firstCost) : firstCost) : (p[0] == first ? 0 : 3)
+        let extra = complete && transposed ? 0 : firstSpatial ? (transposed ? min(3, firstCost) : firstCost) : (p[0] == first ? 0 : 3)
         let bound = limit - extra
+        let edit = complete ? 12 : 8
         let band = bound / 8
         let prefixLength = min(p.count, w.count)
         if p.count - prefixLength > band { return 1000 }
         let whole = abs(w.count - p.count) <= 2
         let end = min(whole ? w.count : prefixLength, p.count + band)
         for j in previous.indices { older[j] = 1000; previous[j] = 1000; current[j] = 1000 }
-        for j in 0...min(p.count, band) { previous[j] = j * 8 }
+        for j in 0...min(p.count, band) { previous[j] = j * edit }
         var previousMin = 0
         var best = 1000
         for i in 1...end {
             let from = max(1, i - band)
             let to = min(p.count, i + band)
-            current[0] = i <= band ? i * 8 : 1000
+            current[0] = i <= band ? i * edit : 1000
             if from > 1 { current[from - 1] = 1000 }
             if to < p.count { current[to + 1] = 1000 }
             var rowMin = current[0]
@@ -240,14 +236,14 @@ final class Predictor {
                 let substitution: Int
                 if let taps = taps, taps.hasTap(j - 1) { substitution = taps.cost(j - 1, w[i - 1]) }
                 else { substitution = gridCost(p[j - 1], w[i - 1]) }
-                var value = min(previous[j] + 8, min(current[j - 1] + 8, previous[j - 1] + substitution))
+                var value = min(previous[j] + edit, min(current[j - 1] + edit, previous[j - 1] + substitution))
                 if i > 1 && j > 1 && p[j - 1] == w[i - 2] && p[j - 2] == w[i - 1] {
                     value = min(value, older[j - 2] + 6)
                 }
                 current[j] = value
                 rowMin = min(rowMin, value)
             }
-            if i == prefixLength || whole && i == w.count { best = min(best, current[p.count]) }
+            if (!complete && i == prefixLength) || whole && i == w.count { best = min(best, current[p.count]) }
             // A transposition can jump over one over-budget row, but never two.
             if rowMin > bound && previousMin > bound { break }
             previousMin = rowMin
@@ -306,7 +302,7 @@ final class Predictor {
                 score = log(frequency(w, tables)) + 1.5 * context - 2.5 * Double(distance) / 10.0
             }
             all.append(Candidate(word: w, score: score, correction: !completion,
-                                 pairCount: seedPair + userPair, tripleCount: seedTriple + userTriple))
+                                 pairCount: seedPair + userPair, tripleCount: seedTriple + userTriple, distance: distance))
         }
         if p.isEmpty {
             // No dictionary scan: only this context's followers plus the load-time top 300.
@@ -349,6 +345,38 @@ final class Predictor {
         cachedScoreVersion = scores?.version
         cachedCandidates = result
         return result
+    }
+
+    func autocorrect(_ word: String, _ mode: AutocorrectMode, _ prev: String? = nil, _ prev2: String? = nil,
+                     taps: ComposingTaps? = nil, allowed: Bool = true) -> String? {
+        let p = word.lowercased()
+        guard allowed, mode != .off, CorrectionRules.eligible(word), (user[p] == nil || rank[p] != nil), !typedTwice(p) else { return nil }
+        if rank[p] != nil && mode == .confident { return nil }
+        func decide(_ scores: EnglishContext.Scores?) -> String? {
+            let letters = Array(p)
+            var older = [Int](repeating: 1000, count: letters.count + 1), previous = older, current = older
+            let spatial = taps?.hasTaps(word) == true ? taps : nil
+            let ranked = candidates(p, prev, prev2, taps, scores).filter { abs($0.word.count - p.count) <= 1 && CorrectionRules.smallEdit(p, $0.word) }
+                .map { candidate -> (String, Double) in
+                    let distance = cost(letters, CompactLetters(candidate.word), 22, &older, &previous, &current, spatial, complete: true)
+                    return (candidate.word, candidate.score + (scores != nil ? 32.0 : 2.5) * Double(candidate.distance) / 10 - 2.5 * Double(distance) / 10)
+                }.sorted { $0.1 > $1.1 }
+            guard let best = ranked.first else { return nil }
+            tableLock.lock(); let tables = seedTables; tableLock.unlock()
+            let pairs = prev.flatMap { rank[$0] }.flatMap { tables?.pairs[UInt64($0)] } ?? []
+            let triples = prev2.flatMap { rank[$0] }.flatMap { a in prev.flatMap { rank[$0] }.flatMap { tables?.triples[Self.contextId(a, $0)] } } ?? []
+            let pair = count(pairs, rank[p]), triple = count(triples, rank[p])
+            let up = prev.flatMap { userPairs[$0]?[p] } ?? 0
+            let ut = prev2.flatMap { a in prev.flatMap { userTriples[a + "\t" + $0]?[p] } } ?? 0
+            let keep: Double
+            if let scores = scores { keep = scores.probability(p, rank[p]) + personalScore(p, up, ut) }
+            else { keep = log(frequency(p, tables)) + 1.5 * (log(1 + Double(pair)) + 1.5 * log(1 + Double(up)) + 1.2 * (log(1 + Double(triple)) + 1.5 * log(1 + Double(ut)))) }
+            let margin = mode == .confident ? 1.2 : 0.8
+            guard best.1 - (keep - (rank[p] == nil ? 4.6 : 0)) >= margin, ranked.count < 2 || best.1 - ranked[1].1 >= margin else { return nil }
+            return matchCase(best.0, word)
+        }
+        if let english = english { return english.withScores { decide($0) } }
+        return decide(nil)
     }
 
     struct Suggestions {
@@ -427,6 +455,8 @@ final class Predictor {
     func learn(_ word: String, _ prev: String? = nil, _ prev2: String? = nil) {
         let w = word.lowercased()
         guard (2...64).contains(w.count), w.utf8.count <= 64, w.allSatisfy({ $0.isLetter || $0 == "'" }) else { return }
+        if observed[w] == nil { observed[w] = 2 }
+        lastUse[w] = Date().timeIntervalSince1970
         user[w] = min(1_000_000, (user[w] ?? 0) + 1)
         if userLetters[w] == nil { userLetters[w] = CompactLetters(w) }
         if let prev = prev, prev.utf8.count <= 64 {
@@ -447,13 +477,61 @@ final class Predictor {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
     }
 
+    func observe(_ word: String, _ prev: String? = nil, _ prev2: String? = nil, picked: Bool = false) {
+        let w = word.lowercased()
+        guard (2...64).contains(w.count), w.allSatisfy({ $0.isLetter || $0 == "'" }) else { return }
+        observed[w] = min(2, (observed[w] ?? 0) + (picked ? 2 : 1))
+        lastUse[w] = Date().timeIntervalSince1970
+        learningDirty = true
+        if rank[w] != nil || observed[w, default: 0] >= 2 { learn(w, prev, prev2) }
+        if observed.count > Self.wordLimit { boundLearning() }
+    }
+    func typedTwice(_ word: String) -> Bool { observed[word.lowercased(), default: 0] >= 2 }
+    @discardableResult func refreshLearning() -> Bool {
+        guard learningRevision != defaults.string(forKey: LearningStore.revisionKey) else { return false }
+        reloadLearning()
+        return true
+    }
+    private func reloadLearning() {
+        saveWork?.cancel(); saveWork = nil
+        learningRevision = defaults.string(forKey: LearningStore.revisionKey)
+        let data = LearningStore.data(defaults, language)
+        user = data["words"] as? [String: Int] ?? [:]
+        userPairs = data["bigrams"] as? [String: [String: Int]] ?? [:]
+        userTriples = data["trigrams"] as? [String: [String: Int]] ?? [:]
+        observed = data["seen"] as? [String: Int] ?? [:]
+        lastUse = data["used"] as? [String: Double] ?? [:]
+        decayedAt = data["decay"] as? Double ?? Date().timeIntervalSince1970
+        for word in user.keys { if observed[word] == nil { observed[word] = 2 }; if lastUse[word] == nil { lastUse[word] = decayedAt } }
+        learningDirty = data["decay"] == nil && !user.isEmpty; cachedCandidates = nil
+        decay(); boundLearning()
+        topWords = Array(Set(base.prefix(300).map { $0.text } + Array(user.keys))).sorted {
+            let a = frequency($0), b = frequency($1)
+            return a == b ? $0 < $1 : a > b
+        }.prefix(300).map { $0 }
+    }
+    private func decay() {
+        let period: Double = 30 * 24 * 60 * 60
+        let periods = min(31, Int(max(0, Date().timeIntervalSince1970 - decayedAt) / period))
+        guard periods > 0 else { return }
+        func halve(_ row: [String: Int]) -> [String: Int] { row.mapValues { $0 >> periods }.filter { $0.value > 0 } }
+        user = halve(user)
+        userPairs = userPairs.mapValues(halve).filter { !$0.value.isEmpty }
+        userTriples = userTriples.mapValues(halve).filter { !$0.value.isEmpty }
+        userLetters = user.mapValues { _ in CompactLetters("") }
+        for word in user.keys { userLetters[word] = CompactLetters(word) }
+        decayedAt += Double(periods) * period
+        learningDirty = true; cachedCandidates = nil
+    }
+
     /// Called on the owner thread. Only immutable COW snapshots enter the persistence queue.
     func flushLearning(wait: Bool = false) {
         saveWork?.cancel(); saveWork = nil
+        decay()
         if learningDirty {
             learningDirty = false
             let snapshot = LearningSnapshot(words: user, pairs: userPairs, triples: userTriples,
-                                            wordKey: userKey, pairKey: pairKey, tripleKey: tripleKey)
+                seen: observed, used: lastUse, decayed: decayedAt, suffix: suffix, store: defaults, revision: learningRevision)
             Self.persistence.async { snapshot.write() }
         }
         if wait { Self.persistence.sync {} }
@@ -478,6 +556,14 @@ final class Predictor {
                 let a = $0.value.values.reduce(0, +), b = $1.value.values.reduce(0, +)
                 return a == b ? $0.key < $1.key : a > b
             }.prefix(Self.contextLimit).map { ($0.key, $0.value) })
+        }
+        if observed.count > Self.wordLimit {
+            learningDirty = true
+            let evicted = Set(observed.keys.sorted { (lastUse[$0] ?? 0) == (lastUse[$1] ?? 0) ? $0 < $1 : (lastUse[$0] ?? 0) < (lastUse[$1] ?? 0) }.prefix(observed.count - Self.wordLimit))
+            observed = observed.filter { !evicted.contains($0.key) }; lastUse = lastUse.filter { !evicted.contains($0.key) }
+            user = user.filter { !evicted.contains($0.key) }
+            userPairs = userPairs.filter { !evicted.contains($0.key) }.mapValues { $0.filter { !evicted.contains($0.key) } }
+            userTriples = userTriples.filter { Set($0.key.components(separatedBy: "\t")).isDisjoint(with: evicted) }.mapValues { $0.filter { !evicted.contains($0.key) } }
         }
         user = bounded(user, Self.wordLimit)
         userPairs = contexts(userPairs); userTriples = contexts(userTriples)

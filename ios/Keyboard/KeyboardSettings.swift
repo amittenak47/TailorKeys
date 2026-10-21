@@ -46,6 +46,8 @@ enum Prefs {
     static let autoCap = "auto_cap"
     // Keep the old key under Automatic punctuation so existing choices migrate unchanged.
     static let doubleSpace = "double_space_period"
+    static let autocorrect = IntPref(key: "autocorrect", def: 1, min: 0, max: 2)
+    static let learning = "learning"
     static let clicks = "haptics"
     static let keyTint = "key_tint"
     static let swipeLetters = "swipe_letters"
@@ -72,7 +74,7 @@ enum Prefs {
 
     static let booleanDefaults: [String: Bool] = [
         followSystemText: true, typeOnPress: false, numberRow: true, showHints: true,
-        cursorGlow: false,
+        cursorGlow: false, learning: true,
         spaceAccepts: true, autoCap: true, doubleSpace: true, clicks: true, keyTint: true,
         swipeLetters: false, automaticSpace: true, automaticPunctuation: true,
         swipeTyping: true, chording: false, smartTargets: true, lockSize: false, sameOrientations: false,
@@ -81,7 +83,7 @@ enum Prefs {
     static var settingKeys: [String] {
         var keys = Array(booleanDefaults.keys) + [cursorControl, theme, layout, languages, currentLanguage,
                                                  layoutsSaved, layoutDraft, layoutDraftSplit, layoutSelected, layoutTrialPrevious, layoutTrialSplit, typingResults]
-        keys += [curve, keyGap, cornerRadius, keyRepeatGuard, touchSlack, textScale, longPressMs].map { $0.key }
+        keys += [curve, keyGap, cornerRadius, keyRepeatGuard, touchSlack, textScale, longPressMs, autocorrect].map { $0.key }
         for l in [false, true] {
             keys += [height(l), width(l), bottomPadding(l), splitGap(l), tilt(l), spaceTilt(l)].map { $0.key }
             keys += [alignKey(l), splitKey(l)]
@@ -106,6 +108,7 @@ final class KeyboardSettings {
     static let fullAccessSeenKey = "keyboard_seen_full_access"
     private static let migrationKey = "keyboard_settings_migrated"
 
+    var learningStore: UserDefaults { d }
     private var d: UserDefaults
     func makeLayoutLibrary() -> LayoutLibrary { LayoutLibrary(settings: self, defaults: d, recoverTrial: false) }
     func thumbnailSettings() -> KeyboardSettings { KeyboardSettings(tablet: tablet, store: d) }
@@ -139,6 +142,23 @@ final class KeyboardSettings {
                 }
             }
             group.set(true, forKey: migrationKey)
+        }
+        if !group.bool(forKey: "personal_learning_migrated") {
+            for language in Prefs.languageCodes {
+                let suffix = language == "en" ? "" : "_" + language
+                let bundleKey = "user_bundle" + suffix
+                if group.object(forKey: bundleKey) == nil, var bundle = UserDefaults.standard.dictionary(forKey: bundleKey) {
+                    bundle["revision"] = group.string(forKey: "learning_revision") ?? ""
+                    group.set(bundle, forKey: bundleKey)
+                }
+                UserDefaults.standard.removeObject(forKey: bundleKey)
+                for kind in ["words", "bigrams", "trigrams", "seen", "used", "decay"] {
+                    let key = "user_" + kind + suffix
+                    if group.object(forKey: key) == nil, let value = UserDefaults.standard.object(forKey: key) { group.set(value, forKey: key) }
+                    UserDefaults.standard.removeObject(forKey: key)
+                }
+            }
+            group.set(true, forKey: "personal_learning_migrated")
         }
         return group
     }
@@ -182,6 +202,7 @@ final class KeyboardSettings {
     var spaceAccepts: Bool { bool(Prefs.spaceAccepts, true) }
     var autoCap: Bool { bool(Prefs.autoCap, true) }
     var doubleSpace: Bool { bool(Prefs.doubleSpace, true) }
+    var learning: Bool { bool(Prefs.learning, true) }
     var clicks: Bool { bool(Prefs.clicks, true) }
     var keyTint: Bool { bool(Prefs.keyTint, true) }
     var swipeLetters: Bool { bool(Prefs.swipeLetters, false) }
