@@ -40,13 +40,14 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
     private var savedKeys: (Layer, Bool, Bool)?
     private let repository: InsertRepository
     private let main = UIStackView()
-    private let flow = UICollectionViewFlowLayout()
+    private let flow = InsertFlowLayout()
     private lazy var collection = UICollectionView(frame: .zero, collectionViewLayout: flow)
     private var emojiReady = false
     private var laidOutWidth: CGFloat = 0
     private var bottom: UIStackView?
     private var bottomContext: UIView?
     private var dim: UIControl?
+    private var heldOutline: UIView?
     private var preferenceObserver: NSObjectProtocol?
     private lazy var emojiByText = Dictionary(InsertAssets.emoji.entries.map { ($0.text, $0) }, uniquingKeysWith: { a, _ in a })
     private lazy var kaomojiByText = Dictionary(InsertAssets.kaomoji.map { ($0.text, $0) }, uniquingKeysWith: { a, _ in a })
@@ -225,7 +226,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         }
         b.accessibilityTraits = selected ? [.button, .selected] : [.button]
     }
-    private func dismissOverlay() { tonePopover?.removeFromSuperview(); tonePopover = nil; dim?.removeFromSuperview(); dim = nil }
+    private func dismissOverlay() { heldOutline?.removeFromSuperview(); heldOutline = nil; tonePopover?.removeFromSuperview(); tonePopover = nil; dim?.removeFromSuperview(); dim = nil }
     private func showDim() {
         dismissOverlay(); let overlay = UIControl(frame: bounds); overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]; overlay.backgroundColor = UIColor.black.withAlphaComponent(ThemeColors.contrast(ThemeColors.hex(palette.background), "#000000") < 4.5 ? 0.4 : 0.18)
         overlay.addAction(UIAction { [weak self] _ in self?.dismissOverlay() }, for: .touchUpInside); addSubview(overlay); dim = overlay
@@ -255,6 +256,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         }
         let tabScroll = scroll(tabs, horizontal: true)
         symbols = section == "Emoji" ? emojiCells() : category == "Recent" ? kaomojiWithRecents() : all.filter { $0.category == category }
+        flow.wrapping = section == "Kaomoji"; flow.minimumLineSpacing = section == "Kaomoji" ? 8 : 0; flow.minimumInteritemSpacing = section == "Kaomoji" ? 8 : 0
         collection.removeFromSuperview(); main.addArrangedSubview(collection); collection.reloadData(); makeBottom(tabScroll)
     }
     private func emojiCells() -> [InsertSymbol] {
@@ -287,6 +289,9 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         cell.layer.borderWidth = section == "Emoji" || entry.text.isEmpty ? 0 : 1; cell.layer.borderColor = palette.keyOutline.cgColor
         cell.isAccessibilityElement = !entry.text.isEmpty || !entry.name.isEmpty; cell.accessibilityLabel = entry.name; cell.accessibilityTraits = entry.text.isEmpty ? .header : .button
         cell.accessibilityCustomActions = entry.text.isEmpty || section != "Emoji" || !emojiReady ? nil : InsertAssets.emoji.variants(entry.text).filter { InsertAssets.hasGlyph($0.text) }.map { e in UIAccessibilityCustomAction(name: e.name) { [weak self] _ in self?.use(e); return true } }
+        if section == "Kaomoji" {
+            cell.accessibilityCustomActions = kaomojiActions(entry).map { title in UIAccessibilityCustomAction(name: title) { [weak self] _ in self?.performKaomoji(title, entry); return true } }
+        }
         return cell
     }
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
@@ -294,8 +299,8 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
     }
     func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> CGSize {
         if section == "Emoji" { let cell: CGFloat = tablet ? 52 : 44; let cols = emojiColumns(width: Double(collectionView.bounds.width), tablet: tablet); let space = max(0, collectionView.bounds.width-CGFloat(cols)*cell)/CGFloat(cols); return CGSize(width: cell+space, height: symbols[indexPath.item].text.isEmpty ? 26 : tablet ? 52 : 46) }
-        let w = (symbols[indexPath.item].text as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: 16)]).width + 24
-        return CGSize(width: min(collectionView.bounds.width, max(64, ceil(w))), height: 48)
+        let w = (symbols[indexPath.item].text as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: tablet ? 17 : 16)]).width + 28
+        return CGSize(width: min(collectionView.bounds.width, max(64, ceil(w))), height: 44)
     }
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         if scrollView === collection, section == "Emoji", let index = collection.indexPathsForVisibleItems.min(by: { $0.item < $1.item }), symbols.indices.contains(index.item) {
@@ -303,7 +308,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         }
     }
     private func kaomojiWithRecents() -> [InsertSymbol] {
-        let recent = recents()
+        var seen = Set<String>(); let recent = (repository.pinned("Kaomoji").compactMap { kaomojiByText[$0] } + recents()).filter { seen.insert($0.text).inserted }
         return recent + InsertAssets.kaomoji.filter { entry in !recent.contains { $0.text == entry.text } }
     }
     private func use(_ entry: InsertSymbol) {
@@ -315,7 +320,13 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         collection.reloadData(); collection.setContentOffset(.zero, animated: false)
     }
     @objc private func holdEmoji(_ gesture: UILongPressGestureRecognizer) {
-        guard section == "Emoji", emojiReady, mode == nil else { return }
+        guard mode == nil else { return }
+        if section == "Kaomoji" {
+            if gesture.state == .began, let index = collection.indexPathForItem(at: gesture.location(in: collection)), let cell = collection.cellForItem(at: index) {
+                let entry = symbols[index.item]; showMenu(cell, titles: kaomojiActions(entry)) { [weak self] in self?.performKaomoji($0, entry) }
+            }; return
+        }
+        guard section == "Emoji", emojiReady else { return }
         if gesture.state == .began {
             guard let index = collection.indexPathForItem(at: gesture.location(in: collection)) else { return }
             toneEntries = InsertAssets.emoji.variants(symbols[index.item].text).filter { InsertAssets.hasGlyph($0.text) }
@@ -342,6 +353,27 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
             for (i, view) in row.arrangedSubviews.enumerated() { view.backgroundColor = i == toneChoice || view.layer.borderWidth == 2 ? fillHi : .clear }
         } else if gesture.state == .ended { if toneEntries.indices.contains(toneChoice) { use(toneEntries[toneChoice]) }; dismissOverlay() }
         else if gesture.state == .cancelled { dismissOverlay() }
+    }
+    private func kaomojiActions(_ entry: InsertSymbol) -> [String] { [repository.pinned("Kaomoji").contains(entry.text) ? "Unpin from Recent" : "Pin to Recent", "Copy"] }
+    private func performKaomoji(_ action: String, _ entry: InsertSymbol) {
+        dismissOverlay()
+        if action == "Copy" { UIPasteboard.general.string = entry.text }
+        else { repository.togglePin("Kaomoji", entry.text); category = "Recent"; render() }
+    }
+    private var danger: UIColor { readable(.systemRed, on: palette.key) }
+    private func showMenu(_ anchor: UIView, titles: [String], perform: @escaping (String) -> Void) {
+        showDim()
+        let rect = anchor.convert(anchor.bounds, to: self)
+        let outline = UIView(frame: rect.insetBy(dx: 1, dy: 1)); outline.isUserInteractionEnabled = false; outline.layer.cornerRadius = 12; outline.layer.borderWidth = 2; outline.layer.borderColor = palette.accent.cgColor; addSubview(outline); heldOutline = outline
+        let menu = stack(.vertical); menu.spacing = 0; menu.backgroundColor = palette.key; menu.layer.cornerRadius = 14; menu.layer.borderWidth = 1; menu.layer.borderColor = palette.keyOutline.cgColor
+        for (i, title) in titles.enumerated() {
+            if i > 0 { let line = UIView(); line.backgroundColor = hair; line.heightAnchor.constraint(equalToConstant: 1/UIScreen.main.scale).isActive = true; menu.addArrangedSubview(line) }
+            let b = button(title) { [weak self] in self?.dismissOverlay(); perform(title) }; b.contentHorizontalAlignment = .leading
+            if title == "Delete" { b.setTitleColor(danger, for: .normal) }; menu.addArrangedSubview(b)
+        }
+        let width = min(220, bounds.width-8), height = CGFloat(titles.count)*44 + CGFloat(titles.count-1)
+        menu.frame = CGRect(x: min(max(4, rect.minX), max(4, bounds.width-width-4)), y: max(0, rect.maxY+height+6 <= bounds.height ? rect.maxY+6 : rect.minY-height-6), width: width, height: height)
+        addSubview(menu); tonePopover = menu
     }
     private func prepareKeys() {
         if savedKeys == nil { savedKeys = (inputState.layer, inputState.shift, inputState.capsLock) }
@@ -547,5 +579,18 @@ private final class FadingInsertScrollView: UIScrollView {
         fade.colors = [UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor]
         fade.locations = [0, NSNumber(value: Double(1-edge)), 1]
         fade.startPoint = CGPoint(x: 0, y: 0.5); fade.endPoint = CGPoint(x: 1, y: 0.5); layer.mask = fade
+    }
+}
+
+private final class InsertFlowLayout: UICollectionViewFlowLayout {
+    var wrapping = false
+    override func layoutAttributesForElements(in rect: CGRect) -> [UICollectionViewLayoutAttributes]? {
+        guard let original = super.layoutAttributesForElements(in: rect) else { return nil }
+        guard wrapping else { return original }
+        let attributes = original.map { $0.copy() as! UICollectionViewLayoutAttributes }
+        var x: CGFloat = 0, row: CGFloat = -1
+        for item in attributes where item.representedElementCategory == .cell {
+            if item.frame.minY != row { row = item.frame.minY; x = 0 }; item.frame.origin.x = x; x += item.frame.width + 8
+        }; return attributes
     }
 }

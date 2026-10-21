@@ -152,3 +152,15 @@ extension UserDefaults {
 func emojiColumns(width: Double, tablet: Bool) -> Int {
     max(1, min(tablet ? 14 : 8, Int(width / (tablet ? 52 : 44))))
 }
+
+struct InsertPins {
+    private(set) var values: [String]
+    init(_ values: [String] = []) { var seen = Set<String>(); self.values = Array(values.filter { seen.insert($0).inserted }.prefix(16)) }
+    mutating func toggle(_ text: String) {
+        if values.contains(text) { values.removeAll { $0 == text } } else { values.insert(text, at: 0); values = Array(values.prefix(16)) }
+    }
+}
+extension InsertRepository {
+    func pinned(_ section: String) -> [String] { InsertPins(prefs.stringArray(forKey: "insert_pinned_" + section) ?? []).values }
+    func togglePin(_ section: String, _ text: String) { var pins = InsertPins(pinned(section)); pins.toggle(text); prefs.set(pins.values, forKey: "insert_pinned_" + section) }
+}

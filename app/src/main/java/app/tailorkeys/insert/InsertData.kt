@@ -115,3 +115,10 @@ class ClipboardStore(initial: List<ClipItem> = emptyList(), private val clock: (
         }.getOrDefault(emptyList()), clock)
     }
 }
+
+/** New pins lead, duplicates never consume the sixteen retained slots. */
+class InsertPins(initial: List<String> = emptyList()) {
+    private val items = initial.distinct().take(16).toMutableList()
+    fun toggle(text: String) { if (!items.remove(text)) { items.add(0, text); while (items.size > 16) items.removeAt(items.lastIndex) } }
+    fun values(): List<String> = items.toList()
+}

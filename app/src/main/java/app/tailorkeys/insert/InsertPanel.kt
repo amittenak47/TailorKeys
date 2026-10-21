@@ -288,15 +288,48 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         if (section == "Emoji") { b.setCompoundDrawables(null, InsertIcon(if (name == "Recent") "Recent" else categoryIcons.getValue(name), if (b.isSelected) palette.text else sub).apply { setBounds(0,0,dp(18),dp(18)) }, null, null) }
     } }
     private fun kaomojiWithRecents(): List<InsertSymbol> {
-        val recent = recentSymbols("Kaomoji")
+        val recent = (repository.pinned("Kaomoji").mapNotNull { kaomojiByText[it] } + recentSymbols("Kaomoji")).distinctBy { it.text }
         return recent + kaomoji.filter { entry -> recent.none { it.text == entry.text } }
     }
     private fun showKaomoji(items: List<InsertSymbol>) {
         pages.removeAllViews()
-        val flow = ChipFlow(context, dp(4))
-        items.forEach { entry -> flow.addView(button(entry.text, entry.name) { use(entry) }.apply { textSize = 16f; minimumWidth = dp(64); background = shape(palette.key) }, ViewGroup.LayoutParams(-2, dp(48))) }
+        val flow = ChipFlow(context, dp(8))
+        items.forEach { entry ->
+            val actions = listOf((if (entry.text in repository.pinned("Kaomoji")) "Unpin from Recent" else "Pin to Recent") to {
+                repository.togglePin("Kaomoji", entry.text); activeCategory = "Recent"; markCategories(); showKaomoji(kaomojiWithRecents())
+            }, "Copy" to { context.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("Kaomoji", entry.text)) })
+            flow.addView(button(entry.text, entry.name) { use(entry) }.apply {
+                textSize = if (tablet) 17f else 16f; minimumWidth = dp(64); setPadding(dp(14),0,dp(14),0); background = shape(palette.key)
+                setOnLongClickListener { showMenu(this, actions); true }; accessibleActions(this, actions)
+            }, ViewGroup.LayoutParams(-2, dp(44)))
+        }
         pages.addView(ScrollView(context).apply { addView(flow) }, LayoutParams(-1, -1))
     }
+    private fun accessibleActions(view: View, actions: List<Pair<String, () -> Unit>>) {
+        view.accessibilityDelegate = object : View.AccessibilityDelegate() {
+            override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfo) { super.onInitializeAccessibilityNodeInfo(host, info); actions.forEachIndexed { i, a -> info.addAction(AccessibilityNodeInfo.AccessibilityAction(0x01000000+i, a.first)) } }
+            override fun performAccessibilityAction(host: View, action: Int, arguments: Bundle?): Boolean {
+                val index = action-0x01000000
+                if (index in actions.indices) { dismissOverlay(); actions[index].second(); return true }; return super.performAccessibilityAction(host, action, arguments)
+            }
+        }
+    }
+    private fun showMenu(anchor: View, actions: List<Pair<String, () -> Unit>>) {
+        showDim(anchor); toneLayer.removeAllViews(); toneLayer.background = shape(palette.key, radius = 14)
+        actions.forEachIndexed { i, action ->
+            if (i > 0) toneLayer.addView(View(context).apply { setBackgroundColor(hair) }, LinearLayout.LayoutParams(-1,1).apply { marginStart = dp(14) })
+            toneLayer.addView(button(action.first) { dismissOverlay(); action.second() }.apply { gravity = Gravity.CENTER_VERTICAL; if (action.first == "Delete") setTextColor(danger) }, LinearLayout.LayoutParams(-1,dp(44)))
+        }
+        val point = IntArray(2); val origin = IntArray(2); anchor.getLocationOnScreen(point); getLocationOnScreen(origin)
+        val menuWidth = minOf(dp(220), width-dp(8)); val menuHeight = dp(44*actions.size)+actions.size-1
+        (toneLayer.layoutParams as LayoutParams).apply {
+            width = menuWidth; height = -2; leftMargin = (point[0]-origin[0]).coerceIn(0,(this@InsertPanel.width-menuWidth).coerceAtLeast(0))
+            val below = point[1]-origin[1]+anchor.height+dp(6)
+            topMargin = (if (below+menuHeight <= this@InsertPanel.height) below else point[1]-origin[1]-menuHeight-dp(6)).coerceAtLeast(0)
+        }
+        toneLayer.visibility = VISIBLE
+    }
+    private val danger get() = readable(if (app.tailorkeys.contrastRatio(palette.background, Color.BLACK) < 4.5) 0xFFFF7777.toInt() else 0xFFB3261E.toInt(), palette.key)
     private fun use(entry: InsertSymbol) {
         val which = section
         repository.insertSymbol(which, entry, insert)

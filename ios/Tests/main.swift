@@ -841,3 +841,14 @@ for width in [320.0, 360, 390, 412] {
     check(cols <= 8 && Double(cols) * 44 <= available && available - Double(cols) * 44 < 44, "emoji targets shrank or overflowed")
 }
 check(emojiColumns(width: 776, tablet: true) == 14 && emojiColumns(width: 576, tablet: true) == 11, "tablet emoji columns")
+
+do {
+    let suite = "tailorkeys.pins." + UUID().uuidString
+    let prefs = UserDefaults(suiteName: suite)!
+    defer { prefs.removePersistentDomain(forName: suite) }
+    let repository = InsertRepository(defaults: { prefs })
+    for i in 0..<20 { repository.togglePin("Kaomoji", "face\(i)") }
+    check(InsertRepository(defaults: { prefs }).pinned("Kaomoji") == (4...19).reversed().map { "face\($0)" }, "pins lost order or cap across reload")
+    check(repository.pinned("Emoji").isEmpty, "pins leaked into emoji")
+    repository.togglePin("Kaomoji", "face19"); check(repository.pinned("Kaomoji").first == "face18", "unpin failed")
+}

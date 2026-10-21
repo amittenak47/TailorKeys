@@ -29,6 +29,11 @@ class InsertRepository(val prefs: SharedPreferences) {
         used(section, entry.text)
         insert(entry.text)
     }
+    fun pinned(section: String): List<String> = runCatching { val a = JSONArray(prefs.getString("insert_pinned_$section", "[]")); (0 until a.length()).map { a.getString(it) } }.getOrDefault(emptyList())
+    fun togglePin(section: String, text: String) {
+        val pins = InsertPins(pinned(section)); pins.toggle(text)
+        prefs.edit().putString("insert_pinned_$section", JSONArray(pins.values()).toString()).apply()
+    }
     fun clearRecents() { prefs.edit().remove("insert_recent_Emoji").remove("insert_recent_Kaomoji").apply() }
 }
 
