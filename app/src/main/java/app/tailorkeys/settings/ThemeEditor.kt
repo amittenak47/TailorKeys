@@ -158,8 +158,11 @@ private fun ThemeEditor(state: SettingsState, existing: CustomTheme?, close: () 
                     // The keyboard takes most of the height while the name is typed; a squeezed preview
                     // is misleading, so it collapses until the keyboard closes. The view itself stays attached.
                     val imeOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-                    AndroidView(factory = { preview }, update = { it.previewTargetHeight = previewHeight; it.previewPressed = channel == 5; it.previewPalette = colors.palette() },
-                        modifier = Modifier.fillMaxWidth().then(if (imeOpen) Modifier.height(0.dp) else Modifier.heightIn(max = this@BoxWithConstraints.maxHeight * .4f)).clip(RoundedCornerShape(24.dp)))
+                    // A zero-height AndroidView does not clip the view inside it, so the view itself is GONE.
+                    AndroidView(factory = { preview }, update = {
+                        it.previewTargetHeight = previewHeight; it.previewPressed = channel == 5; it.previewPalette = colors.palette()
+                        it.visibility = if (imeOpen) android.view.View.GONE else android.view.View.VISIBLE
+                    }, modifier = Modifier.fillMaxWidth().then(if (imeOpen) Modifier.height(0.dp) else Modifier.heightIn(max = this@BoxWithConstraints.maxHeight * .4f)).clip(RoundedCornerShape(24.dp)))
                     if (!imeOpen) Text("Live preview. It changes as you pick colours.", Modifier.padding(horizontal = 20.dp, vertical = 6.dp), style = MaterialTheme.typography.labelSmall)
                     Row(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
