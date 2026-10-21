@@ -11,6 +11,7 @@ internal data class QuickOptionsState(
     val language: String,
     val multipleLanguages: Boolean,
     val swipe: Boolean,
+    val learning: Boolean = true,
 ) {
     fun tiles(): List<QuickTileState> = listOf(
         QuickTileState("Split", if (split) "On" else "Off", on = split),
@@ -18,10 +19,10 @@ internal data class QuickOptionsState(
             Align.CENTER -> "Off"; Align.LEFT -> "Left"; Align.RIGHT -> "Right"
         }, on = oneHand != Align.CENTER),
         QuickTileState("Size", "$height%", description = "Size, $height percent"),
-        QuickTileState("Theme", if (theme == ThemeName.SYSTEM) "System" else theme.title),
+        QuickTileState("Learning", if (learning) "On" else "Paused", on = learning),
         QuickTileState("Language", if (multipleLanguages) "Tap to switch" else "Only one",
             glyph = language.uppercase(), enabled = multipleLanguages),
-        QuickTileState("Swipe", if (swipe) "On" else "Off", on = swipe),
+        QuickTileState("Tidy", "Review text"),
         QuickTileState("Settings", "All", description = null),
     )
 }

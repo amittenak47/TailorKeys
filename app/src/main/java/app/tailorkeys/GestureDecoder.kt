@@ -15,6 +15,7 @@ class GestureDecoder(words: List<String>) {
     }
     private val buckets = HashMap<Pair<Char, Char>, ArrayList<Entry>>()
     private val known = HashSet<String>()
+    private val learned = HashSet<String>()
     private var keys = emptyMap<Char, Point>()
     private var keyWidth = 1f
     private val cached = ArrayList<Entry>()
@@ -32,6 +33,18 @@ class GestureDecoder(words: List<String>) {
             if (letters.isEmpty()) continue
             buckets.getOrPut(letters.first() to letters.last()) { ArrayList() }.add(Entry(word, letters))
         }
+    }
+
+    fun setUserWords(words: Set<String>) {
+        val removed = learned.filter { it !in words }
+        if (removed.isNotEmpty()) {
+            clearTemplates()
+            for (word in removed) { known.remove(word); learned.remove(word) }
+            for (row in buckets.values) row.removeAll { it.word in removed }
+            buckets.entries.removeAll { it.value.isEmpty() }
+        }
+        for (word in words) if (word !in known) learned.add(word)
+        addWords(words)
     }
 
     /** Centres are already transformed into view coordinates. Invalidate lazy templates only on geometry changes. */

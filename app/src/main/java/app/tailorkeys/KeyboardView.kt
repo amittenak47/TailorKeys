@@ -60,6 +60,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     interface Listener {
         fun onChord(word: String) {}
+        fun onForwardDelete() {}
         fun onKey(code: String)
         fun onTapKey(code: String, distances: FloatArray) { onKey(code) }
         fun onReplacePressText(original: String, following: String, replacement: String) {}
@@ -67,6 +68,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         fun onStackFace(code: String)
         fun onWheelChosen() {}
         fun onChoiceInterrupted() {}
+        fun onForgetWord(word: String) {}
         fun onSuggestion(text: String)
         fun onGlideStart() {}
         fun onGlideProgress(points: List<GestureDecoder.Point>, keys: Map<Char, GestureDecoder.Point>, keyWidth: Float, raw: String, hints: List<GestureDecoder.DoubleHint>) {}
@@ -1677,7 +1679,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             return
         }
         wheels.firstOrNull { it.rect.contains(x, y) && words(it).isNotEmpty() }?.let {
-            trackers[id] = Tracker(K_WHEEL, null).also { t -> t.wheel = it; t.x0 = x; t.lastX = x }
+            trackers[id] = Tracker(K_WHEEL, null).also { t -> t.wheel = it; t.x0 = x; t.lastX = x; timers.postDelayed(t.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong()) }
             return
         }
         if (handleRect.contains(x, y)) {
@@ -1827,7 +1829,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             K_WHEEL -> {
                 t.lastX = x
                 val dx = x - t.x0
-                if (abs(dx) > 8 * density) t.moved = true
+                if (abs(dx) > 8 * density) { t.moved = true; timers.removeCallbacks(t.longPress) }
                 if (t.moved) { clearArmedWord(); t.wheel!!.dragDx = dx; invalidateWheels() }
             }
             K_HANDLE -> { t.lastX = x; if (abs(x - t.x0) > 8 * density) t.moved = true }
@@ -1912,6 +1914,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         }
         when (t.kind) {
             K_WHEEL -> {
+                if (t.consumed) return
                 val wh = t.wheel!!
                 val list = words(wh)
                 if (t.moved && list.isNotEmpty()) {
@@ -1994,6 +1997,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun emitKey(code: String, tapX: Float = Float.NaN, tapY: Float = Float.NaN) {
+        if (code == Keys.BACKSPACE && state.layer == Layer.ABC && trackers.values.any { it.pk?.item?.keys?.contains(Keys.ABC) == true }) {
+            for (held in trackers.values) if (held.pk?.item?.keys?.contains(Keys.ABC) == true) { held.consumed = true; stopTimers(held) }
+            listener?.onForwardDelete(); return
+        }
         val output = KeyText.output(code, state)
         if (output == null) invalidatePressAccents()
         else for (t in trackers.values) if (t.pressedText != null) t.followingText += output
@@ -2053,6 +2060,18 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun onLongPress(t: Tracker) {
+        if (t.kind == K_WHEEL && !t.moved) {
+            val wheel = t.wheel ?: return
+            val list = words(wheel)
+            if (list.isEmpty()) return
+            val word = wordAt(list, wheelTapIndex(wheelTargets(wheel), t.lastX, wheel.rect.left, wheel.rect.right))
+            t.consumed = true
+            android.widget.PopupMenu(context, this).apply {
+                menu.add("Forget word").setOnMenuItemClickListener { listener?.onForgetWord(word); true }
+                show()
+            }
+            return
+        }
         val item = t.pk?.item ?: return
         val code = item.keys[shownIdx(item)]
         if (code == Keys.SPACE) {

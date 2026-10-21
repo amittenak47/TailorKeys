@@ -36,6 +36,47 @@ class SwipeInputTest {
         for (x in 0..200 step 10) trace.sample(x.toFloat(), 0f, x * 10L, x / 10)
         assertTrue(trace.hints.isEmpty())
     }
+    @Test fun intendedLettersSurviveFastCrossingsAndPauses() {
+        for (width in listOf(50f, 100f)) {
+            val board = linkedMapOf<Char, GestureDecoder.Point>()
+            for ((row, text) in listOf("qwertyuiop", "asdfghjkl", "zxcvbnm").withIndex())
+                text.forEachIndexed { col, ch -> board[ch] = GestureDecoder.Point((col + row * .35f) * width, row * width) }
+            for (word in listOf("hello", "quick", "type", "keyboard")) {
+                val trace = SwipeTrace(board, width)
+                var time = 0L; var index = 0
+                var previous = board.getValue(word.first())
+                trace.sample(previous.x, previous.y, time, index++)
+                var i = 1
+                while (i < word.length) {
+                    val point = board.getValue(word[i])
+                    if (word[i] == word[i - 1]) {
+                        time += 220
+                        trace.sample(point.x, point.y, time, index++)
+                    } else {
+                        for (step in 1..20) {
+                            time += 2
+                            trace.sample(previous.x + (point.x - previous.x) * step / 20,
+                                previous.y + (point.y - previous.y) * step / 20, time, index++)
+                        }
+                        if (i < word.lastIndex) {
+                            time += 120
+                            trace.sample(point.x, point.y, time, index++)
+                        }
+                    }
+                    previous = point; i++
+                }
+                assertEquals(word, trace.text())
+            }
+        }
+    }
+    @Test fun automaticSpaceOffAndLettersNeverSpace() {
+        for (after in listOf("", "next", " next", ".")) {
+            assertFalse(TextInputRules.addSpace(false, after))
+            assertFalse(TextInputRules.addSpace(true, after, letters = true))
+            assertFalse(TextInputRules.replacement(3, after, false).space)
+            assertEquals(".", TextInputRules.punctuation(".", "swipe ", after, true, true, trailingSpace = false)?.insert)
+        }
+    }
     private val wordKeys = "corlay".mapIndexed { i, ch -> ch to GestureDecoder.Point(i * 100f, if (i % 2 == 0) 0f else 100f) }.toMap()
     private fun path(text: String) = text.mapIndexed { i, ch -> wordKeys.getValue(ch).copy(time = i * 60L) }
     @Test fun doubleHintClearlyRanksCorollaryAboveCorolary() {
@@ -44,6 +85,15 @@ class SwipeInputTest {
         val matches = decoder.decode(path("corolary"), null, { 1.0 }, { _, _ -> 0.0 }, listOf(GestureDecoder.DoubleHint('l', 4)))
         assertEquals("corollary", matches.first().word)
         assertTrue(matches[0].score - matches[1].score > 5)
+    }
+    @Test fun forgettingRemovesLearnedGestureEntries() {
+        val decoder = GestureDecoder(listOf("corollary"))
+        decoder.setKeys(wordKeys, 100f)
+        decoder.setUserWords(setOf("corolary"))
+        assertTrue(decoder.decode(path("corolary"), null, { 1.0 }, { _, _ -> 0.0 }).any { it.word == "corolary" })
+        decoder.setUserWords(emptySet())
+        assertFalse(decoder.decode(path("corolary"), null, { 1.0 }, { _, _ -> 0.0 }).any { it.word == "corolary" })
+        assertTrue(decoder.decode(path("corolary"), null, { 1.0 }, { _, _ -> 0.0 }).any { it.word == "corollary" })
     }
     @Test fun typedPrefixConstrainsRemainingPath() {
         val decoder = GestureDecoder(listOf("corollary", "ollary", "corolary", "collary"))

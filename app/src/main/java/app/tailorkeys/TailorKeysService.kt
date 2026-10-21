@@ -1,5 +1,6 @@
 package app.tailorkeys
 
+import android.media.AudioManager
 import android.content.Intent
 import android.content.SharedPreferences
 import android.inputmethodservice.InputMethodService
@@ -65,6 +66,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
                 val loaded = makeModel(lang)
                 main.post {
                     if (!destroyed) {
+                        loaded.predictor.refreshLearning()
                         models[lang] = loaded
                         loading.remove(lang)
                         if (state.language == lang) { activateLanguage(); updateSuggestions() }
@@ -104,7 +106,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         (text == autoWord || glideCandidates.contains(text) ||
             settings.bool(Prefs.AUTOMATIC_PUNCTUATION) && TextInputRules.wordForms(autoWord.orEmpty(), predictor::hasWord).contains(text))
     private fun automaticSpace(word: String): Boolean {
-        if (!TextInputRules.addSpace(settings.bool(Prefs.AUTOMATIC_SPACE), editor().after, !suggest)) return false
+        if (!TextInputRules.addSpace(settings.bool(Prefs.AUTOMATIC_SPACE), editor().after, !suggest, settings.bool(Prefs.SWIPE_LETTERS))) return false
         val attached = editor().before.endsWith(word)
         currentInputConnection?.commitText(" ", 1); editorRead = null
         rememberAutomaticSpace(if (attached) word else null)
@@ -128,6 +130,26 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private var suggest = true
     /** True only in ordinary text fields that allow suggestions: the only place words are learned. */
     private var learn = true
+    private var inputSession = 0L
+    private var correctAllowed = false
+    private var protectedBefore: String? = null
+    private var protectedAfter: String? = null
+    private var suppressedBefore: String? = null
+    private var suppressedAfter: String? = null
+    private data class PendingLearning(val word: String, val prev: String?, val prev2: String?, val picked: Boolean,
+        val before: String, val after: String, val model: Predictor)
+    private var pendingLearning: PendingLearning? = null
+    private fun canLearnNow() = learn && settings.bool(Prefs.LEARNING)
+    private fun deferLearning(word: String, prev: String?, prev2: String?, picked: Boolean = false) {
+        if (!canLearnNow() || !modelReady || word.isEmpty()) return
+        pendingLearning = PendingLearning(word, prev, prev2, picked, editor().before.takeLast(64), editor().after.take(64), predictor)
+    }
+    private fun keepPendingLearning() {
+        val pending = pendingLearning ?: return
+        pendingLearning = null
+        if (canLearnNow() && !editor().selected && pending.before == editor().before.takeLast(64) && pending.after == editor().after.take(64))
+            pending.model.observe(pending.word, pending.prev, pending.prev2, pending.picked)
+    }
     private var deadEnd = false
     private val taps = ComposingTaps()
     private var tapBefore: String? = null
@@ -202,9 +224,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private var chosenBefore: String? = null
     private var chosenAfter: String? = null
     private var chosenSelection = 0 to 0
-    private data class ArmedUndo(val original: String, val inserted: String, val separator: String,
-        val before: String?, val after: String?, val learn: () -> Unit)
-    private var armedUndo: ArmedUndo? = null
+    private var armedUndo: ReversibleCommit? = null
 
     override fun onWheelChosen() = editorPhase { onWheelChosenPhase() }
 
@@ -224,10 +244,10 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private fun finishArmedLearning() {
         val undo = armedUndo
         armedUndo = null
-        if (learn) undo?.learn?.invoke()
+        undo?.keep(editor().before.takeLast(64), editor().after.take(64), editor().selected, canLearnNow())
     }
 
-    override fun onChoiceInterrupted() { clearChoice(); finishArmedLearning() }
+    override fun onChoiceInterrupted() { clearChoice(); armedUndo = null; pendingLearning = null }
 
     private fun validateChoice() {
         if (chosenBefore == null) return
@@ -239,17 +259,54 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private fun undoArmedCommit(): Boolean {
         val undo = armedUndo ?: return false
         val ic = currentInputConnection ?: return false
-        if (editor().before.takeLast(64) != undo.before ||
-            editor().after.take(64) != undo.after || editor().selected) return false
+        val restore = undo.undo(editor().before.takeLast(64), editor().after.take(64), editor().selected) ?: return false
         armedUndo = null // Reverting discards the deferred learning increment.
         clearTaps()
         clearChoice(); clearGlide()
         ic.beginBatchEdit()
-        ic.deleteSurroundingText(undo.inserted.length, 0)
+        ic.deleteSurroundingText(undo.inserted.length - undo.insertedAfter, undo.insertedAfter)
         editorRead = null
-        ic.commitText(undo.original + undo.separator, 1)
+        ic.commitText(restore, 1)
+        editorRead = null
+        if (undo.originalTail > 0) {
+            val cursor = readCursor()
+            if (cursor.known) ic.setSelection(cursor.end - undo.originalTail, cursor.end - undo.originalTail)
+            editorRead = null
+        }
+        ic.endBatchEdit()
+        if (undo.correction) {
+            suppressedBefore = editor().before.removeSuffix(undo.separator).takeLast(64)
+            suppressedAfter = editor().after.take(64)
+            val context = editor().before.removeSuffix(undo.separator)
+            deferLearning(undo.original, previousWord(context), previousWord2(context))
+        }
+        updateAutoCap()
+        return true
+    }
+
+    private fun correctWord(separator: String): Boolean {
+        if (!modelReady || !correctAllowed || state.layer != Layer.ABC || editor().selected) return false
+        val read = editor()
+        val before = read.before.takeLast(64)
+        if (before == protectedBefore && read.after.take(64) == protectedAfter ||
+            before == suppressedBefore && read.after.take(64) == suppressedAfter ||
+            read.after.firstOrNull()?.let(TextInputRules::wordChar) == true || currentGlide()) return false
+        val word = before.takeLastWhile(TextInputRules::wordChar)
+        predictor.updateContext(read.before, word)
+        val prev = previousWord(before); val prev2 = previousWord2(before)
+        val fix = predictor.autocorrect(word, AutocorrectMode.entries[settings.int(Prefs.AUTOCORRECT)], prev, prev2, taps) ?: return false
+        val ic = currentInputConnection ?: return false
+        val model = predictor
+        val allowed = canLearnNow()
+        clearTaps(); clearChoice(); clearGlide(); clearAutomaticSpace(); pendingLearning = null
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(word.length, 0)
+        ic.commitText(fix + separator, 1)
         editorRead = null
         ic.endBatchEdit()
+        armedUndo = ReversibleCommit(word, fix + separator, separator, editor().before.takeLast(64), editor().after.take(64), correction = true) {
+            if (allowed && canLearnNow()) model.observe(fix, prev, prev2)
+        }
         updateAutoCap()
         return true
     }
@@ -266,7 +323,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val suffix = if (spaced || read.selected) 0 else TextInputRules.suffixLength(read.after)
         val originalSuffix = read.after.take(suffix)
         val model = if (modelReady) predictor else null
-        val shouldLearn = learn && modelReady
+        val shouldLearn = canLearnNow() && modelReady
         val prev = previousWord(if (spaced) before.dropLast(1) else before)
         val prev2 = previousWord2(if (spaced) before.dropLast(1) else before)
         clearChoice(); clearGlide(); clearAutomaticSpace(); clearTaps()
@@ -286,9 +343,9 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         ic.endBatchEdit()
         val insertedSpace = separator == " " && editor().after.firstOrNull()?.isWhitespace() != true
         val inserted = word + if (separator == " ") (if (insertedSpace) " " else "") else separator + if (trailing) " " else ""
-        armedUndo = ArmedUndo(original + originalSuffix, inserted, separator,
+        armedUndo = ReversibleCommit(original + originalSuffix, inserted, separator,
             editor().before.takeLast(64), editor().after.take(64)) {
-            if (EditorRules.deferredLearning(shouldLearn, learn)) model?.learn(word, prev, prev2)
+            if (EditorRules.deferredLearning(shouldLearn, canLearnNow())) model?.observe(word, prev, prev2, picked = true)
         }
         updateAutoCap()
         return true
@@ -318,6 +375,11 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         updateSuggestions()
     }
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == Prefs.LEARNING_REVISION) {
+            armedUndo = null; pendingLearning = null; liveGlide = null; clearGlide()
+            models.values.forEach { it.predictor.reloadLearning() }
+        }
+        if (key == Prefs.LEARNING.key && !settings.bool(Prefs.LEARNING)) { armedUndo = null; pendingLearning = null }
         pendingLanguage = pendingLanguage || key == null || key == Prefs.LANGUAGES || key == Prefs.CURRENT_LANGUAGE
         pendingLayout = pendingLayout || key == null || key == Prefs.LAYOUT
         main.removeCallbacks(applyPreferences)
@@ -390,7 +452,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
                     keyboard.announceForAccessibility(title)
                 },
                 language = { onSwitchLanguage(1) },
-                allSettings = { closeQuickOptions(); onOpenSettings() }).apply {
+                allSettings = { closeQuickOptions(); onOpenSettings() }, tidy = { showTidy() }).apply {
                 visibility = View.INVISIBLE
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
             }
@@ -439,6 +501,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     override fun onStartInput(info: EditorInfo, restarting: Boolean) {
         super.onStartInput(info, restarting)
+        inputSession++
         armedUndo = null
         liveGlide = null
         clearAutomaticSpace()
@@ -473,6 +536,10 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         clearAutomaticSpace()
         suggest = !password
         keyboardView?.glideAllowed = suggest
+        protectedBefore = null; protectedAfter = null; suppressedBefore = null; suppressedAfter = null
+        correctAllowed = CorrectionRules.allowed(cls == InputType.TYPE_CLASS_TEXT, password,
+            info.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS != 0,
+            variation == InputType.TYPE_TEXT_VARIATION_URI || variation == InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS || variation == InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS)
         learn = EditorRules.canLearn(cls == InputType.TYPE_CLASS_TEXT, password,
             info.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS != 0,
             info.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0)
@@ -510,7 +577,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         if (keyboardView?.armedWord != null && chosenSelection != (newSelStart to newSelEnd)) clearChoice()
         armedUndo?.let { undo ->
             if (editor().before.takeLast(64) != undo.before ||
-                editor().after.take(64) != undo.after) finishArmedLearning()
+                editor().after.take(64) != undo.after) { armedUndo = null }
         }
         selStart = newSelStart
         selEnd = newSelEnd
@@ -525,6 +592,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     override fun onChord(word: String) = editorPhase { onChordPhase(word) }
 
     private fun onChordPhase(word: String) {
+        keepPendingLearning(); finishArmedLearning()
         clearTaps()
         onChoiceInterrupted()
         val ic = currentInputConnection ?: return
@@ -549,6 +617,34 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         keyboardView?.refreshInputState()
     }
 
+    private val audio by lazy { getSystemService(AudioManager::class.java) }
+    private fun sound(code: String) {
+        if (!settings.bool(Prefs.SOUND)) return
+        val effect = when (code) {
+            Keys.SPACE -> AudioManager.FX_KEYPRESS_SPACEBAR
+            Keys.BACKSPACE -> AudioManager.FX_KEYPRESS_DELETE
+            Keys.ENTER -> AudioManager.FX_KEYPRESS_RETURN
+            else -> AudioManager.FX_KEYPRESS_STANDARD
+        }
+        audio?.playSoundEffect(effect, settings.int(Prefs.SOUND_VOLUME) / 100f)
+    }
+
+    override fun onForwardDelete() = editorPhase {
+        sound(Keys.BACKSPACE)
+        armedUndo = null; pendingLearning = null
+        clearTaps(); clearChoice(); clearGlide(); clearAutomaticSpace()
+        val read = editor()
+        if (read.selected) currentInputConnection?.commitText("", 1)
+        else if (read.after.isNotEmpty()) {
+            val length = Graphemes.move(read.after, 0, 1)
+            // Do not split a grapheme clipped by the editor's bounded response.
+            if (length < read.after.length || read.after.length < 64)
+                currentInputConnection?.deleteSurroundingText(0, length)
+        }
+        editorRead = null
+        updateSuggestions()
+    }
+
     override fun onKey(code: String) { handleKey(code, null) }
 
     override fun onTapKey(code: String, distances: FloatArray) { handleKey(code, distances) }
@@ -556,17 +652,26 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private fun handleKey(code: String, distances: FloatArray?) = editorPhase { handleKeyPhase(code, distances) }
 
     private fun handleKeyPhase(code: String, distances: FloatArray?) {
+        sound(code)
         liveGlide = null
         validateTaps()
         if (code == Keys.BACKSPACE && undoArmedCommit()) {
             updateSuggestions(); keyboardView?.refreshInputState(); return
         }
-        finishArmedLearning()
+        if (code == Keys.BACKSPACE) { armedUndo = null; pendingLearning = null }
+        else if (code == Keys.SPACE || code == Keys.ENTER || code.length == 1) { keepPendingLearning(); finishArmedLearning() }
         val separator = if (code == Keys.SPACE) " " else code.takeIf { it.length == 1 && it[0] in ".,?!;:" }
         if (separator != null && commitArmed(separator)) {
             updateSuggestions(); keyboardView?.refreshInputState(); return
         }
+        if (separator != null && correctWord(separator)) {
+            updateSuggestions(); keyboardView?.refreshInputState(); return
+        }
         clearChoice()
+        val endingGlide = if (separator != null && separator != " " && currentGlide()) glideWord else null
+        val endedBefore = if (separator != null && separator != " ") {
+            if (endingGlide != null && hasAutomaticSpace()) editor().before.dropLast(1) else editor().before
+        } else null
         var letterCommitted = false
         when {
             code == Keys.BACKSPACE -> {
@@ -604,6 +709,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
                 }
             }
         }
+        if (endedBefore != null) deferLearning(endingGlide ?: currentWord(endedBefore), previousWord(endedBefore), previousWord2(endedBefore))
         updateSuggestions(letterCommitted)
         keyboardView?.refreshInputState()
     }
@@ -686,10 +792,61 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     /** A word from a wheel replaces the word being typed. A symbol is just inserted. */
+    override fun onForgetWord(word: String) {
+        armedUndo = null; pendingLearning = null
+        models.values.forEach { it.predictor.save()?.get() }
+        PersonalStore.forget(filesDir, state.language, word)
+        settings.prefs.edit().putLong(Prefs.LEARNING_REVISION, System.nanoTime()).apply()
+        updateSuggestions()
+    }
+
+    private fun showTidy() = editorPhase {
+        if (!correctAllowed || !modelReady || editor().selected) {
+            quickOptions?.showTidy(emptyList()) {}; return@editorPhase
+        }
+        val session = inputSession
+        val connection = currentInputConnection ?: return@editorPhase
+        val before = connection.getTextBeforeCursor(1024, 0)?.toString() ?: return@editorPhase
+        val start = TidyText.windowStart(before)
+        val left = before.substring(start)
+        val right = TidyText.afterWindow(connection.getTextAfterCursor(768, 0)?.toString() ?: return@editorPhase)
+        val startsSentence = if (start == 0) before.length < 1024 else before.substring(0, start).trimEnd().lastOrNull() in listOf('.', '!', '?', '\n')
+        val text = left + right
+        val fixes = TidyText.propose(text, startsSentence) { word, context ->
+            predictor.updateContext(context + word, word)
+            predictor.autocorrect(word, AutocorrectMode.AGGRESSIVE, previousWord(context + word), previousWord2(context + word))
+        }
+        quickOptions?.showTidy(fixes) { chosen -> editorPhase apply@ {
+            if (chosen.isEmpty() || session != inputSession || !correctAllowed) return@apply
+            val live = editor()
+            if (live.selected || connection.getTextBeforeCursor(left.length, 0)?.toString().orEmpty() != left ||
+                connection.getTextAfterCursor(right.length, 0)?.toString().orEmpty() != right) return@apply
+            val replacement = TidyText.apply(text, chosen)
+            val ic = currentInputConnection ?: return@apply
+            armedUndo = null; pendingLearning = null
+            clearTaps(); clearChoice(); clearGlide(); clearAutomaticSpace()
+            ic.beginBatchEdit()
+            ic.deleteSurroundingText(left.length, right.length)
+            ic.commitText(replacement, 1); editorRead = null
+            val cursor = readCursor()
+            val tail = if (cursor.known) replacement.length - TidyText.cursor(left.length, chosen) else 0
+            if (tail > 0) ic.setSelection(cursor.end - tail, cursor.end - tail)
+            editorRead = null
+            ic.endBatchEdit()
+            armedUndo = ReversibleCommit(text, replacement, "", editor().before.takeLast(64), editor().after.take(64),
+                insertedAfter = tail, originalTail = if (cursor.known) right.length else 0) {}
+            updateSuggestions()
+        } }
+    }
+
     override fun onSuggestion(text: String) = editorPhase { suggestionPhase(text) }
 
     private fun suggestionPhase(text: String) {
-        onChoiceInterrupted()
+        if (armedUndo?.correction == true && armedUndo?.original == text && undoArmedCommit()) {
+            updateSuggestions(); return
+        }
+        if (currentWord(editor().before).isEmpty()) { keepPendingLearning(); finishArmedLearning() }
+        armedUndo = null; pendingLearning = null; clearChoice()
         liveGlide = null
         val ic = currentInputConnection ?: return
         ic.finishComposingText()
@@ -700,7 +857,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val original = if (spaced) autoWord.orEmpty() else if (currentGlide() && !hasAutomaticSpace()) glideWord.orEmpty() else currentWord(before)
         val prev = previousWord(if (spaced) before.dropLast(1) else before)
         val prev2 = previousWord2(if (spaced) before.dropLast(1) else before)
-        val plan = TextInputRules.replacement(original.length, read.after, settings.bool(Prefs.AUTOMATIC_SPACE) && suggest,
+        val plan = TextInputRules.replacement(original.length, read.after, settings.bool(Prefs.AUTOMATIC_SPACE) && !settings.bool(Prefs.SWIPE_LETTERS) && suggest,
             read.selected, if (spaced) original.length else 0)
         clearTaps(); clearGlide(); clearAutomaticSpace()
         ic.beginBatchEdit()
@@ -709,11 +866,13 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         ic.commitText(text, 1); editorRead = null
         if (plan.space) automaticSpace(text)
         ic.endBatchEdit()
-        if (learn && modelReady) predictor.learn(text, prev, prev2)
+        protectedBefore = editor().before.takeLast(64); protectedAfter = editor().after.take(64)
+        deferLearning(text, prev, prev2, picked = true)
         updateAutoCap(); updateSuggestions()
     }
 
     override fun onGlideStart() = editorPhase {
+        keepPendingLearning(); finishArmedLearning()
         onChoiceInterrupted()
         val read = editor()
         val prefix = if (currentGlide() || read.selected) "" else currentWord(read.before.takeLast(64))
@@ -794,7 +953,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val prev = previousWord(session.before)
         if (!final) liveBusy = true
         glideWorker.execute {
-            decoder.addWords(scoring.words); decoder.setKeys(keys, width)
+            decoder.setUserWords(scoring.words); decoder.setKeys(keys, width)
             val matches = decoder.decode(path, prev, scoring.frequency, scoring.context, doubles, session.prefix, partial = !final)
             main.post {
                 if (!final) liveBusy = false
@@ -849,10 +1008,10 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     private fun finishGlideLearning() {
-        if (!currentGlide() || !learn || !modelReady) return
+        if (!currentGlide() || !canLearnNow() || !modelReady) return
         val before = editor().before.takeLast(64)
         val context = if (hasAutomaticSpace()) before.dropLast(1) else before
-        predictor.learn(glideWord!!, previousWord(context), previousWord2(context))
+        predictor.observe(glideWord!!, previousWord(context), previousWord2(context))
     }
 
     override fun onPickIme() {
@@ -890,14 +1049,11 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val ic = currentInputConnection ?: return
         if (currentGlide()) {
             if (text.firstOrNull()?.isLetter() == true && !hasAutomaticSpace()) automaticSpace(glideWord!!)
-            else if (text.any { !it.isLetterOrDigit() && it != '\'' } && learn && modelReady) {
-                finishGlideLearning()
-            }
         }
         clearGlide()
         val auto = hasAutomaticSpace()
         val edit = TextInputRules.punctuation(text, editor().before, editor().after, auto,
-            settings.bool(Prefs.AUTOMATIC_PUNCTUATION), !suggest)
+            settings.bool(Prefs.AUTOMATIC_PUNCTUATION), !suggest, settings.bool(Prefs.AUTOMATIC_SPACE) && !settings.bool(Prefs.SWIPE_LETTERS))
         clearAutomaticSpace()
         if (edit != null && !editor().selected) {
             clearTaps()
@@ -948,8 +1104,9 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val ic = currentInputConnection ?: return
         val before = editor().before.takeLast(64)
         val word = currentWord(before)
-        if (learnWord && currentGlide()) finishGlideLearning()
-        else if (learnWord && learn && modelReady && word.length > 1) predictor.learn(word, previousWord(before), previousWord2(before))
+        val picked = before == protectedBefore && editor().after.take(64) == protectedAfter
+        val endedWord = if (currentGlide()) glideWord.orEmpty() else word
+        val learningContext = if (hasAutomaticSpace()) before.dropLast(1) else before
         clearTaps()
         clearGlide()
         val now = SystemClock.uptimeMillis()
@@ -968,11 +1125,12 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         ic.commitText(" ", 1)
         editorRead = null
         lastSpaceAt = now
+        if (learnWord) deferLearning(endedWord, previousWord(learningContext), previousWord2(learningContext), picked)
     }
 
     private fun pressEnter() {
         clearTaps()
-        finishGlideLearning()
+        pendingLearning = null
         clearGlide()
         val info = currentInputEditorInfo ?: return
         val action = editorAction(info)
@@ -1060,6 +1218,12 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             view.keyWeights = emptyMap()
             val (explore, closest) = predictor.symbols(before.lastOrNull())
             view.setSuggestions(explore, closest, "")
+            return
+        }
+        val undo = armedUndo
+        if (undo?.correction == true && read.before.takeLast(64) == undo.before && read.after.take(64) == undo.after) {
+            view.keyWeights = emptyMap()
+            view.setSuggestions(emptyList(), listOf(undo.original) + predictor.closest("", currentWord(read.before.trimEnd())), "")
             return
         }
         if (hasAutomaticSpace() && autoWord != null && settings.bool(Prefs.AUTOMATIC_PUNCTUATION)) {

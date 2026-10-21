@@ -21,11 +21,11 @@ struct TextInputRules {
     }
     struct Edit { var deleteBefore = 0; var insert = ""; var move = 0 }
     static func punctuation(_ text: String, _ before: String, _ after: String, automaticSpace: Bool,
-                            enabled: Bool, password: Bool = false) -> Edit? {
+                            enabled: Bool, password: Bool = false, trailingSpace: Bool = true) -> Edit? {
         guard enabled, !password, text.count == 1, let ch = text.first else { return nil }
         if ")]}\"".contains(ch), after.first == ch { return Edit(move: 1) }
         if automaticSpace && before.last == " " {
-            if ".,?!:;".contains(ch) { return Edit(deleteBefore: 1, insert: text + " ") }
+            if ".,?!:;".contains(ch) { return Edit(deleteBefore: 1, insert: text + (trailingSpace ? " " : "")) }
             if ch == "'" { return Edit(deleteBefore: 1, insert: "'") }
         }
         let closer: Character?

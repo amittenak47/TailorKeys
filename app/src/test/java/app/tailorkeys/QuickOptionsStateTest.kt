@@ -17,7 +17,7 @@ class QuickOptionsStateTest {
         assertTrue(changedTiles(initial.copy()).isEmpty())
         assertTrue(changedTiles(initial.copy(radius = 20)).isEmpty())
         assertTrue(changedTiles(initial.copy(nightMode = 32)).isEmpty())
-        assertEquals(listOf(3), changedTiles(initial.copy(theme = ThemeName.WARM)))
+        assertTrue(changedTiles(initial.copy(theme = ThemeName.WARM)).isEmpty())
     }
 
     @Test fun eachQuickActionChangesOnlyItsOwnTile() {
@@ -27,7 +27,8 @@ class QuickOptionsStateTest {
         assertEquals(listOf(2), changedTiles(initial.copy(height = 46)))
         assertEquals(listOf(4), changedTiles(initial.copy(language = "de")))
         assertEquals(listOf(4), changedTiles(initial.copy(multipleLanguages = true)))
-        assertEquals(listOf(5), changedTiles(initial.copy(swipe = false)))
+        assertTrue(changedTiles(initial.copy(swipe = false)).isEmpty())
+        assertEquals(listOf(3), changedTiles(initial.copy(learning = false)))
     }
 
     @Test fun labelsEnabledStateAndAccessibilityDescriptionsStayInSync() {
@@ -38,23 +39,23 @@ class QuickOptionsStateTest {
         assertEquals("Size", off[2].label)
         assertEquals("44%", off[2].state)
         assertEquals("Size, 44 percent", off[2].description)
-        assertEquals("System", off[3].state)
+        assertEquals("On", off[3].state)
         assertEquals("EN", off[4].glyph)
         assertEquals("Language, Only one", off[4].description)
         assertFalse(off[4].enabled)
         assertNull(off[6].description)
 
         val on = initial.copy(split = true, oneHand = Align.RIGHT, language = "fr",
-            multipleLanguages = true, swipe = false, theme = ThemeName.HIGH_CONTRAST).tiles()
+            multipleLanguages = true, swipe = false, learning = false, theme = ThemeName.HIGH_CONTRAST).tiles()
         assertEquals("Split, On", on[0].description)
         assertTrue(on[0].on)
         assertEquals("Right", on[1].state)
         assertTrue(on[1].on)
-        assertEquals("High contrast", on[3].state)
+        assertEquals("Paused", on[3].state)
         assertEquals("FR", on[4].glyph)
         assertEquals("Language, Tap to switch", on[4].description)
         assertTrue(on[4].enabled)
-        assertEquals("Swipe, Off", on[5].description)
+        assertEquals("Tidy, Review text", on[5].description)
         assertFalse(on[5].on)
     }
 }

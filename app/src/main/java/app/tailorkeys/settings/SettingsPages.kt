@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import app.tailorkeys.CursorControl
 import app.tailorkeys.Align
 import app.tailorkeys.OnboardingActivity
+import app.tailorkeys.PersonalStore
 import app.tailorkeys.Prefs
 import app.tailorkeys.R
 import app.tailorkeys.ThemeName
@@ -238,13 +239,60 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
     }
     item("typing") {
         OptionGroup {
-            for ((label, pref) in listOf("Auto-capitalize" to Prefs.AUTO_CAP, "Vibrate on tap" to Prefs.HAPTICS)) {
-                ToggleRow(label, state.bool(pref)) { state.set(pref, it) }
+            val mode = state.int(Prefs.AUTOCORRECT)
+            SettingsDropdown("Autocorrect", listOf("Off", "Confident", "Aggressive")[mode], listOf("Off", "Confident", "Aggressive")) { state.set(Prefs.AUTOCORRECT, it) }
+            Text("Fix typos when you press space. Backspace right after undoes it.", Modifier.padding(20.dp, 8.dp), style = MaterialTheme.typography.bodySmall)
+            ToggleRow("Auto-capitalize", state.bool(Prefs.AUTO_CAP)) { state.set(Prefs.AUTO_CAP, it) }
+            val vibrator = LocalContext.current.getSystemService(android.os.Vibrator::class.java)
+            if (vibrator?.hasVibrator() == true) {
+                ToggleRow("Vibrate on tap", state.bool(Prefs.HAPTICS)) { state.set(Prefs.HAPTICS, it) }
+            }
+            ToggleRow("Sound on keypress", state.bool(Prefs.SOUND)) { state.set(Prefs.SOUND, it) }
+            if (state.bool(Prefs.SOUND)) {
+                val volume = state.int(Prefs.SOUND_VOLUME)
+                SettingSlider("Sound volume", volume, Prefs.SOUND_VOLUME, "$volume%") { state.set(Prefs.SOUND_VOLUME, it) }
             }
             ToggleRow("Automatic space", state.bool(Prefs.AUTOMATIC_SPACE), note = "Add a space after swiped and picked words.") { state.set(Prefs.AUTOMATIC_SPACE, it) }
             ToggleRow("Automatic punctuation", state.bool(Prefs.AUTOMATIC_PUNCTUATION), note = "Attach punctuation and close brackets and quotes.") { state.set(Prefs.AUTOMATIC_PUNCTUATION, it) }
             if (state.bool(Prefs.AUTOMATIC_PUNCTUATION)) {
                 ToggleRow("Double-space period", state.bool(Prefs.DOUBLE_SPACE_PERIOD), note = "Tap space twice to end a sentence.") { state.set(Prefs.DOUBLE_SPACE_PERIOD, it) }
+            }
+        }
+    }
+    item("learning") {
+        val context = LocalContext.current
+        var query by remember { mutableStateOf("") }
+        var confirm by remember { mutableStateOf(false) }
+        var version by remember { mutableIntStateOf(0) }
+        val words by produceState(emptyList<Pair<String, String>>(), version) {
+            value = withContext(Dispatchers.IO) { PersonalStore.listWords(context.filesDir) }
+        }
+        fun forget(language: String? = null, word: String? = null) {
+            PersonalStore.forget(context.filesDir, language, word)
+            state.settings.prefs.edit().putLong(Prefs.LEARNING_REVISION, System.nanoTime()).apply()
+            version++; confirm = false
+        }
+        OptionGroup {
+            ToggleRow("Learn from my typing", state.bool(Prefs.LEARNING)) { state.set(Prefs.LEARNING, it) }
+            ActionRow("Forget learned words", destructive = true) { confirm = true }
+            if (confirm) {
+                Text("Forget learned words and word sequences in every language?", Modifier.padding(16.dp))
+                Row {
+                    TextButton(onClick = { confirm = false }) { Text("Cancel") }
+                    TextButton(onClick = { forget() }) { Text("Forget all") }
+                }
+            }
+            Text("Learned words (${words.size})", Modifier.padding(16.dp), fontWeight = FontWeight.Bold)
+            OutlinedTextField(query, { query = it }, label = { Text("Search learned words") }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), singleLine = true)
+            val matches = words.filter { it.second.contains(query, ignoreCase = true) }
+            if (matches.isEmpty()) Text("No learned words", Modifier.padding(16.dp))
+            else LazyColumn(Modifier.heightIn(max = 280.dp)) {
+                items(matches, key = { it.first + ":" + it.second }) { (language, word) ->
+                    Row(Modifier.fillMaxWidth().padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(word + " \u00b7 " + Prefs.LANGUAGE_NAMES.getValue(language), Modifier.weight(1f))
+                        TextButton(onClick = { forget(language, word) }) { Text("Remove") }
+                    }
+                }
             }
         }
     }
@@ -299,6 +347,7 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
             GroupTitle("Assist")
             OptionGroup {
                 for ((label, pref) in listOf("Space accepts chosen word" to Prefs.SPACE_ACCEPTS, "Swipe typing" to Prefs.SWIPE_TYPING, "Highlight likely keys" to Prefs.KEY_TINT, "Smart tap areas" to Prefs.SMART_TARGETS, "Vibrate on typos" to Prefs.TYPO_BUZZ, "Chords" to Prefs.CHORDING)) {
+                    if (pref == Prefs.TYPO_BUZZ && LocalContext.current.getSystemService(android.os.Vibrator::class.java)?.hasVibrator() != true) continue
                     val blocked = state.bool(Prefs.TYPE_ON_PRESS) && (pref == Prefs.SWIPE_TYPING || pref == Prefs.CHORDING)
                     ToggleRow(label, !blocked && state.bool(pref), enabled = !blocked,
                         note = if (blocked) "Off while Type on press is on" else null) { state.set(pref, it) }

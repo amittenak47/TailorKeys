@@ -11,12 +11,12 @@ struct LanguageModel {
 enum LanguageModelFactory {
     private static let worker = DispatchQueue(label: "app.tailorkeys.languages", qos: .userInitiated)
 
-    static func load(_ language: String, onReady: @escaping () -> Void,
+    static func load(_ language: String, store: UserDefaults, onReady: @escaping () -> Void,
                      completion: @escaping (LanguageModel) -> Void) {
         worker.async {
             autoreleasepool {
                 Predictor.waitForLearning()
-                let predictor = Predictor(language) { DispatchQueue.main.async(execute: onReady) }
+                let predictor = Predictor(language, store: store) { DispatchQueue.main.async(execute: onReady) }
                 let model = LanguageModel(predictor: predictor, decoder: GestureDecoder(predictor.gestureWords()),
                                           chords: Chords(predictor: predictor))
                 DispatchQueue.main.async { completion(model) }

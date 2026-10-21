@@ -15,6 +15,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private var modelReady = false
     private var modelDocument: UUID?
     private var keyboardVisible = false
+    private var settingsFullAccess: Bool?
 
     private func evictModel() {
         predictor?.deactivate()
@@ -43,7 +44,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         guard keyboardVisible, loadingLanguage == nil else { return }
         loadingLanguage = lang
         let generation = loadGeneration
-        LanguageModelFactory.load(lang, onReady: { [weak self] in
+        LanguageModelFactory.load(lang, store: settings.learningStore, onReady: { [weak self] in
             guard let self = self, self.state.language == lang, self.modelReady else { return }
             self.updateSuggestions()
         }, completion: { [weak self] model in
@@ -98,6 +99,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func synchronizeDocument() {
         guard modelDocument != document.identifier else { return }
         lastSpace = 0; lastAbcTap = 0; manualShift = nil
+        protectedBefore = nil; protectedAfter = nil; suppressedBefore = nil; suppressedAfter = nil
         liveGlide = nil; clearAutomaticSpace()
         clearTaps(); choiceInterrupted(); clearGlide()
         predictor?.flushLearning()
@@ -137,7 +139,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             (settings.automaticPunctuation && TextInputRules.wordForms(autoWord ?? "", exists: predictor.hasWord).contains(text)))
     }
     @discardableResult private func automaticSpace(_ word: String) -> Bool {
-        guard TextInputRules.addSpace(settings.automaticSpace, document.after, password: !suggestAllowed) else { return false }
+        guard TextInputRules.addSpace(settings.automaticSpace && !settings.swipeLetters, document.after, password: !suggestAllowed) else { return false }
         let attached = document.before?.hasSuffix(word) == true
         insertRaw(" ")
         autoWord = attached ? word : nil; autoBefore = document.before; autoAfter = document.after; autoDocument = document.identifier
@@ -170,7 +172,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     // iOS exposes no no-personalized-learning flag to extensions. Hosts such as our
     // typing test opt out via autocorrectionType = .no; never learn from those fields.
     private var learningAllowed: Bool {
-        TextInputRules.canLearn(secure: textDocumentProxy.isSecureTextEntry == true,
+        settings?.learning == true && TextInputRules.canLearn(secure: textDocumentProxy.isSecureTextEntry == true,
                                autocorrectionDisabled: textDocumentProxy.autocorrectionType == .no)
     }
     private let state = InputState()
@@ -191,9 +193,35 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         let before: String?
         let after: String?
         let document: UUID
+        var correction: Bool = false
+        var insertedAfter: Int = 0
+        var originalTail: Int = 0
         let learn: () -> Void
     }
     private var armedUndo: ArmedUndo?
+    private var protectedBefore: String?, protectedAfter: String?
+    private var suppressedBefore: String?, suppressedAfter: String?
+    private struct PendingLearning {
+        let word: String, prev: String?, prev2: String?, picked: Bool
+        let snapshot: DocumentSnapshot
+        let model: Predictor
+    }
+    private var pendingLearning: PendingLearning?
+    private var correctAllowed: Bool {
+        let proxy = textDocumentProxy
+        return suggestAllowed && proxy.autocorrectionType != .no && proxy.keyboardType != .URL &&
+            proxy.keyboardType != .emailAddress && proxy.keyboardType != .webSearch
+    }
+    private func deferLearning(_ word: String, _ prev: String?, _ prev2: String?, picked: Bool = false) {
+        guard learningAllowed, modelReady, !word.isEmpty else { return }
+        pendingLearning = PendingLearning(word: word, prev: prev, prev2: prev2, picked: picked, snapshot: document, model: predictor)
+    }
+    private func keepPendingLearning() {
+        guard let pending = pendingLearning else { return }
+        pendingLearning = nil
+        if learningAllowed && document == pending.snapshot { pending.model.observe(pending.word, pending.prev, pending.prev2, picked: pending.picked) }
+    }
+
 
     func wheelChosen() {
         beginDocumentOperation()
@@ -211,10 +239,11 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func finishArmedLearning() {
         let undo = armedUndo
         armedUndo = nil
-        if learningAllowed { undo?.learn() }
+        if learningAllowed, let undo = undo, document.identifier == undo.document,
+            document.before == undo.before, document.after == undo.after, (document.selected ?? "").isEmpty { undo.learn() }
     }
 
-    func choiceInterrupted() { clearChoice(); finishArmedLearning() }
+    func choiceInterrupted() { clearChoice(); armedUndo = nil; pendingLearning = nil }
 
     private func validateChoice() {
         guard settings != nil else { return }
@@ -234,8 +263,35 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         armedUndo = nil // Reverting discards the deferred learning increment.
         clearChoice(); clearGlide()
         clearTaps()
+        if undo.insertedAfter > 0 { adjustRaw(undo.insertedAfter) }
         for _ in undo.inserted { deleteRaw() }
         insertRaw(undo.original + undo.separator)
+        if undo.originalTail > 0 { adjustRaw(-undo.originalTail) }
+        if undo.correction {
+            suppressedBefore = String((document.before ?? "").dropLast(undo.separator.count)); suppressedAfter = document.after
+            let context = suppressedBefore ?? ""
+            deferLearning(undo.original, previousWord(context), previousWord2(context))
+        }
+        return true
+    }
+
+    private func correctWord(_ separator: String) -> Bool {
+        guard correctAllowed, modelReady, state.layer == .abc, (document.selected ?? "").isEmpty, !currentGlide() else { return false }
+        let before = document.before ?? ""
+        if (before == protectedBefore && document.after == protectedAfter) || (before == suppressedBefore && document.after == suppressedAfter) { return false }
+        if let ch = document.after?.first, ch.isLetter || ch.isNumber { return false }
+        let word = String(before.reversed().prefix(while: TextInputRules.wordChar).reversed()), prev = previousWord(before), prev2 = previousWord2(before)
+        predictor.updateContext(before, word)
+        guard let fix = predictor.autocorrect(word, AutocorrectMode(rawValue: settings.int(Prefs.autocorrect)) ?? .confident, prev, prev2, taps: taps) else { return false }
+        let model = predictor, allowed = learningAllowed
+        pendingLearning = nil
+        clearTaps(); clearChoice(); clearGlide(); clearAutomaticSpace()
+        for _ in word { deleteRaw() }
+        insertRaw(fix + separator)
+        armedUndo = ArmedUndo(original: word, inserted: fix + separator, separator: separator,
+            before: document.before, after: document.after, document: document.identifier, correction: true, learn: { [weak self] in
+                if allowed && self?.learningAllowed == true { model?.observe(fix, prev, prev2) }
+            })
         return true
     }
 
@@ -268,7 +324,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         armedUndo = ArmedUndo(original: original + originalSuffix, inserted: inserted, separator: separator,
             before: document.before, after: document.after,
             document: document.identifier, learn: {
-                if shouldLearn { model?.learn(word, prev, prev2) }
+                if shouldLearn { model?.observe(word, prev, prev2, picked: true) }
             })
         return true
     }
@@ -290,6 +346,12 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     /// Full Access is reliable here, after the input view has been loaded.
     private func loadKeyboardIfNeeded() {
+        if settingsFullAccess != hasFullAccess {
+            predictor?.flushLearning(wait: true)
+            loadGeneration &+= 1
+            evictModel()
+            settingsFullAccess = hasFullAccess
+        }
         if settings != nil {
             settings.reloadStore(hasFullAccess: hasFullAccess)
             quickOptions?.reloadStore()
@@ -341,6 +403,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         state.shift = false
         state.capsLock = false
         keyboard.enterLabel = enterLabel()
+        predictor?.refreshLearning()
         keyboard.reloadSettings()
         updateAutoCap()
         updateSuggestions()
@@ -396,7 +459,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             if let undo = armedUndo,
                document.identifier != undo.document ||
                document.before != undo.before ||
-               document.after != undo.after { finishArmedLearning() }
+               document.after != undo.after { armedUndo = nil }
             _ = currentGlide()
             updateAutoCap()
             updateSuggestions()
@@ -418,6 +481,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     func chordTyped(_ word: String) {
         beginDocumentOperation()
         defer { endDocumentOperation() }
+        keepPendingLearning(); finishArmedLearning()
         clearTaps()
         choiceInterrupted()
         changingGlide = true
@@ -435,6 +499,21 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         updateSuggestions()
     }
 
+    func forwardDelete() {
+        beginDocumentOperation()
+        defer { endDocumentOperation() }
+        armedUndo = nil; pendingLearning = nil
+        clearTaps(); clearChoice(); clearGlide(); clearAutomaticSpace()
+        if !(document.selected ?? "").isEmpty { deleteRaw() }
+        else if document.after?.isEmpty == false {
+            let before = document.before, after = document.after
+            adjustRaw(1)
+            guard document.before != before || document.after != after else { return }
+            deleteRaw()
+        }
+        updateSuggestions()
+    }
+
     func keyTapped(_ code: String) { handleKey(code, nil) }
     func keyTapped(_ code: String, distances: [Float]) { handleKey(code, distances) }
 
@@ -448,12 +527,16 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         if code == Keys.backspace && undoArmedCommit() {
             updateAutoCap(); updateSuggestions(); return
         }
-        finishArmedLearning()
+        if code == Keys.backspace { armedUndo = nil; pendingLearning = nil }
+        else if code == Keys.space || code == Keys.enter || code.count == 1 { keepPendingLearning(); finishArmedLearning() }
         let separator: String? = code == Keys.space ? " " : (code.count == 1 && ".,?!;:".contains(code) ? code : nil)
         if let separator = separator, commitArmed(separator) {
             updateAutoCap(); updateSuggestions(); return
         }
+        if let separator = separator, correctWord(separator) { updateAutoCap(); updateSuggestions(); return }
         clearChoice()
+        let endingGlide = separator != nil && separator != " " && currentGlide() ? glideWord : nil
+        let endedBefore = separator != nil && separator != " " ? (endingGlide != nil && hasAutomaticSpace() ? String((document.before ?? "").dropLast()) : document.before) : nil
         switch code {
         case Keys.backspace:
             clearGlide()
@@ -464,7 +547,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             deleteRaw()
             rememberTapContext()
         case Keys.space: typeSpace()
-        case Keys.enter: finishGlideLearning(); clearGlide(); clearTaps(); insertRaw("\n")
+        case Keys.enter: pendingLearning = nil; clearGlide(); clearTaps(); insertRaw("\n")
         default:
             if KeyText.isLayerKey(code) { tapLayerKey(code) } else {
                 if state.layer == .abc && code.count == 1 && code.first!.isLetter && currentGlide() {
@@ -478,6 +561,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
                 if let s = KeyText.output(code, state) { insert(s, typing: true, distances: distances) }
             }
         }
+        if let before = endedBefore { deferLearning(endingGlide ?? currentWord(before), previousWord(before), previousWord2(before)) }
         // No typo buzz on iOS: keyboards can't vibrate without Full Access.
         updateAutoCap()
         updateSuggestions()
@@ -533,12 +617,55 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     /// A word from a wheel replaces the word being typed. A symbol is just inserted.
+    private func showTidy() {
+        beginDocumentOperation()
+        defer { endDocumentOperation() }
+        guard correctAllowed, modelReady, (document.selected ?? "").isEmpty else { quickOptions?.showTidy([]) { _ in }; return }
+        let snapshot = document
+        let before = document.before ?? ""
+        let left = TidyText.window(before), right = TidyText.afterWindow(document.after ?? "")
+        let preceding = String(before.dropLast(left.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let startsSentence = left == before || preceding.last.map { ".!?".contains($0) } == true
+        let text = left + right
+        let fixes = TidyText.propose(text, startsSentence: startsSentence) { word, context in
+            self.predictor.updateContext(context + word, word)
+            return self.predictor.autocorrect(word, .aggressive, self.previousWord(context + word), self.previousWord2(context + word))
+        }
+        quickOptions?.showTidy(fixes) { [weak self] chosen in
+            guard let self = self, !chosen.isEmpty else { return }
+            self.beginDocumentOperation(); defer { self.endDocumentOperation() }
+            guard self.document == snapshot else { return }
+            let replacement = TidyText.apply(text, fixes: chosen)
+            self.pendingLearning = nil; self.armedUndo = nil
+            self.clearTaps(); self.clearChoice(); self.clearGlide(); self.clearAutomaticSpace()
+            // UITextDocumentProxy has no batch-edit API; insert the reviewed result once.
+            if !right.isEmpty { self.adjustRaw(right.count) }
+            for _ in text { self.deleteRaw() }
+            self.insertRaw(replacement)
+            let tail = replacement.count - TidyText.cursor(left.count, fixes: chosen)
+            if tail > 0 { self.adjustRaw(-tail) }
+            self.armedUndo = ArmedUndo(original: text, inserted: replacement, separator: "", before: self.document.before,
+                after: self.document.after, document: self.document.identifier, insertedAfter: tail, originalTail: right.count, learn: {})
+            self.updateSuggestions()
+        }
+    }
+
+    func forgetWord(_ text: String) {
+        armedUndo = nil; pendingLearning = nil; liveGlide = nil; clearGlide()
+        predictor?.flushLearning(wait: true)
+        LearningStore.forget(settings.learningStore, language: state.language, word: text)
+        predictor?.refreshLearning()
+        updateSuggestions()
+    }
+
     func suggestionPicked(_ text: String) {
         beginDocumentOperation()
         defer { endDocumentOperation() }
         changingGlide = true
         defer { changingGlide = false }
-        choiceInterrupted(); liveGlide = nil
+        if armedUndo?.correction == true && armedUndo?.original == text && undoArmedCommit() { updateSuggestions(); return }
+        if currentWord(document.before ?? "").isEmpty { keepPendingLearning(); finishArmedLearning() }
+        armedUndo = nil; pendingLearning = nil; clearChoice(); liveGlide = nil
         if state.layer != .abc { insert(text); updateSuggestions(); return }
         let read = document
         let spaced = replacesAutomaticWord(text)
@@ -546,7 +673,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         let original = spaced ? (autoWord ?? "") : (currentGlide() && !hasAutomaticSpace() ? glideWord! : currentWord(before))
         let prev = previousWord(spaced ? String(before.dropLast()) : before)
         let prev2 = previousWord2(spaced ? String(before.dropLast()) : before)
-        let plan = TextInputRules.replacement(original.count, read.after ?? "", automaticSpace: settings.automaticSpace && suggestAllowed,
+        let plan = TextInputRules.replacement(original.count, read.after ?? "", automaticSpace: settings.automaticSpace && !settings.swipeLetters && suggestAllowed,
             selected: !(read.selected ?? "").isEmpty, spacedWordLength: spaced ? original.count : 0)
         clearTaps(); clearGlide(); clearAutomaticSpace()
         if (read.selected ?? "").isEmpty {
@@ -555,13 +682,15 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         }
         insertRaw(text)
         if plan.space { automaticSpace(text) }
-        if learningAllowed && modelReady { predictor.learn(text, prev, prev2) }
+        protectedBefore = document.before; protectedAfter = document.after
+        deferLearning(text, prev, prev2, picked: true)
         updateAutoCap(); updateSuggestions()
     }
 
     func glideStarted() {
         beginDocumentOperation()
         defer { endDocumentOperation() }
+        keepPendingLearning(); finishArmedLearning()
         choiceInterrupted()
         let read = document
         let prefix = currentGlide() || !(read.selected ?? "").isEmpty ? "" : currentWord(read.before ?? "")
@@ -687,7 +816,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         guard currentGlide(), learningAllowed, modelReady else { return }
         let before = document.before ?? ""
         let context = hasAutomaticSpace() ? String(before.dropLast()) : before
-        predictor.learn(glideWord!, previousWord(context), previousWord2(context))
+        predictor.observe(glideWord!, previousWord(context), previousWord2(context))
     }
 
     func switchKeyboard() { choiceInterrupted(); advanceToNextInputMode() }
@@ -734,6 +863,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             UIAccessibility.post(notification: .announcement, argument: title)
         }
         p.onLanguage = { [weak self] in self?.switchLanguage(1) }
+        p.onTidy = { [weak self] in self?.showTidy() }
         p.onChange = { [weak self] in
             guard let self = self else { return }
             if self.state.language != self.settings.currentLanguage { self.activateLanguage() }
@@ -741,6 +871,8 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             if !LayoutLibrary.sameGrid(grid, self.keyboard.grid) {
                 self.clearTaps(); self.keyboard.grid = grid; self.predictor?.setLayout(grid)
             }
+            if self.predictor?.refreshLearning() == true { self.armedUndo = nil; self.pendingLearning = nil; self.liveGlide = nil; self.clearGlide() }
+            if !self.settings.learning { self.pendingLearning = nil; self.armedUndo = nil }
             self.keyboard.reloadSettings()
             let area = self.keyboard.quickOptionsBounds
             self.quickOptions?.frame = CGRect(x: area.minX, y: 0, width: area.width, height: self.view.bounds.height)
@@ -772,6 +904,8 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         p.onChange = { [weak self] in
             guard let self = self else { return }
             if self.state.language != self.settings.currentLanguage { self.activateLanguage() }
+            if self.predictor?.refreshLearning() == true { self.armedUndo = nil; self.pendingLearning = nil; self.liveGlide = nil; self.clearGlide() }
+            if !self.settings.learning { self.pendingLearning = nil; self.armedUndo = nil }
             self.keyboard.reloadSettings()
             self.updateSuggestions()
         }
@@ -868,12 +1002,11 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func insert(_ s: String, typing: Bool = false, distances: [Float]? = nil) {
         if currentGlide() {
             if s.first?.isLetter == true && !hasAutomaticSpace() { automaticSpace(glideWord!) }
-            else if s.contains(where: { !$0.isLetter && !$0.isNumber && $0 != "'" }) { finishGlideLearning() }
         }
         clearGlide()
         let auto = hasAutomaticSpace()
         let edit = TextInputRules.punctuation(s, document.before ?? "", document.after ?? "", automaticSpace: auto,
-                                             enabled: settings.automaticPunctuation, password: !suggestAllowed)
+                                             enabled: settings.automaticPunctuation, password: !suggestAllowed, trailingSpace: settings.automaticSpace && !settings.swipeLetters)
         clearAutomaticSpace()
         if let edit = edit, (document.selected ?? "").isEmpty {
             clearTaps()
@@ -915,8 +1048,9 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func typeSpace(learnWord: Bool = true) {
         let before = document.before ?? ""
         let word = currentWord(before)
-        if learnWord && currentGlide() { finishGlideLearning() }
-        else if learnWord && learningAllowed && modelReady && word.count > 1 { predictor.learn(word, previousWord(before), previousWord2(before)) }
+        let picked = before == protectedBefore && document.after == protectedAfter
+        let endedWord = currentGlide() ? (glideWord ?? "") : word
+        let context = hasAutomaticSpace() ? String(before.dropLast()) : before
         clearTaps()
         clearGlide()
         let now = CACurrentMediaTime()
@@ -929,6 +1063,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         }
         insertRaw(" ")
         lastSpace = now
+        if learnWord { deferLearning(endedWord, previousWord(context), previousWord2(context), picked: picked) }
     }
 
     private func enterLabel() -> String? {
@@ -994,6 +1129,11 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             keyboard.keyWeights = [:]
             let s = predictor.symbols(before: before.last)
             keyboard.setSuggestions(left: s.explore, right: s.closest, prefix: "")
+            return
+        }
+        if let undo = armedUndo, undo.correction, document.before == undo.before, document.after == undo.after {
+            keyboard.keyWeights = [:]
+            keyboard.setSuggestions(left: [], right: [undo.original], prefix: "")
             return
         }
         if hasAutomaticSpace() && autoWord != nil && settings.automaticPunctuation {

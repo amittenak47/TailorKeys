@@ -26,6 +26,7 @@ class Predictor internal constructor(
     enableModel: Boolean = true,
     modelLoader: () -> NextWordModel? = { EnglishModel.load(openAsset) },
     private val indexed: Boolean = true,
+    private val now: () -> Long = System::currentTimeMillis,
 ) {
     constructor(context: Context, language: String = "en", onReady: () -> Unit = {}) :
         this({ context.assets.open(it) }, context.filesDir, language, true, onReady)
@@ -39,7 +40,7 @@ class Predictor internal constructor(
                                   val frequencies: DoubleArray = doubleArrayOf(), val common: List<String> = emptyList())
     @Volatile private var seedTables: SeedTables? = null
     private var cachedTables: SeedTables? = null
-    private val topWords: List<String>
+    private var topWords: List<String> = emptyList()
     private val userPairs = HashMap<String, MutableMap<String, Int>>()
     private val userTriples = HashMap<String, MutableMap<String, Int>>()
     private val neighbours = HashMap<Char, MutableSet<Char>>()
@@ -48,6 +49,12 @@ class Predictor internal constructor(
     private val userFile = File(filesDir, "user_words${suffix}.txt")
     private val pairFile = File(filesDir, "user_bigrams${suffix}.txt")
     private val tripleFile = File(filesDir, "user_trigrams${suffix}.txt")
+    private val metadataFile = File(filesDir, "user_learning${suffix}.txt")
+    private val directory = filesDir
+    private var generation = PersonalStore.generation(filesDir)
+    private val observed = HashMap<String, Int>()
+    private val lastUse = HashMap<String, Long>()
+    private var decayedAt = now()
     private var dirty = false
     @Volatile private var saveFailed = false
     private var cachedPrefix: String? = null
@@ -67,24 +74,7 @@ class Predictor internal constructor(
         candidateIndex = CandidateIndex(base)
         english = if (language == "en" && enableModel) EnglishContext(base,
             modelLoader, asynchronous, onReady) else null
-        if (userFile.exists()) userFile.readLines().forEach { line ->
-            val parts = line.split('\t')
-            if (parts.size == 2) parts[1].toIntOrNull()?.let { user[parts[0]] = it }
-        }
-        if (pairFile.exists()) pairFile.readLines().forEach { line ->
-            val parts = line.split('\t')
-            if (parts.size == 3) parts[2].toIntOrNull()?.let { userPairs.getOrPut(parts[0]) { HashMap() }[parts[1]] = it }
-        }
-        if (tripleFile.exists()) tripleFile.useLines { lines -> lines.forEach { line ->
-            val parts = line.split('\t')
-            if (parts.size == 4) parts[3].toIntOrNull()?.let {
-                userTriples.getOrPut("${parts[0]}\t${parts[1]}") { HashMap() }[parts[2]] = it
-            }
-        } }
-        learnedWords.addAll(user.keys)
-        // Only these base words and learned words can enter the frequency top 300.
-        topWords = (base.take(300) + user.keys).distinct()
-            .sortedWith(compareByDescending<String> { frequency(it) }.thenBy { it }).take(300)
+        reloadLearning()
         val loadTables = {
             val tables = try {
                 val pairs = loadCounts("bigrams${suffix}.txt", 2)
@@ -181,18 +171,19 @@ class Predictor internal constructor(
     }
 
     private data class Candidate(val word: String, val score: Double, val correction: Boolean,
-                                 val pairCount: Int, val tripleCount: Int)
+                                 val pairCount: Int, val tripleCount: Int, val distance: Int = 0)
 
     // Costs are tenths. Three bounded rows are reused for every dictionary entry in a lookup.
-    private fun cost(p: String, w: String, limit: Int, rows: Array<IntArray>, taps: ComposingTaps?): Int {
+    private fun cost(p: String, w: String, limit: Int, rows: Array<IntArray>, taps: ComposingTaps?, complete: Boolean = false): Int {
         if (w.isEmpty()) return 1000
         val transposed = w.length > 1 && p[0] == w[1] && p[1] == w[0]
         val firstSpatial = taps?.hasTap(0) == true
         val firstCost = if (firstSpatial) taps!!.cost(0, w[0]) else 0
         if (!transposed && if (firstSpatial) firstCost > 6
             else p[0] != w[0] && neighbours[p[0]]?.contains(w[0]) != true) return 1000
-        val extra = if (firstSpatial) (if (transposed) minOf(3, firstCost) else firstCost) else if (p[0] == w[0]) 0 else 3
+        val extra = if (complete && transposed) 0 else if (firstSpatial) (if (transposed) minOf(3, firstCost) else firstCost) else if (p[0] == w[0]) 0 else 3
         val bound = limit - extra
+        val edit = if (complete) 12 else 8
         val band = bound / 8
         val prefixLength = minOf(p.length, w.length)
         if (p.length - prefixLength > band) return 1000
@@ -204,13 +195,13 @@ class Predictor internal constructor(
         older.fill(1000)
         previous.fill(1000)
         current.fill(1000)
-        for (j in 0..minOf(p.length, band)) previous[j] = j * 8
+        for (j in 0..minOf(p.length, band)) previous[j] = j * edit
         var previousMin = 0
         var best = 1000
         for (i in 1..end) {
             val from = maxOf(1, i - band)
             val to = minOf(p.length, i + band)
-            current[0] = if (i <= band) i * 8 else 1000
+            current[0] = if (i <= band) i * edit else 1000
             if (from > 1) current[from - 1] = 1000
             if (to < p.length) current[to + 1] = 1000
             var rowMin = current[0]
@@ -219,14 +210,14 @@ class Predictor internal constructor(
                     taps?.hasTap(j - 1) == true -> taps.cost(j - 1, w[i - 1])
                     else -> gridCost(p[j - 1], w[i - 1])
                 }
-                var value = minOf(previous[j] + 8, current[j - 1] + 8, previous[j - 1] + substitution)
+                var value = minOf(previous[j] + edit, current[j - 1] + edit, previous[j - 1] + substitution)
                 if (i > 1 && j > 1 && p[j - 1] == w[i - 2] && p[j - 2] == w[i - 1]) {
                     value = minOf(value, older[j - 2] + 6)
                 }
                 current[j] = value
                 rowMin = minOf(rowMin, value)
             }
-            if (i == prefixLength || whole && i == w.length) best = minOf(best, current[p.length])
+            if ((!complete && i == prefixLength) || whole && i == w.length) best = minOf(best, current[p.length])
             // A transposition can jump over one over-budget row, but never two.
             if (rowMin > bound && previousMin > bound) break
             previousMin = rowMin
@@ -280,7 +271,7 @@ class Predictor internal constructor(
                     1.2 * (ln(1.0 + seedTriple) + 1.5 * ln(1.0 + userTriple))
                 ln(frequency(w, tables)) + 1.5 * context - 2.5 * cost / 10.0
             }
-            all.add(Candidate(w, score, !completion, seedPair + userPair, seedTriple + userTriple))
+            all.add(Candidate(w, score, !completion, seedPair + userPair, seedTriple + userTriple, cost))
         }
         if (p.isEmpty()) {
             // No dictionary scan: only this context's followers plus the load-time top 300.
@@ -322,6 +313,37 @@ class Predictor internal constructor(
         cachedScoreVersion = scores?.version ?: -1L
         cachedCandidates = result
         return result
+    }
+
+    fun autocorrect(word: String, mode: AutocorrectMode, prev: String? = null, prev2: String? = null,
+                    taps: ComposingTaps? = null, allowed: Boolean = true): String? {
+        if (!allowed || mode == AutocorrectMode.OFF || !CorrectionRules.eligible(word) || isLearned(word) && !rank.containsKey(word.lowercase()) || typedTwice(word)) return null
+        val p = word.lowercase()
+        val known = rank.containsKey(p)
+        if (known && mode == AutocorrectMode.CONFIDENT) return null
+        fun decide(scores: EnglishContext.Scores?): String? {
+            val rows = Array(3) { IntArray(p.length + 1) }
+            val spatial = taps?.takeIf { it.hasTaps(word) }
+            val ranked = candidates(p, prev, prev2, taps, scores).asSequence()
+                .filter { kotlin.math.abs(it.word.length - p.length) <= 1 && CorrectionRules.smallEdit(p, it.word) }
+                .map { it.word to (it.score + (if (scores != null) MODEL_TYPO_WEIGHT else 2.5) * it.distance / 10.0 -
+                    2.5 * cost(p, it.word, 22, rows, spatial, complete = true) / 10.0) }
+                .sortedByDescending { it.second }.toList()
+            val best = ranked.firstOrNull() ?: return null
+            val tables = seedTables
+            val pair = count(rank[prev]?.let { tables?.pairs?.get(it.toLong()) }, rank[p])
+            val triple = if (prev != null && prev2 != null) count(rank[prev2]?.let { a -> rank[prev]?.let { b -> tables?.triples?.get(contextId(a, b)) } }, rank[p]) else 0
+            val up = userPairs[prev]?.get(p) ?: 0
+            val ut = if (prev != null && prev2 != null) userTriples["$prev2\t$prev"]?.get(p) ?: 0 else 0
+            val keep = if (scores != null) scores.probability(p, rank[p]) + personalScore(p, up, ut)
+                else ln(frequency(p)) + 1.5 * (ln(1.0 + pair) + 1.5 * ln(1.0 + up) + 1.2 * (ln(1.0 + triple) + 1.5 * ln(1.0 + ut)))
+            // A transposition costs less than adding/dropping a letter. Unknown spellings
+            // also pay a dictionary prior, rather than inheriting all model <unk> mass.
+            val margin = if (mode == AutocorrectMode.CONFIDENT) 1.2 else .8
+            if (best.second - (keep - if (known) 0.0 else 4.6) < margin || ranked.getOrNull(1)?.let { best.second - it.second < margin } == true) return null
+            return matchCase(best.first, word)
+        }
+        return if (english != null) english.withScores { decide(it) } else decide(null)
     }
 
     fun nextLetters(prefix: String, prev: String?, prev2: String? = null, taps: ComposingTaps? = null): Map<Char, Double> {
@@ -376,27 +398,112 @@ class Predictor internal constructor(
     fun learn(word: String, prev: String? = null, prev2: String? = null) {
         val w = word.lowercase()
         if (w.length < 2 || !w.all { it.isLetter() || it == '\'' }) return
-        user[w] = (user[w] ?: 0) + 1
+        observed.putIfAbsent(w, 2)
+        lastUse[w] = now()
+        user[w] = ((user[w] ?: 0) + 1).coerceAtMost(1_000_000)
         learnedWords.add(w)
         if (prev != null) {
             val pairs = userPairs.getOrPut(prev) { HashMap() }
-            pairs[w] = (pairs[w] ?: 0) + 1
+            pairs[w] = ((pairs[w] ?: 0) + 1).coerceAtMost(1_000_000)
             if (prev2 != null) {
                 val triples = userTriples.getOrPut("$prev2\t$prev") { HashMap() }
-                triples[w] = (triples[w] ?: 0) + 1
+                triples[w] = ((triples[w] ?: 0) + 1).coerceAtMost(1_000_000)
             }
         }
+        trimLearning()
         cachedCandidates = null
         dirty = true
     }
 
+    /** Called only when the committed word survived the next edit. */
+    fun observe(word: String, prev: String? = null, prev2: String? = null, picked: Boolean = false) {
+        val w = word.lowercase()
+        if (w.length !in 2..64 || !w.all { it.isLetter() || it == '\'' }) return
+        observed[w] = ((observed[w] ?: 0) + if (picked) 2 else 1).coerceAtMost(2)
+        lastUse[w] = now()
+        dirty = true
+        if (rank.containsKey(w) || observed.getValue(w) >= 2) learn(w, prev, prev2)
+        trimLearning()
+    }
+    fun typedTwice(word: String) = (observed[word.lowercase()] ?: 0) >= 2
+    fun isLearned(word: String) = user.containsKey(word.lowercase())
+
+    fun refreshLearning() { if (generation != PersonalStore.generation(directory)) reloadLearning() }
+
+    fun reloadLearning() {
+        user.clear(); learnedWords.clear(); userPairs.clear(); userTriples.clear(); observed.clear(); lastUse.clear()
+        generation = PersonalStore.generation(directory)
+        if (userFile.exists()) userFile.forEachLine { line ->
+            val p = line.split('\t')
+            if (p.size == 2) p[1].toIntOrNull()?.takeIf { it > 0 }?.let { user[p[0]] = it }
+        }
+        fun load(file: File, n: Int, rows: MutableMap<String, MutableMap<String, Int>>) {
+            if (file.exists()) file.forEachLine { line ->
+                val p = line.split('\t')
+                if (p.size == n + 1) p.last().toIntOrNull()?.takeIf { it > 0 }?.let {
+                    rows.getOrPut(p.take(n - 1).joinToString("\t")) { HashMap() }[p[n - 1]] = it
+                }
+            }
+        }
+        load(pairFile, 2, userPairs); load(tripleFile, 3, userTriples)
+        decayedAt = now()
+        if (metadataFile.exists()) metadataFile.forEachLine { line ->
+            val p = line.split('\t')
+            if (p.size == 2 && p[0] == "@decay") decayedAt = p[1].toLongOrNull() ?: now()
+            else if (p.size == 3) {
+                observed[p[0]] = p[1].toIntOrNull() ?: 0
+                lastUse[p[0]] = p[2].toLongOrNull() ?: 0
+            }
+        }
+        for (word in user.keys) { observed.putIfAbsent(word, 2); lastUse.putIfAbsent(word, now()) }
+        learnedWords.addAll(user.keys)
+        dirty = !metadataFile.exists() && user.isNotEmpty(); cachedCandidates = null
+        decay(); trimLearning()
+        topWords = (base.take(300) + user.keys).distinct().sortedWith(compareByDescending<String> { frequency(it) }.thenBy { it }).take(300)
+    }
+    private fun decay() {
+        val period = 30L * 24 * 60 * 60 * 1000
+        val periods = ((now() - decayedAt).coerceAtLeast(0) / period).coerceAtMost(31).toInt()
+        if (periods == 0) return
+        fun halve(row: MutableMap<String, Int>) {
+            val entries = row.entries.iterator()
+            while (entries.hasNext()) { val e = entries.next(); val count = e.value ushr periods
+                if (count == 0) entries.remove() else e.setValue(count) }
+        }
+        halve(user)
+        for (row in userPairs.values) halve(row)
+        for (row in userTriples.values) halve(row)
+        userPairs.entries.removeAll { it.value.isEmpty() }; userTriples.entries.removeAll { it.value.isEmpty() }
+        learnedWords.retainAll(user.keys)
+        decayedAt += periods * period
+        cachedCandidates = null; dirty = true
+    }
+    private fun trimLearning() {
+        if (observed.size <= 5000) return
+        dirty = true; cachedCandidates = null
+        val evicted = lastUse.keys.sortedWith(compareBy<String> { lastUse[it] ?: 0 }.thenBy { it }).take(observed.size - 5000)
+        for (word in evicted) {
+            user.remove(word); observed.remove(word); lastUse.remove(word); learnedWords.remove(word)
+            userPairs.entries.removeAll { it.key == word }
+            userTriples.entries.removeAll { it.key.split('\t').contains(word) }
+            for (row in userPairs.values) row.remove(word)
+            for (row in userTriples.values) row.remove(word)
+        }
+    }
+
     fun save(): java.util.concurrent.Future<*>? {
+        decay()
         if (!dirty && !saveFailed) return null
-        val snapshot = PersonalStore.Snapshot(user, userPairs, userTriples)
+        val metadata = buildString {
+            append("@decay\t$decayedAt\n")
+            for ((word, seen) in observed) append("$word\t$seen\t${lastUse[word] ?: 0}\n")
+        }
+        val snapshot = PersonalStore.Snapshot(user, userPairs, userTriples, metadata)
+        val savedGeneration = generation
         dirty = false
         saveFailed = false
         return PersonalStore.submit {
-            try { snapshot.write(userFile, pairFile, tripleFile) }
+            try { if (PersonalStore.generation(directory) == savedGeneration) snapshot.write(userFile, pairFile, tripleFile, metadataFile) }
             catch (e: java.io.IOException) { saveFailed = true; throw e }
         }
     }
