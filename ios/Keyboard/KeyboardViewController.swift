@@ -944,7 +944,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             guard let self = self else { return }
             if active && self.insertTypingGrid == nil { self.insertTypingGrid = self.keyboard.grid.copy() }
             if active, let saved = self.insertTypingGrid {
-                let grid = saved.copy(); if UIDevice.current.userInterfaceIdiom != .pad || height > 56 { grid.setNumberRow(false) }; self.keyboard.grid = grid
+                let grid = saved.copy(); if UIDevice.current.userInterfaceIdiom != .pad || self.keyboard.bounds.width < 600 { grid.setNumberRow(false) }; self.keyboard.grid = grid
             } else if let saved = self.insertTypingGrid { self.keyboard.grid = saved; self.insertTypingGrid = nil }
             self.keyboard.insertStripHeight = height; self.keyboard.setOptionsCovered(!active); self.keyboard.alpha = active ? 1 : 0; self.keyboard.accessibilityElementsHidden = !active
         }

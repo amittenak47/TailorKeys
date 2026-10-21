@@ -128,7 +128,7 @@ class VoiceDraft(private val compose: (String) -> Unit, private val commit: (Str
     var text = ""; private set
     var active = false; private set
     fun start() { cancel(); text = ""; active = true }
-    fun partial(value: String) { if (active) { text = value; compose(value) } }
+    fun partial(value: String) { if (active) { val hadText=text.isNotEmpty(); text=value; if (hadText || value.isNotEmpty()) compose(value) } }
     fun finish(final: String = text) { if (active) { active = false; text = final; if (final.isNotBlank()) commit(final) else discard() } }
     fun cancel() { if (active) { active = false; discard() }; text = "" }
 }

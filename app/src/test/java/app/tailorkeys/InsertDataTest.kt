@@ -20,7 +20,7 @@ class InsertDataTest {
     @Test fun voicePartialsStopAndCancelOwnOnlyOneDraft() {
         val composed=mutableListOf<String>(); val committed=mutableListOf<String>(); var discards=0
         val voice=VoiceDraft({ composed.add(it) },{ committed.add(it) },{ discards++ })
-        voice.start(); voice.partial("see"); voice.partial("see you"); voice.finish(); voice.finish("late result")
+        voice.start(); voice.partial(""); assertTrue(composed.isEmpty()); voice.partial("see"); voice.partial("see you"); voice.finish(); voice.finish("late result")
         assertEquals(listOf("see","see you"),composed); assertEquals(listOf("see you"),committed)
         voice.start(); voice.partial("discard me"); voice.cancel(); voice.finish("late result")
         assertEquals(1,discards); assertEquals(listOf("see you"),committed)

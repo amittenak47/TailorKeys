@@ -483,7 +483,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
                     keyboard.setOptionsCovered(!active); keyboard.alpha = if (active) 1f else 0f
                     keyboard.importantForAccessibility = if (active) View.IMPORTANT_FOR_ACCESSIBILITY_YES else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
                     keyboard.insertStripHeight = (height * resources.displayMetrics.density).toInt()
-                    keyboard.grid = if (active && (resources.configuration.smallestScreenWidthDp < 600 || height > 56))
+                    keyboard.grid = if (active && (resources.configuration.smallestScreenWidthDp < 600 || keyboard.width / resources.displayMetrics.density < 600))
                         KeyGrid.fromJson(grid.toJson())!!.apply { setNumberRow(false) } else grid
                 }, pickIme = { pickVoiceIme() },
                 composeVoice = { text -> editorPhase {
@@ -495,6 +495,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
                 } },
                 finishVoice = { text -> editorPhase {
                     val connection = voiceConnection ?: currentInputConnection
+                    if (voiceConnection == null) connection?.finishComposingText()
                     connection?.commitText(text, 1); connection?.finishComposingText(); voiceConnection = null; editorRead = null; updateSuggestions()
                 } },
                 cancelVoice = { editorPhase {

@@ -35,6 +35,7 @@ internal class VoiceStopView(context: Context) : View(context) {
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
     private var level=0f; private var color=0; private var ink=0; private var running=false
     fun update(rms: Float, color: Int, ink: Int, running: Boolean) { level=(rms/10).coerceIn(0f,1f); this.color=color; this.ink=ink; this.running=running; invalidate() }
+    override fun getAccessibilityClassName(): CharSequence = android.widget.Button::class.java.name
     override fun onDraw(canvas: Canvas) {
         val d=resources.displayMetrics.density; val x=width/2f; val y=height/2f
         paint.color=color

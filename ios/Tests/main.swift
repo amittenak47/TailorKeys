@@ -864,3 +864,13 @@ do {
     check(!DictateHint.claimPulse(prefs, reduceMotion: true), "first reduced-motion visit pulsed")
     check(!DictateHint.claimPulse(prefs, reduceMotion: false), "suppressed hint replayed later")
 }
+
+do {
+    let full = String(repeating: "x", count: ClipboardStore.noteMax)
+    let unchanged = insertEditorText(full, "y", caret: 10, limit: ClipboardStore.noteMax)
+    check(unchanged.0 == full && unchanged.1 == 10, "typing at note limit evicted existing text")
+    let capped = insertEditorText(String(repeating: "x", count: 1999), "🙂🙂", caret: 1999, limit: ClipboardStore.noteMax)
+    check(capped.0.count == 2000 && capped.0.hasSuffix("🙂") && capped.1 == 2000, "note insertion split or exceeded a character")
+    check(insertEditorText("abc", "X", caret: 1, limit: 4).0 == "aXbc", "note insertion ignored caret")
+    check(InsertPrefs.kaomoji == "insert_kaomoji", "kaomoji preference contract changed")
+}

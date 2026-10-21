@@ -110,7 +110,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
             if (entry.text.isEmpty()) return HeaderLabel(context).apply {
                 text = entry.name; setTextColor(sub); textSize = 12f
                 contentDescription = entry.name; importantForAccessibility = if (entry.name.isEmpty()) IMPORTANT_FOR_ACCESSIBILITY_NO else IMPORTANT_FOR_ACCESSIBILITY_YES
-                layoutParams = AbsListView.LayoutParams(-1, dp(26))
+                layoutParams = AbsListView.LayoutParams(-1, dp(if (entry.keywords == "spacer") (if (tablet) 52 else 46) else 26))
             }
             val view = (convertView as? TextView)?.takeUnless { it is HeaderLabel } ?: label("")
             return view.apply {
@@ -162,9 +162,9 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
     private val fillHi get() = mix(palette.background, palette.text, .12f)
     private val hair get() = mix(palette.key, palette.text, .12f)
     private val sub get() = readable(palette.hint, fill)
-    private fun readable(color: Int, surface: Int): Int {
-        for (step in 0..100) { val c = mix(color, palette.text, step / 100f); if (app.tailorkeys.contrastRatio(c, surface) >= 4.5) return c }
-        return palette.text
+    private fun readable(color: Int, surface: Int, toward: Int = palette.text): Int {
+        for (step in 0..100) { val c = mix(color, toward, step / 100f); if (app.tailorkeys.contrastRatio(c, surface) >= 4.5) return c }
+        return toward
     }
     private fun label(text: String, size: Float = 14f) = TextView(context).apply { this.text = text; textSize = size; setTextColor(palette.text); gravity = Gravity.CENTER_VERTICAL }
     private fun shape(color: Int, stroke: Boolean = false, radius: Int = 12) = GradientDrawable().apply {
@@ -179,9 +179,17 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         setTextColor(palette.text); isSelected = selected; isFocusable = true; tooltipText = description
         setOnClickListener { action() }
     }
-    private fun tabShape(selected: Boolean): android.graphics.drawable.Drawable? = if (selected) shape(palette.key, radius = 9) else null
+    private fun icon(view: TextView, kind: String, color: Int, leading: Boolean = false) {
+        view.foreground = object : android.graphics.drawable.Drawable() {
+            private val drawable = InsertIcon(kind,color)
+            override fun draw(canvas: Canvas) { val size=dp(20); val x=if (leading) dp(18) else bounds.centerX(); val y=bounds.centerY(); drawable.setBounds(x-size/2,y-size/2,x+size/2,y+size/2); drawable.draw(canvas) }
+            override fun setAlpha(alpha: Int) = Unit
+            override fun setColorFilter(filter: android.graphics.ColorFilter?) = Unit
+            @Deprecated("Deprecated in Java") override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
+        }
+    }
     private fun categoryShape(selected: Boolean): android.graphics.drawable.Drawable? = if (selected) android.graphics.drawable.InsetDrawable(shape(fillHi, radius = 17), dp(if (section == "Emoji") (if (tablet) 7 else 5) else 0), dp(5), dp(if (section == "Emoji") (if (tablet) 7 else 5) else 0), dp(5)) else null
-    private fun bottomScroll(content: View) = HorizontalScrollView(context).apply {
+    private fun bottomScroll(content: View) = object : HorizontalScrollView(context) { override fun getLeftFadingEdgeStrength() = 0f }.apply {
         isHorizontalScrollBarEnabled = false; isFillViewport = tablet; isHorizontalFadingEdgeEnabled = !tablet; setFadingEdgeLength(dp(24)); addView(content)
     }
     private fun dismissOverlay() {
@@ -243,10 +251,10 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         renderedEditor = false
         if ((section == "Voice" && !repository.prefs.getBoolean(InsertPrefs.VOICE, true)) || (section == "Kaomoji" && !repository.prefs.getBoolean(InsertPrefs.KAOMOJI, true))) { section = "Emoji"; activeCategory = "Recent" }
         isClickable = true; clearBody(); setBackgroundColor(palette.background)
-        setPadding(dp(if (tablet) 12 else 4), dp(if (tablet) 10 else 6), dp(if (tablet) 12 else 4), dp(if (tablet) 4 else 2))
+        body.setPadding(dp(if (tablet) 12 else 4), dp(if (tablet) 10 else 6), dp(if (tablet) 12 else 4), dp(if (tablet) 4 else 2))
         body.layoutParams.height = -1
         val searchName = when (section) { "Kaomoji" -> "Search kaomoji"; "Clipboard" -> "Search clips and notes"; else -> "Search emoji" }
-        top.addView(button("⌕  $searchName", searchName) { if (section == "Voice") section = "Emoji"; startSearch() }.apply { background = shape(fill); gravity = Gravity.CENTER_VERTICAL; setTextColor(sub); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(8) })
+        top.addView(button(searchName, searchName) { if (section == "Voice") { voice.cancel(); listening=false; section = "Emoji" }; startSearch() }.apply { background = shape(fill); gravity = Gravity.CENTER_VERTICAL; setPadding(dp(36),0,dp(12),0); icon(this,"Search",sub,true); setTextColor(sub); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(8) })
         val switch = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; background = shape(fill) }
         sections.filter { it != "Voice" || repository.prefs.getBoolean(InsertPrefs.VOICE, true) }.filter { it != "Kaomoji" || repository.prefs.getBoolean(InsertPrefs.KAOMOJI, true) }.forEach { name ->
             val b = button(if (name == "Kaomoji") "^_^" else "", name, section == name) {
@@ -254,7 +262,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
             }
             b.minimumHeight = 0; b.background = if (section == name) android.graphics.drawable.InsetDrawable(shape(palette.key, radius = 9), dp(2), dp(3), dp(2), dp(3)) else null
             b.elevation = if (section == name) d else 0f
-            if (name != "Kaomoji") { b.setCompoundDrawables(null, InsertIcon(name, palette.text).apply { setBounds(0,0,dp(18),dp(18)) }, null, null); b.setPadding(0,dp(13),0,dp(13)) }
+            if (name != "Kaomoji") { b.setPadding(0,0,0,0); icon(b,name,palette.text) }
             sectionButtons[name] = b; switch.addView(b, LinearLayout.LayoutParams(dp(if (tablet) 56 else 44), dp(44)))
         }
         top.addView(switch, LinearLayout.LayoutParams(-2, dp(44)))
@@ -262,7 +270,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         body.addView(pages, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(if (tablet) 6 else 4); bottomMargin = dp(if (tablet) 6 else 4) })
         footer.addView(button("ABC", "Back to keys") { close() }, LinearLayout.LayoutParams(dp(if (tablet) 64 else 52), dp(44)))
         footer.addView(categories, LinearLayout.LayoutParams(0, dp(44), 1f))
-        footer.addView(button("⌫", "Backspace") { backspace() }, LinearLayout.LayoutParams(dp(if (tablet) 64 else 52), dp(44)))
+        footer.addView(button("", "Backspace") { backspace() }.apply { icon(this,"Backspace",palette.text) }, LinearLayout.LayoutParams(dp(if (tablet) 64 else 52), dp(44)))
         body.addView(footer, LinearLayout.LayoutParams(-1, dp(44)))
         when (section) { "Emoji", "Kaomoji" -> renderSymbols(); "Clipboard" -> renderClipboard(); "Voice" -> renderVoice() }
     }
@@ -274,7 +282,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
     private fun renderSymbols() {
         val all = if (section == "Emoji") cachedEmoji else kaomoji
         val cats = listOf("Recent") + if (section == "Emoji") categoryIcons.keys.toList() else all.map { it.category }.distinct()
-        val tabs = LinearLayout(context)
+        val tabs = LinearLayout(context).apply { gravity=Gravity.CENTER }
         cats.forEach { cat ->
             val names = listOf("Recent", "Smileys & Emotion", "People & Body", "Animals & Nature", "Food & Drink", "Travel & Places", "Activities", "Objects", "Symbols", "Flags")
             val icon = listOf("◷", "☺", "♙", "♧", "♨", "▱", "⚽", "♧", "♡", "⚑").getOrElse(names.indexOf(cat)) { cat }
@@ -285,7 +293,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
             }
             categoryButtons[cat] = b; tabs.addView(b, LinearLayout.LayoutParams(if (section == "Emoji") dp(if (tablet) 48 else 44) else -2, dp(44)))
             b.background = categoryShape(cat == activeCategory)
-            if (section == "Emoji") { b.text = ""; b.setCompoundDrawables(null, InsertIcon(if (cat == "Recent") "Recent" else categoryIcons.getValue(cat), if (cat == activeCategory) palette.text else sub).apply { setBounds(0,0,dp(18),dp(18)) }, null, null); b.setPadding(0,dp(13),0,dp(13)) }
+            if (section == "Emoji") { b.text=""; b.setPadding(0,0,0,0); icon(b,if (cat == "Recent") "Recent" else categoryIcons.getValue(cat),if (cat == activeCategory) palette.text else sub) }
         }
         categories.addView(bottomScroll(tabs), LinearLayout.LayoutParams(-1, dp(44)))
         if (section == "Emoji") {
@@ -302,7 +310,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         val out = ArrayList<InsertSymbol>()
         fun group(category: String, entries: List<InsertSymbol>) {
             if (entries.isEmpty()) return
-            while (out.size % cols != 0) out.add(InsertSymbol("", "", out.last().category))
+            while (out.size % cols != 0) out.add(InsertSymbol("", "", out.last().category, "spacer"))
             val title = when (category) { "Recent" -> "Frequently used"; "Smileys & Emotion" -> "Smileys & people"; "People & Body" -> "People"; "Animals & Nature" -> "Animals"; "Food & Drink" -> "Food"; "Travel & Places" -> "Travel"; else -> category }
             repeat(cols) { out.add(InsertSymbol("", if (it == 0) title else "", category)) }
             out.addAll(entries.map { it.copy(category = category) })
@@ -311,10 +319,12 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         cachedEmoji.groupBy { it.category }.forEach { (cat, entries) -> group(cat, entries) }
         return out
     }
-    private fun availableWidth() = ((width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels) - paddingLeft - paddingRight) / d
+    private fun availableWidth() = ((width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels) - body.paddingLeft - body.paddingRight) / d
     private fun markCategories() { categoryButtons.forEach { (name, b) ->
-        b.isSelected = name == activeCategory; b.background = categoryShape(b.isSelected); b.setTextColor(if (b.isSelected) palette.text else sub); b.setTypeface(b.typeface, if (b.isSelected) Typeface.BOLD else Typeface.NORMAL)
-        if (section == "Emoji") { b.setCompoundDrawables(null, InsertIcon(if (name == "Recent") "Recent" else categoryIcons.getValue(name), if (b.isSelected) palette.text else sub).apply { setBounds(0,0,dp(18),dp(18)) }, null, null) }
+        b.isSelected = name == activeCategory
+        if (b.isSelected && b.width > 0) b.requestRectangleOnScreen(android.graphics.Rect(0,0,b.width,b.height),true)
+        b.background = categoryShape(b.isSelected); b.setTextColor(if (b.isSelected) palette.text else sub); b.setTypeface(b.typeface, if (b.isSelected) Typeface.BOLD else Typeface.NORMAL)
+        if (section == "Emoji") icon(b,if (name == "Recent") "Recent" else categoryIcons.getValue(name),if (b.isSelected) palette.text else sub)
     } }
     private fun kaomojiWithRecents(): List<InsertSymbol> {
         val recent = (repository.pinned("Kaomoji").mapNotNull { kaomojiByText[it] } + recentSymbols("Kaomoji")).distinctBy { it.text }
@@ -332,7 +342,10 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
                 setOnLongClickListener { showMenu(this, actions); true }; accessibleActions(this, actions)
             }, ViewGroup.LayoutParams(-2, dp(44)))
         }
-        pages.addView(ScrollView(context).apply { addView(flow) }, LayoutParams(-1, -1))
+        val page=LinearLayout(context).apply { orientation=LinearLayout.VERTICAL }
+        page.addView(sectionHeader(activeCategory),LinearLayout.LayoutParams(-1,dp(26)))
+        page.addView(ScrollView(context).apply { addView(flow) },LinearLayout.LayoutParams(-1,0,1f))
+        pages.addView(page,LayoutParams(-1,-1))
     }
     private fun accessibleActions(view: View, actions: List<Pair<String, () -> Unit>>) {
         view.accessibilityDelegate = object : View.AccessibilityDelegate() {
@@ -383,14 +396,14 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         val point = IntArray(2); val origin = IntArray(2); anchor.getLocationOnScreen(point); getLocationOnScreen(origin)
         (toneLayer.layoutParams as LayoutParams).apply { width = cell * variants.size; leftMargin = (point[0]-origin[0]-width/2+anchor.width/2).coerceIn(0,(this@InsertPanel.width-width).coerceAtLeast(0)); topMargin = (point[1]-origin[1]-dp(90)).coerceAtLeast(0) }
         toneLayer.visibility = VISIBLE
-        anchor.parent.requestDisallowInterceptTouchEvent(true)
+        anchor.parent?.requestDisallowInterceptTouchEvent(true)
         anchor.setOnTouchListener { _, event ->
             if (event.actionMasked in listOf(MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP)) {
                 val loc = IntArray(2); row.getLocationOnScreen(loc)
                 val chosen = if (event.rawY >= loc[1] && event.rawY < loc[1]+row.height && event.rawX >= loc[0] && event.rawX < loc[0]+row.width) ((event.rawX-loc[0])/cell).toInt().takeIf { it in variants.indices } ?: -1 else -1
                 for (i in 0 until row.childCount) row.getChildAt(i).background = if (i == chosen || variants[i].index == default) shape(fillHi, variants[i].index == default) else null
-                if (event.actionMasked == MotionEvent.ACTION_UP) { if (chosen >= 0) use(variants[chosen].value); dismissOverlay(); anchor.setOnTouchListener(null); anchor.parent.requestDisallowInterceptTouchEvent(false) }
-            } else if (event.actionMasked == MotionEvent.ACTION_CANCEL) { dismissOverlay(); anchor.setOnTouchListener(null); anchor.parent.requestDisallowInterceptTouchEvent(false) }
+                if (event.actionMasked == MotionEvent.ACTION_UP) { if (chosen >= 0) use(variants[chosen].value); dismissOverlay(); anchor.setOnTouchListener(null); anchor.parent?.requestDisallowInterceptTouchEvent(false) }
+            } else if (event.actionMasked == MotionEvent.ACTION_CANCEL) { dismissOverlay(); anchor.setOnTouchListener(null); anchor.parent?.requestDisallowInterceptTouchEvent(false) }
             true
         }
         return true
@@ -403,11 +416,11 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         savedLayer?.let { inputState.layer = it; inputState.shift = savedShift; inputState.capsLock = savedCaps }
         savedLayer = null; session++
     }
-    private fun startSearch() { if (section == "Emoji") { gridPosition = grid.firstVisiblePosition; gridOffset = grid.getChildAt(0)?.top ?: 0 }; prepareKeys(); editor = "Search"; session++; renderEditor() }
-    private fun edit(item: ClipItem? = null, asNote: Boolean = true) {
+    private fun startSearch() { voice.cancel(); listening=false; if (section == "Emoji") { gridPosition = grid.firstVisiblePosition; gridOffset = grid.getChildAt(0)?.top ?: 0 }; prepareKeys(); editor = "Search"; session++; renderEditor() }
+    private fun edit(item: ClipItem? = null) {
         prepareKeys(); editingItem = item; editor = "Note"; session++
         val draft = noteDrafts[item?.id ?: "new"]
-        draftTitle = draft?.first ?: item?.let { if (asNote && !it.note) it.text.take(40) else it.title }.orEmpty()
+        draftTitle = draft?.first ?: item?.title.orEmpty()
         draftText = draft?.second ?: item?.text.orEmpty()
         renderEditor()
     }
@@ -422,7 +435,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         isClickable = false
         clearBody(); setBackgroundColor(android.graphics.Color.TRANSPARENT); body.layoutParams.height = -2
         val stripHeight = 94
-        setPadding(dp(if (tablet) 12 else 4),0,dp(if (tablet) 12 else 4),0)
+        body.setPadding(dp(if (tablet) 12 else 4),0,dp(if (tablet) 12 else 4),0)
         typing(true, stripHeight)
         val sheet = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(palette.background) }
         body.addView(sheet, LinearLayout.LayoutParams(-1, dp(stripHeight)))
@@ -453,12 +466,12 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
             titleField=null; textField=null
             val fields=LinearLayout(context)
             fun noteField(title: Boolean): View {
-                val limit=if (title) ClipboardStore.TITLE_MAX else ClipboardStore.NOTE_MAX
+                val limit=if (title) ClipboardStore.TITLE_MAX else editorLimit
                 val container=LinearLayout(context).apply { gravity=Gravity.CENTER_VERTICAL; setPadding(dp(12),0,dp(12),0); background=shape(fill) }
                 val caption=label(if (title) "Title" else "Text",12f).apply { setTextColor(sub) }
                 val counter=label("",12f).apply { setTextColor(sub); gravity=Gravity.CENTER_VERTICAL or Gravity.END }
                 if (title) titleCounter=counter else textCounter=counter
-                val value=input(if (title) draftTitle else draftText,"") { if (title) draftTitle=it else draftText=it; updateCounters() }.apply {
+                val value=input((if (title) draftTitle else draftText).take(limit),"") { if (title) draftTitle=it else draftText=it; updateCounters() }.apply {
                     filters=arrayOf(android.text.InputFilter.LengthFilter(limit)); contentDescription=if (title) "Note title" else "Note text"; isSingleLine=true
                     setOnFocusChangeListener { _, focused ->
                         container.background=shape(fill,focused); if (focused) { field=this; session++ }; updateCounters()
@@ -474,10 +487,11 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
             sheet.addView(fields,LinearLayout.LayoutParams(-1,dp(44)).apply { topMargin=dp(6) }); field=textField; textField?.requestFocus(); updateCounters()
         }
     }
+    private val editorLimit get() = if (editingItem?.note == false) ClipboardStore.CLIP_MAX else ClipboardStore.NOTE_MAX
     private fun updateCounters() {
         titleCounter?.text = if (titleField?.hasFocus() == true) "${draftTitle.length}/40" else ""
-        textCounter?.text = "${java.text.NumberFormat.getIntegerInstance(java.util.Locale.US).format(draftText.length)}/2,000"
-        textCounter?.setTextColor(if (draftText.length >= ClipboardStore.NOTE_MAX) danger else sub)
+        textCounter?.text = "${java.text.NumberFormat.getIntegerInstance(java.util.Locale.US).format(draftText.length)}/${java.text.NumberFormat.getIntegerInstance(java.util.Locale.US).format(editorLimit)}"
+        textCounter?.setTextColor(if (draftText.length >= editorLimit) readable(danger,fill) else sub)
     }
     private fun retainDraft() {
         draftTitle=titleField?.text?.toString() ?: draftTitle; draftText=textField?.text?.toString() ?: draftText
@@ -530,9 +544,9 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         if (newNote) addView(button("+ New", "Create note") { edit() }.apply { setTextColor(palette.smallAccent) }, LinearLayout.LayoutParams(-2,dp(44)))
     }
     private fun primary(text: String, action: () -> Unit) = button(text, action = action).apply { background = shape(palette.accent); setTextColor(palette.onAccent); setTypeface(typeface, Typeface.BOLD) }
-    private fun stateView(icon: String, title: String, message: String, actions: List<Pair<String, () -> Unit>> = emptyList()): View = LinearLayout(context).apply {
+    private fun stateView(iconName: String, title: String, message: String, actions: List<Pair<String, () -> Unit>> = emptyList()): View = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(16),dp(8),dp(16),dp(8))
-        addView(label("", 20f).apply { gravity = Gravity.CENTER; background = shape(fill, radius = 22); setCompoundDrawables(null, InsertIcon(icon, palette.text).apply { setBounds(0,0,dp(20),dp(20)) },null,null); setPadding(dp(12),dp(12),dp(12),dp(12)); importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }, LinearLayout.LayoutParams(dp(44),dp(44)))
+        addView(label("", 20f).apply { gravity=Gravity.CENTER; background=shape(fill,radius=22); icon(this,iconName,palette.text); importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO },LinearLayout.LayoutParams(dp(44),dp(44)))
         addView(label(title,17f).apply { gravity = Gravity.CENTER; setTypeface(typeface,Typeface.BOLD) }, LinearLayout.LayoutParams(-1,-2).apply { topMargin = dp(10); bottomMargin = dp(8) })
         addView(label(message,14f).apply { gravity = Gravity.CENTER; setTextColor(sub) }, LinearLayout.LayoutParams(-1,-2))
         val buttons = LinearLayout(context).apply { gravity = Gravity.CENTER }
@@ -604,8 +618,8 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
     private fun showUndo(item: ClipItem,store: ClipboardStore) {
         undoToast?.let { removeView(it) }
         val toast=LinearLayout(context).apply { gravity=Gravity.CENTER_VERTICAL; background=shape(palette.text,radius=14); setPadding(dp(16),0,dp(4),0); elevation=dp(8).toFloat() }
-        toast.addView(label("${if (item.note) "Note" else "Clip"} deleted",15f).apply { setTextColor(palette.background) },LinearLayout.LayoutParams(0,dp(48),1f))
-        toast.addView(button("Undo") { if (store.undo()) repository.change { it.restore(item) }; removeView(toast); if (undoToast === toast) undoToast=null; clipboardChanged() }.apply { setTextColor(readable(palette.accent,palette.text)); setTypeface(typeface,Typeface.BOLD) },LinearLayout.LayoutParams(-2,dp(48)))
+        toast.addView(label("${if (item.note) "Note" else "Clip"} deleted",15f).apply { setTextColor(palette.key) },LinearLayout.LayoutParams(0,dp(48),1f))
+        toast.addView(button("Undo") { if (store.undo()) repository.change { it.restore(item) }; removeView(toast); if (undoToast === toast) undoToast=null; clipboardChanged() }.apply { setTextColor(readable(palette.accent,palette.text,palette.key)); setTypeface(typeface,Typeface.BOLD) },LinearLayout.LayoutParams(-2,dp(48)))
         undoToast=toast; addView(toast,LayoutParams(minOf(width-dp(16),dp(400)),dp(48),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=dp(54) })
         postDelayed({ removeView(toast); if (undoToast === toast) undoToast=null },6_000)
     }
@@ -629,7 +643,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
             controls.addView(voiceButton,LinearLayout.LayoutParams(dp(96),dp(96)))
             controls.addView(View(context),LinearLayout.LayoutParams(dp(88),dp(1))); col.addView(controls,LinearLayout.LayoutParams(-2,dp(96)))
         }
-        pages.addView(col,LayoutParams(-1,-1))
+        pages.addView(ScrollView(context).apply { isFillViewport=true; addView(col) },LayoutParams(-1,-1))
         val start=startVoiceOnRender; val token=session; startVoiceOnRender=false
         if (start && voice.permitted && voice.available && (!voice.deviceOnly || voice.onDevice)) post { if (session == token && visibility == VISIBLE && section == "Voice" && editor == null && !listening) voice.start(settings.currentLanguage()) }
     }
@@ -644,7 +658,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
     }
 }
 
-/** Small variable-width chip layout; kaomoji retain their full text at 48dp height. */
+/** Variable-width chips retain their full text and 44dp touch height. */
 private class ChipFlow(context: Context, private val gap: Int) : ViewGroup(context) {
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec); var x = 0; var y = 0; var row = 0
@@ -663,5 +677,5 @@ private fun mix(a: Int, b: Int, fraction: Float): Int {
 }
 /** Empty header cells leave space for a single uninterrupted section title. */
 private class HeaderLabel(context: Context) : TextView(context) {
-    override fun onDraw(canvas: Canvas) { paint.color = currentTextColor; paint.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); canvas.drawText(text.toString().uppercase(), 0f, height - 6 * resources.displayMetrics.density, paint) }
+    override fun onDraw(canvas: Canvas) { paint.color = currentTextColor; paint.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); var x=0f; for (character in text.toString().uppercase()) { val glyph=character.toString(); canvas.drawText(glyph,x,height-6*resources.displayMetrics.density,paint); x+=paint.measureText(glyph)+.4f*resources.displayMetrics.scaledDensity } }
 }

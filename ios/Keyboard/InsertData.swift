@@ -174,3 +174,11 @@ enum DictateHint {
         return !seen && !reduceMotion
     }
 }
+
+/// Match Android's length filter: an insertion at the limit cannot evict existing trailing text.
+func insertEditorText(_ value: String, _ text: String, caret: Int, limit: Int) -> (String, Int) {
+    let position = max(0, min(caret, value.count))
+    let accepted = String(text.prefix(max(0, limit-value.count)))
+    var result = value; result.insert(contentsOf: accepted, at: result.index(result.startIndex, offsetBy: position))
+    return (result, position+accepted.count)
+}

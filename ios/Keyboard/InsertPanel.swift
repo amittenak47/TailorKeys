@@ -68,6 +68,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
     private var searchLabel: UIButton?
     private var titleLabel: UIButton?, textLabel: UIButton?
     private var resultScroll: UIScrollView?
+    private var kaomojiHeader: UILabel?
     private var categoryButtons: [String: UIButton] = [:]
     private var tonePopover: UIStackView?
     private var toneRow: UIStackView?
@@ -136,7 +137,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
     private var signature: String {
         "\(settings.themeID):\(CustomTheme.encode(settings.customThemes)):\(traitCollection.userInterfaceStyle.rawValue):\(settings.int(Prefs.cornerRadius)):\(repository.prefs.integer(forKey: InsertPrefs.tone)):\(repository.prefs.bool(forKey: InsertPrefs.history)):\(repository.keep.rawValue):\(repository.prefs.boolDefault(InsertPrefs.recents, true)):\(repository.recent("Emoji")):\(repository.recent("Kaomoji")):\(repository.prefs.data(forKey: "insert_clips")?.hashValue ?? 0):\(fullAccess()):\(repository.prefs.boolDefault(InsertPrefs.kaomoji, true))"
     }
-    private func reset() { bottom = nil; bottomContext = nil; main.arrangedSubviews.forEach { main.removeArrangedSubview($0); $0.removeFromSuperview() }; dismissOverlay(); tonePopover = nil; categoryButtons = [:]; setNeedsLayout() }
+    private func reset() { kaomojiHeader = nil; bottom = nil; bottomContext = nil; main.arrangedSubviews.forEach { main.removeArrangedSubview($0); $0.removeFromSuperview() }; dismissOverlay(); tonePopover = nil; categoryButtons = [:]; setNeedsLayout() }
     private func stack(_ axis: NSLayoutConstraint.Axis = .horizontal) -> UIStackView { let s = UIStackView(); s.axis = axis; s.spacing = 8; return s }
     private func button(_ title: String, label: String? = nil, selected: Bool = false, _ action: @escaping () -> Void) -> UIButton {
         let b = UIButton(type: .system); b.setTitle(title, for: .normal); b.accessibilityLabel = label ?? title
@@ -170,18 +171,19 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         a.getRed(&ar, green: &ag, blue: &ab, alpha: &aa); b.getRed(&br, green: &bg, blue: &bb, alpha: &ba)
         return UIColor(red: ar+(br-ar)*amount, green: ag+(bg-ag)*amount, blue: ab+(bb-ab)*amount, alpha: 1)
     }
-    private func readable(_ color: UIColor, on surface: UIColor) -> UIColor {
-        for step in 0...100 { let value = mix(color, palette.text, CGFloat(step)/100); if ThemeColors.contrast(ThemeColors.hex(value), ThemeColors.hex(surface)) >= 4.5 { return value } }; return palette.text
+    private func readable(_ color: UIColor, on surface: UIColor, toward: UIColor? = nil) -> UIColor {
+        let target = toward ?? palette.text
+        for step in 0...100 { let value = mix(color, target, CGFloat(step)/100); if ThemeColors.contrast(ThemeColors.hex(value), ThemeColors.hex(surface)) >= 4.5 { return value } }; return target
     }
     private func render() {
         if section == "Kaomoji" && !repository.prefs.boolDefault(InsertPrefs.kaomoji, true) { section = "Emoji"; category = "Recent"; mode = nil; onTyping?(false, 0) }
         renderedEditor = false; reset(); backgroundColor = palette.background; main.backgroundColor = .clear
         let top = stack(); top.heightAnchor.constraint(equalToConstant: 44).isActive = true
         let searchName = section == "Kaomoji" ? "Search kaomoji" : section == "Clipboard" ? "Search clips and notes" : "Search emoji"
-        let searchButton = button("?  " + searchName, label: searchName) { [weak self] in if self?.section == "Dictate" { self?.section = "Emoji" }; self?.search() }
-        searchButton.backgroundColor = fill; searchButton.setTitleColor(sub, for: .normal); searchButton.contentHorizontalAlignment = .leading; searchButton.titleLabel?.lineBreakMode = .byTruncatingTail; searchButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let searchButton = button("⌕  " + searchName, label: searchName) { [weak self] in if self?.section == "Dictate" { self?.section = "Emoji" }; self?.search() }
+        searchButton.backgroundColor = fill; searchButton.layer.borderWidth = 1; searchButton.layer.borderColor = palette.keyOutline.cgColor; searchButton.setTitleColor(sub, for: .normal); searchButton.contentHorizontalAlignment = .leading; searchButton.titleLabel?.lineBreakMode = .byTruncatingTail; searchButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         top.addArrangedSubview(searchButton)
-        let sections = stack(); sections.spacing = 0; sections.backgroundColor = fill; sections.layer.cornerRadius = 12
+        let sections = stack(); sections.spacing = 0; sections.backgroundColor = fill; sections.layer.cornerRadius = 12; sections.layer.borderWidth = 1; sections.layer.borderColor = palette.keyOutline.cgColor
         for (i, name) in ["Emoji", "Kaomoji", "Clipboard", "Dictate"].enumerated() {
             if name == "Kaomoji" && !repository.prefs.boolDefault(InsertPrefs.kaomoji, true) { continue }
             let b = button(i == 1 ? "^_^" : "", label: name, selected: section == name) { [weak self] in
@@ -237,7 +239,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
     }
     private func renderSymbols() {
         let all = section == "Emoji" ? (emojiReady ? InsertAssets.renderable : []) : InsertAssets.kaomoji
-        let tabs = stack()
+        let tabs = stack(); tabs.spacing = 0
         var cats = ["Recent"]; if section == "Emoji" { cats += ["Smileys & Emotion", "People & Body", "Animals & Nature", "Food & Drink", "Travel & Places", "Activities", "Objects", "Symbols", "Flags"] } else { for entry in all where !cats.contains(entry.category) { cats.append(entry.category) } }
         for (i, cat) in cats.enumerated() {
             let icons = ["◷", "☺", "♙", "♧", "♨", "▱", "⚽", "♧", "♡", "⚑"]
@@ -246,7 +248,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
                 if self.section == "Emoji" {
                     let index = cat == "Recent" ? 0 : self.symbols.firstIndex(where: { $0.category == cat }) ?? 0
                     if self.symbols.indices.contains(index) { self.collection.scrollToItem(at: IndexPath(item: index, section: 0), at: .top, animated: !UIAccessibility.isReduceMotionEnabled) }; self.markCategories()
-                } else { self.symbols = cat == "Recent" ? self.kaomojiWithRecents() : all.filter { $0.category == cat }; self.collection.reloadData(); self.markCategories() }
+                } else { self.symbols = cat == "Recent" ? self.kaomojiWithRecents() : all.filter { $0.category == cat }; self.collection.reloadData(); self.kaomojiHeader?.text = cat.uppercased(); self.markCategories() }
             }
             if section == "Emoji" {
                 let names = ["clock", "face.smiling", "person", "pawprint", "cup.and.saucer", "car", "sportscourt", "lightbulb", "heart", "flag"]
@@ -257,6 +259,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         let tabScroll = scroll(tabs, horizontal: true)
         symbols = section == "Emoji" ? emojiCells() : category == "Recent" ? kaomojiWithRecents() : all.filter { $0.category == category }
         flow.wrapping = section == "Kaomoji"; flow.minimumLineSpacing = section == "Kaomoji" ? 8 : 0; flow.minimumInteritemSpacing = section == "Kaomoji" ? 8 : 0
+        if section == "Kaomoji" { let header = label(category.uppercased(), size: 12); header.font = .systemFont(ofSize: 12, weight: .semibold); header.textColor = sub; header.heightAnchor.constraint(equalToConstant: 26).isActive = true; kaomojiHeader = header; main.addArrangedSubview(header); main.setCustomSpacing(0, after: header) }
         collection.removeFromSuperview(); main.addArrangedSubview(collection); collection.reloadData(); makeBottom(tabScroll)
     }
     private func emojiCells() -> [InsertSymbol] {
@@ -273,7 +276,10 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         for cat in cats { group(cat, (emojiReady ? InsertAssets.renderable : []).filter { $0.category == cat }) }; return result
     }
     private func markCategories() {
-        for (cat, b) in categoryButtons { styleTab(b, selected: cat == category, category: true) }
+        for (cat, b) in categoryButtons {
+            styleTab(b, selected: cat == category, category: true)
+            if cat == category, let scroll = b.superview?.superview as? UIScrollView { scroll.scrollRectToVisible(b.convert(b.bounds, to: scroll), animated: false) }
+        }
     }
     private func shown(_ entry: InsertSymbol) -> InsertSymbol {
         guard emojiReady else { return entry }
@@ -284,7 +290,8 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "symbol", for: indexPath) as! SymbolCell
         let entry = section == "Emoji" ? shown(symbols[indexPath.item]) : symbols[indexPath.item]
-        cell.clipsToBounds = false; cell.contentView.clipsToBounds = false; cell.text.text = entry.text.isEmpty ? entry.name.uppercased() : entry.text; cell.header = entry.text.isEmpty; cell.text.font = .systemFont(ofSize: entry.text.isEmpty ? 12 : section == "Emoji" ? (tablet ? 32 : 28) : (tablet ? 17 : 16)); cell.text.textColor = palette.text
+        cell.clipsToBounds = false; cell.contentView.clipsToBounds = false; cell.text.text = entry.text.isEmpty ? entry.name.uppercased() : entry.text; cell.header = entry.text.isEmpty; cell.text.font = .systemFont(ofSize: entry.text.isEmpty ? 12 : section == "Emoji" ? (tablet ? 32 : 28) : (tablet ? 17 : 16)); cell.text.textColor = entry.text.isEmpty ? sub : palette.text
+        if entry.text.isEmpty { cell.text.attributedText = NSAttributedString(string: entry.name.uppercased(), attributes: [.kern: 0.4, .font: UIFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: sub]) }
         cell.backgroundColor = section == "Emoji" ? .clear : palette.key; cell.layer.cornerRadius = 12
         cell.layer.borderWidth = section == "Emoji" || entry.text.isEmpty ? 0 : 1; cell.layer.borderColor = palette.keyOutline.cgColor
         cell.isAccessibilityElement = !entry.text.isEmpty || !entry.name.isEmpty; cell.accessibilityLabel = entry.name; cell.accessibilityTraits = entry.text.isEmpty ? .header : .button
@@ -303,7 +310,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         return CGSize(width: min(collectionView.bounds.width, max(64, ceil(w))), height: 44)
     }
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        if scrollView === collection, section == "Emoji", let index = collection.indexPathsForVisibleItems.min(by: { $0.item < $1.item }), symbols.indices.contains(index.item) {
+        if scrollView === collection, section == "Emoji", let index = collection.indexPathsForVisibleItems.min(by: { $0.item < $1.item }), symbols.indices.contains(index.item), category != symbols[index.item].category {
             category = symbols[index.item].category; markCategories()
         }
     }
@@ -315,7 +322,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         let which = section
         repository.insertSymbol(which, entry) { [weak self] in self?.onInsert?($0) }
         guard mode == nil, section == which else { return }
-        category = "Recent"; markCategories()
+        category = "Recent"; kaomojiHeader?.text = category.uppercased(); markCategories()
         symbols = which == "Emoji" ? emojiCells() : kaomojiWithRecents()
         collection.reloadData(); collection.setContentOffset(.zero, animated: false)
     }
@@ -432,6 +439,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         NSLayoutConstraint.activate([caption.leadingAnchor.constraint(equalTo: b.leadingAnchor, constant: 12), caption.centerYAnchor.constraint(equalTo: b.centerYAnchor), counter.trailingAnchor.constraint(equalTo: b.trailingAnchor, constant: -12), counter.centerYAnchor.constraint(equalTo: b.centerYAnchor)])
         return b
     }
+    private func number(_ value: Int) -> String { let format = NumberFormatter(); format.locale = Locale(identifier: "en_US"); format.numberStyle = .decimal; return format.string(from: NSNumber(value: value)) ?? String(value) }
     private func caretTitle(_ text: String, focused: Bool) -> NSAttributedString {
         let display = focused ? withCaret(text) : text
         let result = NSMutableAttributedString(string: display, attributes: [.foregroundColor: palette.text, .font: UIFont.systemFont(ofSize: 15)])
@@ -444,7 +452,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
                 b.setAttributedTitle(caretTitle(text, focused: focused), for: .normal); b.accessibilityValue = text
                 b.layer.borderWidth = focused ? 2 : 1; b.layer.borderColor = (focused ? palette.accent : palette.keyOutline).cgColor
                 let counter = b.viewWithTag(602) as? UILabel
-                counter?.text = title ? (focused ? "\(text.count)/40" : "") : "\(text.count.formatted(.number.grouping(.automatic)))/\(editorLimit.formatted(.number.grouping(.automatic)))"
+                counter?.text = title ? (focused ? "\(text.count)/40" : "") : "\(number(text.count))/\(number(editorLimit))"
                 counter?.textColor = !title && text.count >= editorLimit ? readable(danger, on: fill) : sub
                 b.contentEdgeInsets = UIEdgeInsets(top: 0, left: title ? 48 : 44, bottom: 0, right: title ? (focused ? 56 : 12) : 90)
             }; return
@@ -468,8 +476,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         guard acceptsText else { return false }
         var value = mode == "Search" ? query : titleFocused ? draftTitle : draftText
         let limit = mode == "Search" ? Int.max : titleFocused ? ClipboardStore.titleMax : editorLimit
-        let accepted = String(text.prefix(max(0, limit-value.count)))
-        let index = value.index(value.startIndex, offsetBy: min(caret, value.count)); value.insert(contentsOf: accepted, at: index); caret += accepted.count
+        let changed = insertEditorText(value, text, caret: caret, limit: limit); value = changed.0; caret = changed.1
         if mode == "Search" { query = value } else if titleFocused { draftTitle = value } else { draftText = value }
         caret = min(caret, (mode == "Search" ? query : titleFocused ? draftTitle : draftText).count); updateEditor(); return true
     }
@@ -496,17 +503,17 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         row.heightAnchor.constraint(equalToConstant: new ? 44 : 30).isActive = true; return row
     }
     private func stateView(_ icon: String, _ title: String, _ message: String, actions: [(String, () -> Void)] = []) -> UIView {
-        let holder = UIView(), content = stack(.vertical); content.alignment = .center; content.spacing = 10
+        let holder = UIScrollView(), area = UIView(), content = stack(.vertical); content.alignment = .center; content.spacing = 10
         let circle = UIView(); circle.backgroundColor = fill; circle.layer.cornerRadius = 22
         circle.widthAnchor.constraint(equalToConstant: 44).isActive = true; circle.heightAnchor.constraint(equalToConstant: 44).isActive = true
         let image = UIImageView(image: UIImage(systemName: icon)); image.tintColor = palette.text; image.contentMode = .scaleAspectFit; image.frame = CGRect(x: 12, y: 12, width: 20, height: 20); circle.addSubview(image); image.isAccessibilityElement = false
         content.addArrangedSubview(circle)
         let heading = label(title, size: 17); heading.font = .systemFont(ofSize: 17, weight: .semibold); heading.textAlignment = .center; content.addArrangedSubview(heading)
         let body = label(message, size: 14); body.textColor = sub; body.textAlignment = .center; content.addArrangedSubview(body)
-        let buttons = stack()
+        let buttons = stack(); buttons.tag = 620
         for (i, action) in actions.enumerated() { let b = button(action.0, action.1); b.backgroundColor = i == 0 ? palette.accent : fill; b.setTitleColor(i == 0 ? palette.onAccent : palette.text, for: .normal); buttons.addArrangedSubview(b) }; content.addArrangedSubview(buttons)
-        holder.addSubview(content); content.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([content.centerXAnchor.constraint(equalTo: holder.centerXAnchor), content.centerYAnchor.constraint(equalTo: holder.centerYAnchor), content.widthAnchor.constraint(lessThanOrEqualTo: holder.widthAnchor, constant: -24), content.topAnchor.constraint(greaterThanOrEqualTo: holder.topAnchor), content.bottomAnchor.constraint(lessThanOrEqualTo: holder.bottomAnchor)])
+        holder.addSubview(area); area.translatesAutoresizingMaskIntoConstraints = false; area.addSubview(content); content.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([area.leadingAnchor.constraint(equalTo: holder.contentLayoutGuide.leadingAnchor), area.trailingAnchor.constraint(equalTo: holder.contentLayoutGuide.trailingAnchor), area.topAnchor.constraint(equalTo: holder.contentLayoutGuide.topAnchor), area.bottomAnchor.constraint(equalTo: holder.contentLayoutGuide.bottomAnchor), area.widthAnchor.constraint(equalTo: holder.frameLayoutGuide.widthAnchor), area.heightAnchor.constraint(greaterThanOrEqualTo: holder.frameLayoutGuide.heightAnchor), content.centerXAnchor.constraint(equalTo: area.centerXAnchor), content.centerYAnchor.constraint(equalTo: area.centerYAnchor), content.widthAnchor.constraint(lessThanOrEqualTo: area.widthAnchor, constant: -24), content.topAnchor.constraint(greaterThanOrEqualTo: area.topAnchor, constant: 8), content.bottomAnchor.constraint(lessThanOrEqualTo: area.bottomAnchor, constant: -8)])
         return holder
     }
     private func settingsButton(_ title: String, system: Bool = false) -> UIButton {
@@ -548,10 +555,10 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
             switch state {
             case .historyOff:
                 let content = stateView("doc.on.clipboard", "Clipboard history is off", "Notes still work: they are your own text, not history.", actions: [("Turn on", { [weak self] in self?.repository.prefs.set(true, forKey: InsertPrefs.history); self?.render() })])
-                if let buttons = (content.subviews.first as? UIStackView)?.arrangedSubviews.last as? UIStackView { buttons.addArrangedSubview(settingsButton("Settings")) }; view = content
+                if let buttons = content.viewWithTag(620) as? UIStackView { buttons.addArrangedSubview(settingsButton("Settings")) }; view = content
             case .accessRequired:
                 let content = stateView("lock", "Turn on Full Access", "iOS only shares the clipboard with Full Access. Notes still work.")
-                if let buttons = (content.subviews.first as? UIStackView)?.arrangedSubviews.last as? UIStackView { let b = settingsButton("Open Settings", system: true); b.backgroundColor = palette.accent; b.setTitleColor(palette.onAccent, for: .normal); buttons.addArrangedSubview(b) }; view = content
+                if let buttons = content.viewWithTag(620) as? UIStackView { let b = settingsButton("Open Settings", system: true); b.backgroundColor = palette.accent; b.setTitleColor(palette.onAccent, for: .normal); buttons.addArrangedSubview(b) }; view = content
             case .firstUse:
                 view = stateView("lock", "Your clipboard, kept on this device", "Copied text shows here and clears after " + repository.keep.title + ". Pins and notes stay until you remove them. Password fields are never kept.", actions: [("Got it", { [weak self] in self?.repository.prefs.set(true, forKey: "insert_first_use"); self?.render() })])
             case .empty: view = stateView("doc.on.clipboard", "Nothing copied yet", "Paste from clipboard to add copied text.")
@@ -597,8 +604,8 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
     private func showUndo(_ item: ClipItem, _ store: ClipboardStore) {
         viewWithTag(610)?.removeFromSuperview()
         let toast = stack(); toast.tag = 610; toast.alignment = .center; toast.backgroundColor = palette.text; toast.layer.cornerRadius = 14; toast.layer.shadowOpacity = 0.15; toast.layer.shadowRadius = 8
-        let caption = label((item.note ? "Note" : "Clip") + " deleted", size: 15); caption.textColor = palette.background; toast.addArrangedSubview(caption)
-        let undo = button("Undo") { [weak self, weak toast] in guard let self = self else { return }; if store.undo() { self.repository.change { $0.restore(item) } }; toast?.removeFromSuperview(); self.render() }; undo.setTitleColor(readable(palette.accent, on: palette.text), for: .normal); toast.addArrangedSubview(undo)
+        let caption = label((item.note ? "Note" : "Clip") + " deleted", size: 15); caption.textColor = palette.key; toast.addArrangedSubview(caption)
+        let undo = button("Undo") { [weak self, weak toast] in guard let self = self else { return }; if store.undo() { self.repository.change { $0.restore(item) } }; toast?.removeFromSuperview(); self.render() }; undo.setTitleColor(readable(palette.accent, on: palette.text, toward: palette.key), for: .normal); toast.addArrangedSubview(undo)
         toast.isLayoutMarginsRelativeArrangement = true; toast.layoutMargins = UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 4)
         toast.frame = CGRect(x: max(8, bounds.midX-200), y: bounds.height-100, width: min(400,bounds.width-16), height: 48); addSubview(toast)
         DispatchQueue.main.asyncAfter(deadline: .now()+6) { [weak toast] in toast?.removeFromSuperview() }
@@ -614,7 +621,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         message.addArrangedSubview(heading); message.addArrangedSubview(explanation)
         message.isAccessibilityElement = true; message.accessibilityLabel = title + ". " + body; message.accessibilityTraits = .staticText
         content.addSubview(message); message.translatesAutoresizingMaskIntoConstraints = false
-        let arrow = DictateArrow(); arrow.ink = sub; arrow.isAccessibilityElement = false; arrow.isUserInteractionEnabled = false; arrow.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(arrow)
+        let arrow = DictateArrow(); arrow.isOpaque = false; arrow.backgroundColor = .clear; arrow.ink = sub; arrow.isAccessibilityElement = false; arrow.isUserInteractionEnabled = false; arrow.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(arrow)
         NSLayoutConstraint.activate([message.centerXAnchor.constraint(equalTo: content.centerXAnchor), message.centerYAnchor.constraint(equalTo: content.centerYAnchor), message.widthAnchor.constraint(lessThanOrEqualToConstant: 320), message.widthAnchor.constraint(lessThanOrEqualTo: content.widthAnchor, constant: -32), arrow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20), arrow.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -6), arrow.widthAnchor.constraint(equalToConstant: 40), arrow.heightAnchor.constraint(equalToConstant: 40)])
         main.addArrangedSubview(content)
         if DictateHint.claimPulse(UserDefaults.standard, reduceMotion: UIAccessibility.isReduceMotionEnabled) {
@@ -645,7 +652,7 @@ private final class FadingInsertScrollView: UIScrollView {
     private let fade = CAGradientLayer()
     override func layoutSubviews() {
         super.layoutSubviews()
-        guard contentSize.width > bounds.width else { layer.mask = nil; return }
+        guard contentSize.width > bounds.maxX+1 else { layer.mask = nil; return }
         fade.frame = bounds
         let edge = min(1, 24 / max(1, bounds.width))
         fade.colors = [UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor]
@@ -656,20 +663,28 @@ private final class FadingInsertScrollView: UIScrollView {
 
 private final class InsertFlowLayout: UICollectionViewFlowLayout {
     var wrapping = false
-    override func layoutAttributesForElements(in rect: CGRect) -> [UICollectionViewLayoutAttributes]? {
-        guard let original = super.layoutAttributesForElements(in: rect) else { return nil }
-        guard wrapping else { return original }
-        let attributes = original.map { $0.copy() as! UICollectionViewLayoutAttributes }
+    private var wrapped: [IndexPath: UICollectionViewLayoutAttributes] = [:]
+    override func prepare() {
+        super.prepare(); wrapped.removeAll()
+        guard wrapping, let collection = collectionView else { return }
         var x: CGFloat = 0, row: CGFloat = -1
-        for item in attributes where item.representedElementCategory == .cell {
-            if item.frame.minY != row { row = item.frame.minY; x = 0 }; item.frame.origin.x = x; x += item.frame.width + 8
-        }; return attributes
+        for index in 0..<collection.numberOfItems(inSection: 0) {
+            let path = IndexPath(item: index, section: 0)
+            guard let item = super.layoutAttributesForItem(at: path)?.copy() as? UICollectionViewLayoutAttributes else { continue }
+            if item.frame.minY != row { row = item.frame.minY; x = 0 }
+            item.frame.origin.x = x; x += item.frame.width+8; wrapped[path] = item
+        }
     }
+    override func layoutAttributesForElements(in rect: CGRect) -> [UICollectionViewLayoutAttributes]? {
+        wrapping ? wrapped.values.filter { $0.frame.intersects(rect) } : super.layoutAttributesForElements(in: rect)
+    }
+    override func layoutAttributesForItem(at indexPath: IndexPath) -> UICollectionViewLayoutAttributes? { wrapping ? wrapped[indexPath] : super.layoutAttributesForItem(at: indexPath) }
 }
 
 private final class InsertHoldGesture: UILongPressGestureRecognizer {
     private let held: () -> Void
     init(_ held: @escaping () -> Void) { self.held = held; super.init(target: nil, action: nil); addTarget(self, action: #selector(invoke)) }
+    required init?(coder: NSCoder) { fatalError("init(coder:)") }
     @objc private func invoke() { if state == .began { held() } }
 }
 
