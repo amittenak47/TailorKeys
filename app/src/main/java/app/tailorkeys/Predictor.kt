@@ -411,8 +411,35 @@ class Predictor internal constructor(
     fun chordWords(): List<String> = base.take(20_000)
 
     // Read-only gesture inputs; tap ranking and its caches remain unchanged.
+    fun hasWord(word: String): Boolean = rank.containsKey(word.lowercase()) || user.containsKey(word.lowercase())
     fun gestureWords(): List<String> = base
     fun gestureUserWords(): Set<String> = user.keys.toSet()
+    class GestureScoring(val words: Set<String>, val frequency: (String) -> Double,
+                         val context: (String?, String) -> Double)
+    /** Capture mutable learning once per gesture; decoder workers never read tap caches or live maps. */
+    fun gestureScoring(): GestureScoring {
+        val words = user.toMap()
+        val pairs = userPairs.mapValues { it.value.toMap() }
+        val triples = userTriples.mapValues { it.value.toMap() }
+        val tables = seedTables
+        fun personal(word: String, prev: String?, prev2: String?): Double {
+            val pair = pairs[prev]?.get(word) ?: 0
+            val triple = if (prev != null && prev2 != null) triples["$prev2\t$prev"]?.get(word) ?: 0 else 0
+            return ln(1.0 + (words[word] ?: 0) * .05 * ((rank[word] ?: 5000) + 10)) +
+                2.25 * ln(1.0 + pair) + 2.7 * ln(1.0 + triple)
+        }
+        return GestureScoring(words.keys, { word ->
+            val corpus = rank[word]?.let { tables?.frequencies?.getOrNull(it) } ?: 0.0
+            1.0 / ((rank[word] ?: 5000) + 10) + .2 * corpus + (words[word] ?: 0) * .05
+        }, { prev, word ->
+            english?.withScores { scores ->
+                scores?.let { it.probability(word, rank[word]) + personal(word, prev, it.previous2) }
+            } ?: run {
+                val row = rank[prev]?.let { tables?.pairs?.get(it.toLong()) }
+                1.5 * (ln(1.0 + count(row, rank[word])) + 1.5 * ln(1.0 + (pairs[prev]?.get(word) ?: 0)))
+            }
+        })
+    }
     fun gestureFrequency(word: String): Double = frequency(word)
     /** The previous-word part of the suggestion score, for ranking swiped words the same way. */
     fun contextScore(prev: String?, word: String): Double {

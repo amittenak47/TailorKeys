@@ -51,9 +51,13 @@ object Prefs {
     val CURSOR_GLOW = BoolPref("cursor_glow", false)
     val SPACE_ACCEPTS = BoolPref("space_accepts", true)
     val AUTO_CAP = BoolPref("auto_cap", true)
+    // Retain the old key as the child of Automatic punctuation; existing choices migrate unchanged.
     val DOUBLE_SPACE_PERIOD = BoolPref("double_space_period", true)
     val HAPTICS = BoolPref("haptics", true)
     val KEY_TINT = BoolPref("key_tint", true)
+    val SWIPE_LETTERS = BoolPref("swipe_letters", false)
+    val AUTOMATIC_SPACE = BoolPref("automatic_space", true)
+    val AUTOMATIC_PUNCTUATION = BoolPref("automatic_punctuation", true)
     val SWIPE_TYPING = BoolPref("swipe_typing", true)
     val CHORDING = BoolPref("chording", false)
     val SMART_TARGETS = BoolPref("smart_targets", true)

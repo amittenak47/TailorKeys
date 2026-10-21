@@ -68,7 +68,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         fun onWheelChosen() {}
         fun onChoiceInterrupted() {}
         fun onSuggestion(text: String)
-        fun onGlide(points: List<GestureDecoder.Point>, keys: Map<Char, GestureDecoder.Point>, keyWidth: Float) {}
+        fun onGlideStart() {}
+        fun onGlideProgress(points: List<GestureDecoder.Point>, keys: Map<Char, GestureDecoder.Point>, keyWidth: Float, raw: String, hints: List<GestureDecoder.DoubleHint>) {}
+        fun onGlideCancel() {}
+        fun onGlide(points: List<GestureDecoder.Point>, keys: Map<Char, GestureDecoder.Point>, keyWidth: Float, raw: String, hints: List<GestureDecoder.DoubleHint>) {}
         fun onSwitchLanguage(direction: Int) {}
         fun onPickIme()
         fun onCursor(steps: Int, select: Boolean) {}
@@ -970,6 +973,18 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun drawGlide(canvas: Canvas, now: Long) {
+        val age = now - dwellDotAt
+        if (age in 0..249) {
+            val centre = letterCentres[dwellDotLetter]
+            if (centre != null) {
+                fill.color = palette.accent
+                val opacity = if (reducedMotion) .6f else .6f * (1f - kotlin.math.abs(age / 125f - 1f))
+                fill.alpha = (255 * opacity).toInt()
+                canvas.drawCircle(centre.x, centre.y, 4 * density, fill)
+                fill.alpha = 255
+                if (!reducedMotion) postInvalidateOnAnimation()
+            }
+        }
         val points = trail
         if (points.size < 2) return
         stroke.color = palette.accent
@@ -1482,6 +1497,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         var glideEligible = false
         var glideWidth = 1f
         val points = ArrayList<GestureDecoder.Point>()
+        var trace: SwipeTrace? = null
+        var glideX = 0f; var glideY = 0f
+        var liveAt = Long.MIN_VALUE
+        var publishedPoints = -1; var publishedHints = -1
+        var glideTick: Runnable? = null
         var wheel: Wheel? = null
         val longPress = Runnable { onLongPress(this) }
         val repeat: Runnable = object : Runnable {
@@ -1503,6 +1523,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val clearChordHighlight = Runnable { chordLit.fill(false); invalidate() }
     private var glideId: Int? = null
     private var trail: List<GestureDecoder.Point> = emptyList()
+    private var dwellDotLetter = ' '
+    private var dwellDotAt = Long.MIN_VALUE
 
     private val gapPresses = GapPresses()
     private val cursorFrame = object : Runnable {
@@ -1551,9 +1573,12 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         dismissPopup()
         trackers.values.forEach { stopTimers(it); it.pk?.let { pk -> pk.presses-- }; if (it.select) listener?.onSelectMode(false) }
         cursorTracker = null
+        for (t in trackers.values) t.glideTick?.let { timers.removeCallbacks(it) }
         trackers.clear()
+        if (glideId != null) listener?.onGlideCancel()
         glideId = null
         trail = emptyList()
+        dwellDotAt = Long.MIN_VALUE
         swipe = null
         drag = null
         invalidate()
@@ -1672,7 +1697,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         t.x0 = x; t.y0 = y; t.glideWidth = pk.rect.width()
         t.glideEligible = !settings.bool(Prefs.TYPE_ON_PRESS) && glideAllowed && settings.bool(Prefs.SWIPE_TYPING) && state.layer == Layer.ABC &&
             pk.item.keys[0].let { it.length == 1 && it[0].isLetter() }
-        if (t.glideEligible) t.points.add(GestureDecoder.Point(x, y, time))
+        if (t.glideEligible) {
+            t.glideX = x; t.glideY = y
+            t.points.add(GestureDecoder.Point(x, y, time))
+        }
         trackers[id] = t
         if (chordKey != null) {
             t.deferredHaptic = true
@@ -1694,9 +1722,27 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         if (!t.glideEligible || t.consumed && glideId != id) return false
         if (glideId != null && glideId != id) return true
         t.points.add(GestureDecoder.Point(x, y, time))
+        t.glideX = x; t.glideY = y
+        t.trace?.sample(x, y, time, t.points.lastIndex)
         if (glideId == null && hypot(x - t.x0, y - t.y0) > 1.0f * t.glideWidth) {
             chordTouches.cancel()
             glideId = id
+            val trace = SwipeTrace(letterCentres, letterWidth)
+            t.trace = trace
+            for (i in t.points.indices) { val p = t.points[i]; trace.sample(p.x, p.y, p.time, i) }
+            listener?.onGlideStart()
+            val tick = object : Runnable {
+                override fun run() {
+                    if (glideId != id || trackers[id] !== t) return
+                    val now = SystemClock.uptimeMillis()
+                    val oldDot = trace.dotAt
+                    trace.sample(t.glideX, t.glideY, now, t.points.lastIndex)
+                    publishGlide(t, now)
+                    if (oldDot != trace.dotAt) invalidate()
+                    timers.postDelayed(this, 20)
+                }
+            }
+            t.glideTick = tick; timers.postDelayed(tick, 20)
             stopTimers(t)
             t.consumed = true
             // Existing held controls must not fire on release during this word gesture.
@@ -1709,8 +1755,20 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             }
             swipe = null
         }
-        if (glideId == id) { trail = t.points; invalidate(); return true }
+        if (glideId == id) { trail = t.points; publishGlide(t, time); invalidate(); return true }
         return false
+    }
+
+    private fun publishGlide(t: Tracker, now: Long) {
+        val trace = t.trace
+        if (trace != null && trace.dotAt != dwellDotAt) {
+            dwellDotLetter = trace.dotLetter; dwellDotAt = trace.dotAt
+            if (reducedMotion && dwellDotAt != Long.MIN_VALUE) postInvalidateDelayed((250 - (SystemClock.uptimeMillis() - dwellDotAt)).coerceAtLeast(1))
+        }
+        if (t.liveAt != Long.MIN_VALUE && now - t.liveAt < 50) return
+        if (t.publishedPoints == t.points.size && t.publishedHints == (trace?.hints?.size ?: 0)) return
+        t.liveAt = now; t.publishedPoints = t.points.size; t.publishedHints = trace?.hints?.size ?: 0
+        listener?.onGlideProgress(t.points, letterCentres, letterWidth, t.trace?.text().orEmpty(), t.trace?.hints.orEmpty())
     }
 
     private fun pointerMove(id: Int, x: Float, y: Float, time: Long) {
@@ -1804,9 +1862,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             return
         }
         if (glideId == id) {
+            t.glideTick?.let { timers.removeCallbacks(it) }; t.glideTick = null
             glideId = null
             if (reducedMotion) trail = emptyList()
-            listener?.onGlide(t.points.toList(), letterCentres, letterWidth)
+            listener?.onGlide(t.points, letterCentres, letterWidth, t.trace?.text().orEmpty(), t.trace?.hints.orEmpty())
             invalidate()
             return
         }

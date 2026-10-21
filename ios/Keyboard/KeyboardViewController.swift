@@ -98,12 +98,52 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func synchronizeDocument() {
         guard modelDocument != document.identifier else { return }
         lastSpace = 0; lastAbcTap = 0; manualShift = nil
+        liveGlide = nil; clearAutomaticSpace()
         clearTaps(); choiceInterrupted(); clearGlide()
         predictor?.flushLearning()
         predictor?.resetContext()
         modelDocument = document.identifier
     }
 
+    private let glideWorker = DispatchQueue(label: "app.tailorkeys.glide", qos: .userInitiated)
+    private var liveBusy = false
+    private final class GlideSession {
+        let prefix: String, before: String, after: String?
+        let identifier: UUID
+        let letters: Bool, upper: Bool, capital: Bool
+        var shown: String?
+        var expected: String
+        var lifted = false
+        var spaced = false
+        var matches: [GestureDecoder.Candidate] = []
+        var scoring: Predictor.GestureScoring?
+        init(_ prefix: String, _ before: String, _ after: String?, _ identifier: UUID,
+             _ letters: Bool, _ upper: Bool, _ capital: Bool) {
+            self.prefix = prefix; self.before = before; self.after = after; self.identifier = identifier
+            self.letters = letters; self.upper = upper; self.capital = capital; expected = before
+        }
+    }
+    private var liveGlide: GlideSession?
+    private var autoWord: String?, autoBefore: String?, autoAfter: String?
+    private var autoDocument: UUID?
+    private func clearAutomaticSpace() { autoWord = nil; autoBefore = nil; autoAfter = nil; autoDocument = nil }
+    private func hasAutomaticSpace() -> Bool {
+        guard autoBefore != nil else { return false }
+        if document.identifier == autoDocument && document.before == autoBefore && document.after == autoAfter && (document.selected ?? "").isEmpty { return true }
+        clearAutomaticSpace(); return false
+    }
+    private func replacesAutomaticWord(_ text: String) -> Bool {
+        hasAutomaticSpace() && autoWord != nil && (text == autoWord || glideCandidates.contains(text) ||
+            (settings.automaticPunctuation && TextInputRules.wordForms(autoWord ?? "", exists: predictor.hasWord).contains(text)))
+    }
+    @discardableResult private func automaticSpace(_ word: String) -> Bool {
+        guard TextInputRules.addSpace(settings.automaticSpace, document.after, password: !suggestAllowed) else { return false }
+        let attached = document.before?.hasSuffix(word) == true
+        insertRaw(" ")
+        autoWord = attached ? word : nil; autoBefore = document.before; autoAfter = document.after; autoDocument = document.identifier
+        lastSpace = CACurrentMediaTime()
+        return true
+    }
     private var glideWord: String?
     private var glideBefore: String?
     private var glideDocument: UUID?
@@ -195,17 +235,30 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func commitArmed(_ separator: String) -> Bool {
         validateChoice()
         guard settings.spaceAccepts, state.layer == .abc, let word = keyboard?.armedWord else { return false }
-        let before = document.before ?? ""
-        let original = currentGlide() ? glideWord! : currentWord(before)
+        let read = document
+        let before = read.before ?? ""
+        let spaced = replacesAutomaticWord(word)
+        let original = spaced ? (autoWord ?? "") : (currentGlide() && !hasAutomaticSpace() ? glideWord! : currentWord(before))
+        let suffix = spaced || !(read.selected ?? "").isEmpty ? 0 : TextInputRules.suffixLength(read.after ?? "")
+        let originalSuffix = String((read.after ?? "").prefix(suffix))
         let model = predictor
         let shouldLearn = suggestAllowed && modelReady
-        let prev = previousWord(before)
-        let prev2 = previousWord2(before)
-        clearChoice(); clearGlide()
-        for _ in original { deleteRaw() }
+        let prev = previousWord(spaced ? String(before.dropLast()) : before)
+        let prev2 = previousWord2(spaced ? String(before.dropLast()) : before)
+        clearChoice(); clearGlide(); clearAutomaticSpace(); clearTaps()
+        if (read.selected ?? "").isEmpty {
+            if suffix > 0 { adjustRaw(suffix) }
+            for _ in 0..<(original.count + (spaced ? 1 : 0) + suffix) { deleteRaw() }
+        }
         insert(word)
-        if separator == " " { typeSpace(learnWord: false) } else { insert(separator) }
-        armedUndo = ArmedUndo(original: original, inserted: word + separator, separator: separator,
+        var inserted = word
+        if separator == " " {
+            if document.after?.first?.isWhitespace != true { typeSpace(learnWord: false); inserted += " " }
+        } else {
+            insert(separator); inserted += separator
+            if settings.automaticPunctuation && automaticSpace(word) { inserted += " " }
+        }
+        armedUndo = ArmedUndo(original: original + originalSuffix, inserted: inserted, separator: separator,
             before: document.before, after: document.after,
             document: document.identifier, learn: {
                 if shouldLearn { model?.learn(word, prev, prev2) }
@@ -302,6 +355,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     override func viewWillDisappear(_ animated: Bool) {
         keyboardVisible = false
+        liveGlide = nil
         lastSpace = 0; lastAbcTap = 0
         clearTaps()
         choiceInterrupted()
@@ -314,7 +368,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     override func didReceiveMemoryWarning() {
         super.didReceiveMemoryWarning()
         predictor?.flushLearning()
-        gestureDecoder?.clearTemplates()
+        if let decoder = gestureDecoder { glideWorker.async { decoder.clearTemplates() } }
         predictor?.trimMemory()
         keyboard?.trimDrawingCaches()
         if !keyboardVisible { loadGeneration &+= 1; evictModel() }
@@ -357,14 +411,14 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         changingGlide = true
         defer { changingGlide = false }
         let shifted = state.shift
-        if let last = document.before?.last, last.isLetter || last.isNumber { typeSpace() }
+        if let last = document.before?.last, last.isLetter || last.isNumber { automaticSpace(currentWord(document.before ?? "")) }
         updateAutoCap()
         state.shift = state.shift || shifted
         let upper = state.capsLock || (settings.autoCap && textDocumentProxy.autocapitalizationType == .allCharacters)
         let text = upper ? word.uppercased() : (state.shift ? word.prefix(1).uppercased() + word.dropFirst() : word)
         clearGlide()
         insert(text)
-        typeSpace()
+        automaticSpace(text)
         updateAutoCap()
         updateSuggestions()
     }
@@ -377,6 +431,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         defer { endDocumentOperation() }
         changingGlide = true
         defer { changingGlide = false }
+        liveGlide = nil
         validateTaps()
         if code == Keys.backspace && undoArmedCommit() {
             updateAutoCap(); updateSuggestions(); return
@@ -402,7 +457,9 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             if KeyText.isLayerKey(code) { tapLayerKey(code) } else {
                 if state.layer == .abc && code.count == 1 && code.first!.isLetter && currentGlide() {
                     let shifted = state.shift
-                    typeSpace()
+                    finishGlideLearning()
+                    if !hasAutomaticSpace() { automaticSpace(glideWord!) }
+                    clearGlide()
                     updateAutoCap()
                     state.shift = state.shift || shifted
                 }
@@ -415,6 +472,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     func moveCursor(_ steps: Int) {
+        liveGlide = nil; clearAutomaticSpace()
         beginDocumentOperation()
         defer { endDocumentOperation() }
         clearTaps()
@@ -466,77 +524,138 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     func suggestionPicked(_ text: String) {
         beginDocumentOperation()
         defer { endDocumentOperation() }
-        choiceInterrupted()
-        if state.layer == .abc && currentGlide() {
-            clearTaps()
-            changingGlide = true
-            defer { changingGlide = false }
-            for _ in 0..<glideWord!.count { deleteRaw() }
-            insertRaw(text)
-            glideWord = text
-            glideBefore = document.before
-            updateAutoCap()
-            updateSuggestions()
-            return
-        }
-        if state.layer != .abc {
-            insert(text)
-        } else {
-            clearGlide()
-            let before = document.before ?? ""
-            let prefix = currentWord(before)
-            let prev = previousWord(before)
-            let prev2 = previousWord2(before)
-            clearTaps()
-            for _ in 0..<prefix.count { deleteRaw() }
-            insertRaw(text + " ")
-            if suggestAllowed && modelReady { predictor.learn(text, prev, prev2) }
-        }
-        updateAutoCap()
-        updateSuggestions()
-    }
-
-    func glideFinished(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat) {
-        beginDocumentOperation()
-        defer { endDocumentOperation() }
-        clearTaps()
-        choiceInterrupted()
-        guard modelReady, suggestAllowed, settings.swipeTyping, state.layer == .abc else { return }
-        gestureDecoder.setUserWords(predictor.gestureUserWords())
-        gestureDecoder.setKeys(keys, keyWidth)
-        let before = document.before ?? ""
-        let needsSpace = before.last.map { $0.isLetter || $0.isNumber } ?? false
-        let prev = previousWord(needsSpace ? before + " " : before)
-        predictor.updateContext(before, "")
-        let matches = gestureDecoder.decode(points, prev, frequency: predictor.gestureFrequency, context: predictor.contextScore)
-        guard !matches.isEmpty else { return }
         changingGlide = true
         defer { changingGlide = false }
-        let shifted = state.shift
-        if needsSpace { typeSpace() }
-        updateAutoCap()
-        state.shift = state.shift || shifted
-        let upper = state.capsLock || (settings.autoCap && textDocumentProxy.autocapitalizationType == .allCharacters)
-        let capital = state.shift
-        let candidates = matches.map { match -> String in
-            if upper { return match.word.uppercased() }
-            if capital { return match.word.prefix(1).uppercased() + match.word.dropFirst() }
-            return match.word
+        choiceInterrupted(); liveGlide = nil
+        if state.layer != .abc { insert(text); updateSuggestions(); return }
+        let read = document
+        let spaced = replacesAutomaticWord(text)
+        let before = read.before ?? ""
+        let original = spaced ? (autoWord ?? "") : (currentGlide() && !hasAutomaticSpace() ? glideWord! : currentWord(before))
+        let prev = previousWord(spaced ? String(before.dropLast()) : before)
+        let prev2 = previousWord2(spaced ? String(before.dropLast()) : before)
+        let plan = TextInputRules.replacement(original.count, read.after ?? "", automaticSpace: settings.automaticSpace && suggestAllowed,
+            selected: !(read.selected ?? "").isEmpty, spacedWordLength: spaced ? original.count : 0)
+        clearTaps(); clearGlide(); clearAutomaticSpace()
+        if (read.selected ?? "").isEmpty {
+            if plan.after > 0 { adjustRaw(plan.after) }
+            for _ in 0..<(plan.before + plan.after) { deleteRaw() }
         }
-        clearGlide()
-        insert(candidates[0])
-        glideWord = candidates[0]
-        glideCandidates = candidates
-        var rng = SplitMix(seed: candidates[0].utf8.reduce(5381) { ($0 &* 33) &+ UInt64($1) })
-        // Weighted sampling at temperature 2.5, restricted to alternatives beyond the right wheel.
-        glideExplore = matches.indices.dropFirst(8).map { i -> (String, Double) in
-            let u = max(1e-12, Double.random(in: 0..<1, using: &rng))
-            return (candidates[i], matches[i].score / 2.5 - log(-log(u)))
-        }.sorted { $0.1 > $1.1 }.map { $0.0 }
-        glideBefore = document.before
-        glideDocument = document.identifier
-        lastSpace = 0
+        insertRaw(text)
+        if plan.space { automaticSpace(text) }
+        if suggestAllowed && modelReady { predictor.learn(text, prev, prev2) }
+        updateAutoCap(); updateSuggestions()
+    }
+
+    func glideStarted() {
+        beginDocumentOperation()
+        defer { endDocumentOperation() }
+        choiceInterrupted()
+        let read = document
+        let prefix = currentGlide() || !(read.selected ?? "").isEmpty ? "" : currentWord(read.before ?? "")
+        clearGlide(); clearTaps()
+        liveGlide = GlideSession(prefix, read.before ?? "", read.after, read.identifier, settings.swipeLetters,
+            state.capsLock || (settings.autoCap && textDocumentProxy.autocapitalizationType == .allCharacters), state.shift)
+    }
+    func glideCancelled() { liveGlide = nil }
+    private func glideCase(_ session: GlideSession, _ word: String) -> String {
+        if session.upper { return word.uppercased() }
+        if !session.prefix.isEmpty { return session.prefix + word.dropFirst(session.prefix.count) }
+        return session.capital ? word.prefix(1).uppercased() + word.dropFirst() : word
+    }
+    private func validGlide(_ session: GlideSession) -> Bool {
+        document.identifier == session.identifier && (document.before ?? "") == session.expected &&
+            document.after == session.after && (document.selected ?? "").isEmpty
+    }
+    private func showRaw(_ session: GlideSession, _ raw: String) {
+        guard validGlide(session) else { liveGlide = nil; return }
+        let text = glideCase(session, SwipeTrace.appendToPrefix(session.prefix, raw))
+        if text == session.shown { return }
+        // UITextDocumentProxy has no composing region. Replace only our own validated insertion.
+        for _ in 0..<(session.shown?.count ?? session.prefix.count) { deleteRaw() }
+        insertRaw(text)
+        session.shown = text; session.expected = document.before ?? ""
+    }
+    func glideProgress(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat, _ raw: String, _ hints: [DoubleLetterHint]) {
+        beginDocumentOperation()
+        defer { endDocumentOperation() }
+        changingGlide = true
+        defer { changingGlide = false }
+        guard let session = liveGlide else { return }
+        if session.letters { showRaw(session, raw) }
+        if modelReady && suggestAllowed && !liveBusy { decodeGlide(session, points, keys, keyWidth, raw, hints, false) }
+    }
+    func glideFinished(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat, _ raw: String, _ hints: [DoubleLetterHint]) {
+        beginDocumentOperation()
+        defer { endDocumentOperation() }
+        changingGlide = true
+        defer { changingGlide = false }
+        guard let session = liveGlide else { return }
+        guard suggestAllowed, settings.swipeTyping, state.layer == .abc else { liveGlide = nil; return }
+        guard validGlide(session) else { liveGlide = nil; return }
+        session.lifted = true
+        if session.letters {
+            showRaw(session, raw)
+            guard liveGlide === session else { return }
+            glideWord = session.shown; glideBefore = document.before; glideDocument = document.identifier
+        }
+        if !session.letters {
+            let provisional = session.matches.filter { $0.word.last == raw.last }
+            finishGuess(session, provisional, raw, pending: modelReady)
+        }
+        if modelReady { decodeGlide(session, points, keys, keyWidth, raw, hints, true) }
         updateSuggestions()
+    }
+    private func decodeGlide(_ session: GlideSession, _ points: [GlidePoint], _ keys: [Character: CGPoint],
+                             _ width: CGFloat, _ raw: String, _ hints: [DoubleLetterHint], _ final: Bool) {
+        guard let decoder = gestureDecoder, let model = predictor else { return }
+        if session.scoring == nil {
+            model.updateContext(session.before, session.prefix)
+            session.scoring = model.gestureScoring()
+        }
+        guard let scoring = session.scoring else { return }
+        let prev = previousWord(session.before)
+        if !final { liveBusy = true }
+        glideWorker.async { [weak self] in
+            decoder.setUserWords(scoring.words); decoder.setKeys(keys, width)
+            let matches = decoder.decode(points, prev, frequency: scoring.frequency, context: scoring.context,
+                                         hints: hints, prefix: session.prefix, partial: !final)
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                if !final { self.liveBusy = false }
+                guard self.liveGlide === session, self.predictor === model, final || !session.lifted else { return }
+                self.beginDocumentOperation()
+                defer { self.endDocumentOperation() }
+                self.changingGlide = true
+                defer { self.changingGlide = false }
+                guard self.suggestAllowed, self.validGlide(session) else { self.liveGlide = nil; return }
+                let ranked = matches
+                session.matches = ranked
+                let prefix = session.letters ? SwipeTrace.appendToPrefix(session.prefix, raw) : (ranked.first?.prefix ?? SwipeTrace.appendToPrefix(session.prefix, raw))
+                let predictions = model.suggestions(prefix, prev, nil, taps: nil, weights: self.settings.keyTint || self.settings.smartTargets)
+                self.keyboard?.keyWeights = predictions.weights
+                let words = ranked.map { self.glideCase(session, $0.word) }
+                var unique = Set<String>()
+                self.glideCandidates = (words + (session.letters ? predictions.closest : [])).filter { unique.insert($0).inserted }
+                self.glideExplore = session.letters ? predictions.explore : Array(words.dropFirst(8))
+                if final {
+                    if session.letters { self.liveGlide = nil; self.updateSuggestions() }
+                    else { self.finishGuess(session, ranked, raw) }
+                } else { self.keyboard?.setSuggestions(left: self.glideExplore, right: Array(self.glideCandidates.prefix(8)), prefix: session.letters ? prefix : "") }
+            }
+        }
+    }
+    private func finishGuess(_ session: GlideSession, _ matches: [GestureDecoder.Candidate], _ raw: String, pending: Bool = false) {
+        let word = glideCase(session, matches.first?.word ?? SwipeTrace.appendToPrefix(session.prefix, raw))
+        let remove = session.shown.map { $0.count + (session.spaced ? 1 : 0) } ?? session.prefix.count
+        for _ in 0..<remove { deleteRaw() }
+        insertRaw(word); clearAutomaticSpace(); session.spaced = automaticSpace(word)
+        glideWord = word; glideBefore = document.before; glideDocument = document.identifier
+        session.shown = word; session.expected = document.before ?? ""
+        if !pending { liveGlide = nil }
+        manualShift = nil
+        if state.shift && !state.capsLock { state.shift = false }
+        updateAutoCap(); updateSuggestions()
     }
 
     private func clearGlide() {
@@ -553,7 +672,10 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     private func finishGlideLearning() {
-        if currentGlide() && suggestAllowed && modelReady { predictor.learn(glideWord!, previousWord(document.before ?? "")) }
+        guard currentGlide(), suggestAllowed, modelReady else { return }
+        let before = document.before ?? ""
+        let context = hasAutomaticSpace() ? String(before.dropLast()) : before
+        predictor.learn(glideWord!, previousWord(context), previousWord2(context))
     }
 
     func switchKeyboard() { choiceInterrupted(); advanceToNextInputMode() }
@@ -701,10 +823,24 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     private func insert(_ s: String, typing: Bool = false, distances: [Float]? = nil) {
         if currentGlide() {
-            if s.first?.isLetter == true { typeSpace() }
+            if s.first?.isLetter == true && !hasAutomaticSpace() { automaticSpace(glideWord!) }
             else if s.contains(where: { !$0.isLetter && !$0.isNumber && $0 != "'" }) { finishGlideLearning() }
         }
         clearGlide()
+        let auto = hasAutomaticSpace()
+        let edit = TextInputRules.punctuation(s, document.before ?? "", document.after ?? "", automaticSpace: auto,
+                                             enabled: settings.automaticPunctuation, password: !suggestAllowed)
+        clearAutomaticSpace()
+        if let edit = edit, (document.selected ?? "").isEmpty {
+            clearTaps()
+            for _ in 0..<edit.deleteBefore { deleteRaw() }
+            if !edit.insert.isEmpty { insertRaw(edit.insert) }
+            if edit.move != 0 { adjustRaw(edit.move) }
+            if edit.insert.hasSuffix(" ") {
+                autoBefore = document.before; autoAfter = document.after; autoDocument = document.identifier
+            }
+            return
+        }
         let prefix = currentWord(document.before ?? "")
         let ch = s.first
         let track = typing && s.count == 1 && (ch?.isLetter == true || (ch?.isNumber == true && !prefix.isEmpty)) &&
@@ -735,12 +871,13 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func typeSpace(learnWord: Bool = true) {
         let before = document.before ?? ""
         let word = currentWord(before)
-        if learnWord && suggestAllowed && modelReady && word.count > 1 { predictor.learn(word, previousWord(before), previousWord2(before)) }
+        if learnWord && currentGlide() { finishGlideLearning() }
+        else if learnWord && suggestAllowed && modelReady && word.count > 1 { predictor.learn(word, previousWord(before), previousWord2(before)) }
         clearTaps()
         clearGlide()
         let now = CACurrentMediaTime()
-        if settings.doubleSpace && state.layer == .abc && now - lastSpace < 0.6,
-           before.hasSuffix(" "), let prev = before.dropLast().last, prev.isLetter || prev.isNumber {
+        clearAutomaticSpace()
+        if state.layer == .abc && TextInputRules.doubleSpace(settings.automaticPunctuation && settings.doubleSpace, before, now - lastSpace, password: !suggestAllowed) {
             deleteRaw()
             insertRaw(". ")
             lastSpace = 0
@@ -815,8 +952,20 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             keyboard.setSuggestions(left: s.explore, right: s.closest, prefix: "")
             return
         }
+        if hasAutomaticSpace() && autoWord != nil && settings.automaticPunctuation {
+            let word = autoWord ?? ""
+            predictor.updateContext(before, "")
+            let next = predictor.suggestions("", word.lowercased(), nil, taps: nil, weights: settings.keyTint || settings.smartTargets)
+            keyboard.keyWeights = next.weights
+            var unique = Set<String>()
+            let forms = TextInputRules.wordForms(word, exists: predictor.hasWord)
+            let closest = (forms + glideCandidates + next.closest).filter { unique.insert($0).inserted }
+            keyboard.setSuggestions(left: next.explore, right: Array(closest.prefix(8)), prefix: "")
+            return
+        }
         if currentGlide() {
-            keyboard.keyWeights = [:]
+            let weights = predictor.suggestions(glideWord ?? "", previousWord(before), nil, taps: nil, weights: settings.keyTint || settings.smartTargets)
+            keyboard.keyWeights = weights.weights
             predictor.updateContext(before, "")
             keyboard.setSuggestions(left: glideExplore, right: Array(glideCandidates.prefix(8)), prefix: "")
             return
@@ -833,7 +982,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     /// Turns on a one-shot capital where the field asks for one: sentence starts, word starts, or always.
     private func updateAutoCap() {
-        guard keyboard != nil, settings.autoCap, state.layer == .abc, !state.capsLock, manualShift == nil else { return }
+        guard keyboard != nil, suggestAllowed, settings.autoCap, state.layer == .abc, !state.capsLock, manualShift == nil else { return }
         let type = textDocumentProxy.autocapitalizationType ?? .sentences
         let before = document.before ?? ""
         switch type {

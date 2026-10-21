@@ -1,11 +1,5 @@
 import UIKit
 
-/// Kept with the view so the app's keyboard preview needs no predictor/decoder dependency.
-struct GlidePoint {
-    let position: CGPoint
-    let time: TimeInterval
-}
-
 /// Reusable tap costs, mirrored in Android's ComposingTaps. Kept here for the app preview.
 final class ComposingTaps {
     static let letters = 256
@@ -78,7 +72,10 @@ protocol KeyboardViewDelegate: AnyObject {
     func openSettings()
     func moveCursor(_ steps: Int)
     func gridEdited()
-    func glideFinished(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat)
+    func glideStarted()
+    func glideProgress(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat, _ raw: String, _ hints: [DoubleLetterHint])
+    func glideCancelled()
+    func glideFinished(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat, _ raw: String, _ hints: [DoubleLetterHint])
 }
 
 extension KeyboardViewDelegate {
@@ -89,7 +86,10 @@ extension KeyboardViewDelegate {
     func chordTyped(_ word: String) {}
     func replacePressText(_ original: String, following: String, replacement: String) {}
     func switchLanguage(_ direction: Int) {}
-    func glideFinished(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat) {}
+    func glideStarted() {}
+    func glideProgress(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat, _ raw: String, _ hints: [DoubleLetterHint]) {}
+    func glideCancelled() {}
+    func glideFinished(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat, _ raw: String, _ hints: [DoubleLetterHint]) {}
 }
 
 /// Draws the suggestion wheels and the key grid, and turns touches into key presses.
@@ -1013,6 +1013,13 @@ final class KeyboardView: UIView {
     }
 
     private func drawGlide(_ ctx: CGContext, _ now: TimeInterval) {
+        let age = now - dwellDotAt
+        if age >= 0 && age < 0.25, let centre = letterCentres[dwellDotLetter] {
+            let opacity = reducedMotion ? 0.6 : 0.6 * (1 - abs(age / 0.125 - 1))
+            ctx.saveGState(); ctx.setAlpha(CGFloat(opacity)); palette.accent.setFill()
+            ctx.fillEllipse(in: CGRect(x: centre.x - 4, y: centre.y - 4, width: 8, height: 8))
+            ctx.restoreGState()
+        }
         let points: [GlidePoint]
         if let id = glideID, let tracker = trackers[id] { points = tracker.points } else { points = trail }
         guard points.count > 1 else { return }
@@ -1538,6 +1545,11 @@ final class KeyboardView: UIView {
         var glideEligible = false
         var glideWidth: CGFloat = 1
         var points: [GlidePoint] = []
+        var trace: SwipeTrace?
+        var glidePoint = CGPoint.zero
+        var liveAt: TimeInterval = -.infinity
+        var publishedPoints = -1, publishedHints = -1
+        var glideTimer: Timer?
         var wheel: Wheel?
         var longTimer: Timer?
         var repeatTimer: Timer?
@@ -1555,6 +1567,8 @@ final class KeyboardView: UIView {
     private var chordHighlightWork: DispatchWorkItem?
     private var glideID: ObjectIdentifier?
     private var trail: [GlidePoint] = []
+    private var dwellDotLetter: Character = " "
+    private var dwellDotAt: TimeInterval = -.infinity
 
     private func moveCursor(_ t: Tracker, _ steps: Int, _ now: TimeInterval) {
         guard steps != 0 else { return }
@@ -1607,10 +1621,11 @@ final class KeyboardView: UIView {
         chordHighlightWork?.cancel()
         chordHighlight.removeAll()
         dismissPopup()
-        trackers.values.forEach { $0.stop() }
+        trackers.values.forEach { $0.stop(); $0.glideTimer?.invalidate() }
         trackers = [:]
+        if glideID != nil { delegate?.glideCancelled() }
         glideID = nil
-        trail = []
+        trail = []; dwellDotAt = -.infinity
         updateWiggle()
         swipe = nil
         drag = nil
@@ -1750,7 +1765,10 @@ final class KeyboardView: UIView {
         t.x0 = p.x; t.y0 = p.y; t.glideWidth = pk.rect.width
         t.glideEligible = glideAllowed && viewPrefs.swipeTyping && state.layer == .abc &&
             pk.item.keys[0].count == 1 && pk.item.keys[0].first!.isLetter
-        if t.glideEligible { t.points.append(GlidePoint(position: p, time: time)) }
+        if t.glideEligible {
+            t.glidePoint = p
+            t.points.append(GlidePoint(position: p, time: time))
+        }
         trackers[id] = t
         if chordKey != nil {
             t.deferredClick = true
@@ -1778,20 +1796,49 @@ final class KeyboardView: UIView {
         guard t.glideEligible, !t.consumed || glideID == id else { return false }
         if let active = glideID, active != id { return true }
         t.points.append(GlidePoint(position: p, time: time))
+        t.glidePoint = p; t.trace?.sample(p, time, t.points.count - 1)
         if glideID == nil && hypot(p.x - t.x0, p.y - t.y0) > 1.0 * t.glideWidth {
             chordTouches.cancel()
             glideID = id
+            let trace = SwipeTrace(letterCentres, letterWidth)
+            t.trace = trace
+            for (i, point) in t.points.enumerated() { trace.sample(point.position, point.time, i) }
             t.stop(); t.consumed = true
+            delegate?.glideStarted()
+            let timer = Timer(timeInterval: 0.02, repeats: true) { [weak self, weak t] _ in
+                guard let self = self, let t = t, self.glideID == id else { return }
+                let now = CACurrentMediaTime()
+                let oldDot = t.trace?.dotAt
+                t.trace?.sample(t.glidePoint, now, t.points.count - 1)
+                self.publishGlide(t, now)
+                if oldDot != t.trace?.dotAt { self.setNeedsDisplay() }
+            }
+            t.glideTimer = timer; RunLoop.main.add(timer, forMode: .common)
             for (otherID, other) in Array(trackers) where otherID != id { other.stop(); trackers.removeValue(forKey: otherID) }
             swipe = nil
             updateWiggle()
         }
         if glideID == id {
+            publishGlide(t, time)
             updateWiggleIfNeeded()
             setNeedsDisplay()
             return true
         }
         return false
+    }
+
+    private func publishGlide(_ t: Tracker, _ now: TimeInterval) {
+        if let trace = t.trace, trace.dotAt != dwellDotAt {
+            dwellDotLetter = trace.dotLetter; dwellDotAt = trace.dotAt
+            if reducedMotion && dwellDotAt.isFinite {
+                DispatchQueue.main.asyncAfter(deadline: .now() + max(0.001, 0.25 - (CACurrentMediaTime() - dwellDotAt))) { [weak self] in self?.setNeedsDisplay() }
+            }
+        }
+        guard now - t.liveAt >= 0.05 else { return }
+        let hintCount = t.trace?.hints.count ?? 0
+        guard t.publishedPoints != t.points.count || t.publishedHints != hintCount else { return }
+        t.liveAt = now; t.publishedPoints = t.points.count; t.publishedHints = hintCount
+        delegate?.glideProgress(t.points, letterCentres, letterWidth, t.trace?.text() ?? "", t.trace?.hints ?? [])
     }
 
     private func move(_ id: ObjectIdentifier, _ p: CGPoint, _ time: TimeInterval) {
@@ -1881,9 +1928,10 @@ final class KeyboardView: UIView {
         }
         if glideID == id {
             trail = t.points
+            t.glideTimer?.invalidate(); t.glideTimer = nil
             glideID = nil
             if reducedMotion { trail = []; updateWiggle() }
-            delegate?.glideFinished(t.points, letterCentres, letterWidth)
+            delegate?.glideFinished(t.points, letterCentres, letterWidth, t.trace?.text() ?? "", t.trace?.hints ?? [])
             setNeedsDisplay()
             return
         }

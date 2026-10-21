@@ -275,7 +275,13 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
             self.build()
         })
         stack.addArrangedSubview(switchRow("Capitalize sentences", settings.autoCap) { [weak self] on in self?.settings.set(Prefs.autoCap, on) })
-        stack.addArrangedSubview(switchRow("Double space types a period", settings.doubleSpace) { [weak self] on in self?.settings.set(Prefs.doubleSpace, on) })
+        stack.addArrangedSubview(switchRow("Automatic space", settings.automaticSpace) { [weak self] on in self?.settings.set(Prefs.automaticSpace, on); self?.changed() })
+        addNote("Add a space after swiped and picked words.")
+        stack.addArrangedSubview(switchRow("Automatic punctuation", settings.automaticPunctuation) { [weak self] on in self?.settings.set(Prefs.automaticPunctuation, on); self?.changed(rebuild: true) })
+        addNote("Attach punctuation and close brackets and quotes.")
+        if settings.automaticPunctuation {
+            stack.addArrangedSubview(switchRow("Double space types a period", settings.doubleSpace) { [weak self] on in self?.settings.set(Prefs.doubleSpace, on) })
+        }
         stack.addArrangedSubview(switchRow("Key click sound", settings.clicks) { [weak self] on in self?.settings.set(Prefs.clicks, on) })
         stack.addArrangedSubview(sliderRow("Long-press delay", Prefs.longPressMs, format: { "\($0) ms" }))
 
@@ -305,7 +311,7 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
         stack.addArrangedSubview(switchRow("Space accepts chosen word", settings.spaceAccepts) { [weak self] on in self?.settings.set(Prefs.spaceAccepts, on); self?.changed() })
         for (title, key, def) in [("Swipe typing", Prefs.swipeTyping, true), ("Chords", Prefs.chording, false)] {
             let row = switchRow(title, !settings.typeOnPress && settings.bool(key, def)) { [weak self] on in
-                self?.settings.set(key, on); self?.changed()
+                self?.settings.set(key, on); self?.changed(rebuild: true)
             }
             row.isUserInteractionEnabled = !settings.typeOnPress
             row.alpha = settings.typeOnPress ? 0.38 : 1
@@ -317,6 +323,14 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
                 note.numberOfLines = 0
                 stack.addArrangedSubview(note)
             }
+        }
+
+        if settings.swipeTyping {
+            stack.addArrangedSubview(menuRow("Swipe style", current: settings.swipeLetters ? "Type the letters" : "Guess the word",
+                options: ["Guess the word", "Type the letters"]) { [weak self] value in
+                self?.settings.set(Prefs.swipeLetters, value == "Type the letters"); self?.changed(rebuild: true)
+            })
+            addNote("Choose word guessing or the letters at turns and pauses.")
         }
 
         addNote("The chord list is in the TailorKeys app, under Typing → Chord list.")

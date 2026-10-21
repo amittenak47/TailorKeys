@@ -1,6 +1,7 @@
 // Run on a Mac with: bash ios/test-safety.sh
 // This executable deliberately avoids UIKit, Xcode projects, signing and real preference domains.
 import Foundation
+import CoreGraphics
 
 // KeyboardSettings only needs this value type; the production palette imports UIKit.
 enum ThemeName: String, CaseIterable { case system, light, dark, midnight, warm, highContrast }
@@ -136,3 +137,46 @@ for line in references.split(whereSeparator: \.isNewline) where !line.hasPrefix(
 }
 check(referenceCount >= 3, "model reference vectors missing")
 print("Safety checks and \(referenceCount) model reference vectors passed.")
+
+
+// Swipe extraction, hint placement and text-edit rules mirror the Android JVM checks.
+let swipeKeys: [Character: CGPoint] = ["a": .zero, "b": CGPoint(x: 100, y: 0), "c": CGPoint(x: 100, y: 100)]
+let cornerTrace = SwipeTrace(swipeKeys, 100)
+for x in stride(from: 0, through: 100, by: 10) { cornerTrace.sample(CGPoint(x: CGFloat(x), y: 0), Double(x) / 1000, x / 10) }
+for y in stride(from: 10, through: 100, by: 10) { cornerTrace.sample(CGPoint(x: 100, y: CGFloat(y)), Double(y + 100) / 1000, y / 10 + 10) }
+check(cornerTrace.text() == "abc", "sharp swipe corner lost")
+let dwellTrace = SwipeTrace(swipeKeys, 100)
+dwellTrace.sample(.zero, 0, 0); dwellTrace.sample(.zero, 0.211, 1); dwellTrace.sample(.zero, 0.8, 2)
+check(dwellTrace.text() == "aa" && dwellTrace.hints.count == 1, "dwell did not double exactly once")
+let slowTrace = SwipeTrace(swipeKeys, 100)
+for x in stride(from: 0, through: 100, by: 10) { slowTrace.sample(CGPoint(x: CGFloat(x), y: 0), Double(x) / 100, x / 10) }
+check(slowTrace.hints.isEmpty, "slow pass triggered dwell")
+var wordKeys: [Character: CGPoint] = [:]
+for (i, ch) in "corlay".enumerated() { wordKeys[ch] = CGPoint(x: CGFloat(i * 100), y: i % 2 == 0 ? 0 : 100) }
+func swipePath(_ word: String) -> [GlidePoint] { word.enumerated().map { GlidePoint(position: wordKeys[$0.element]!, time: Double($0.offset) * 0.06) } }
+let swipeDecoder = GestureDecoder(["corolary", "corollary", "ollary"])
+swipeDecoder.setKeys(wordKeys, 100)
+let doubled = swipeDecoder.decode(swipePath("corolary"), nil, frequency: { _ in 1 }, context: { _, _ in 0 }, hints: [DoubleLetterHint(letter: "l", pathIndex: 4)])
+check(doubled.first?.word == "corollary", "double-letter hint did not improve ranking")
+let continued = swipeDecoder.decode(swipePath("olary"), nil, frequency: { _ in 1 }, context: { _, _ in 0 }, hints: [DoubleLetterHint(letter: "l", pathIndex: 1)], prefix: "cor")
+check(continued.first?.word == "corollary" && continued.allSatisfy { $0.word.hasPrefix("cor") }, "typed prefix was not enforced")
+check(SwipeTrace.appendToPrefix("cor", "rollary") == "corollary", "prefix boundary overlap repeated")
+for ch in ".,?!:;" {
+    let edit = TextInputRules.punctuation(String(ch), "dog ", "", automaticSpace: true, enabled: true)
+    check(edit?.deleteBefore == 1 && edit?.insert == String(ch) + " ", "punctuation spacing failed")
+    check(TextInputRules.punctuation(String(ch), "dog ", "", automaticSpace: true, enabled: false) == nil, "punctuation switch ignored")
+}
+for (open, close) in [("(", ")"), ("[", "]"), ("{", "}"), ("\"", "\"")] {
+    let pair = TextInputRules.punctuation(open, "", "", automaticSpace: false, enabled: true)
+    check(pair?.insert == open + close && pair?.move == -1, "pair insertion failed")
+    check(TextInputRules.punctuation(close, "", close, automaticSpace: false, enabled: true)?.move == 1, "closer step failed")
+    check(TextInputRules.punctuation(open, "", "", automaticSpace: false, enabled: true, password: true) == nil, "password inserted pair")
+}
+check(TextInputRules.punctuation("'", "dog ", "", automaticSpace: true, enabled: true)?.insert == "'", "apostrophe spacing failed")
+check(TextInputRules.doubleSpace(true, "dog ", 0.3) && !TextInputRules.doubleSpace(false, "dog ", 0.3), "double-space switch ignored")
+check(!TextInputRules.doubleSpace(true, "dog ", 0.3, password: true), "password double-space enabled")
+check(TextInputRules.addSpace(true, "") && !TextInputRules.addSpace(false, ""), "end spacing switch ignored")
+check(!TextInputRules.addSpace(true, " next") && !TextInputRules.addSpace(true, "."), "middle spacing duplicated")
+let replacement = TextInputRules.replacement(2, "llo next", automaticSpace: true)
+check(replacement.before == 2 && replacement.after == 3 && !replacement.space, "middle-word replacement lost boundaries")
+check(TextInputRules.wordForms("dog", exists: { $0 == "dogs" }) == ["dogs", "dog's"], "word forms missing")
