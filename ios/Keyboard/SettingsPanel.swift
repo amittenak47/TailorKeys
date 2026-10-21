@@ -267,6 +267,17 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
         }
         if words.isEmpty { rows.addArrangedSubview(label("No learned words")) }
         if words.count > 100 { rows.addArrangedSubview(label("Search to narrow \(words.count) words.")) }
+        rows.addArrangedSubview(label("Never corrected"))
+        let blocked = LearningStore.rejected(settings.learningStore).filter { search.text?.isEmpty != false || $0.original.localizedCaseInsensitiveContains(search.text ?? "") || $0.fix.localizedCaseInsensitiveContains(search.text ?? "") }
+        for entry in blocked.prefix(100) {
+            rows.addArrangedSubview(linkButton("\(entry.original) \u{2192} \(entry.fix) (\(entry.language)) - Remove") { [weak self, weak rows, weak search, weak title] in
+                guard let self = self, let rows = rows, let search = search, let title = title else { return }
+                LearningStore.allowCorrection(self.settings.learningStore, entry)
+                self.onChange?(); self.populateLearnedWords(rows, search, title)
+            })
+        }
+        if blocked.isEmpty { rows.addArrangedSubview(label("No blocked corrections")) }
+
     }
 
     private func learnedWordList() -> UIView {
@@ -312,7 +323,7 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
         stack.addArrangedSubview(switchRow("Learn from my typing", settings.learning) { [weak self] value in self?.settings.set(Prefs.learning, value); self?.changed() })
         stack.addArrangedSubview(linkButton("Forget learned words") { [weak self] in self?.forgetConfirm = true; self?.build() })
         if forgetConfirm {
-            addNote("Forget learned words and word sequences in every language?")
+            addNote("Forget learned words, word sequences and blocked corrections in every language?")
             stack.addArrangedSubview(linkButton("Cancel") { [weak self] in self?.forgetConfirm = false; self?.build() })
             stack.addArrangedSubview(linkButton("Forget all") { [weak self] in
                 guard let self = self else { return }

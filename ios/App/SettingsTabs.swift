@@ -374,13 +374,14 @@ private struct LearningControls: View {
     @State private var confirm = false
     @State private var query = ""
     @State private var words: [String] = []
+    @State private var rejections: [RejectedCorrection] = []
     private var matches: [String] { words.filter { query.isEmpty || $0.localizedCaseInsensitiveContains(query) } }
     var body: some View {
         Group {
             Toggle("Learn from my typing", isOn: Binding(get: { settings.learning }, set: { settings.set(Prefs.learning, $0); changed() }))
             Button("Forget learned words", role: .destructive) { confirm = true }
             if confirm {
-                Text("Forget learned words and word sequences in every language?").font(.footnote)
+                Text("Forget learned words, word sequences and blocked corrections in every language?").font(.footnote)
                 HStack {
                     Button("Cancel") { confirm = false }
                     Spacer()
@@ -401,7 +402,21 @@ private struct LearningControls: View {
             }
             if matches.count > 100 { Text("Search to narrow \(matches.count) words.").font(.footnote) }
             if words.isEmpty { Text("No learned words").foregroundColor(.secondary) }
+            Text("Never corrected (\(rejections.count))").font(.headline)
+            let blocked = rejections.filter { query.isEmpty || $0.original.localizedCaseInsensitiveContains(query) || $0.fix.localizedCaseInsensitiveContains(query) }
+            ForEach(Array(blocked.prefix(100).indices), id: \.self) { index in
+                let entry = blocked[index]
+                HStack {
+                    Text("\(entry.original) \u{2192} \(entry.fix) (\(entry.language))")
+                    Spacer()
+                    Button("Remove") { LearningStore.allowCorrection(settings.learningStore, entry); reload(); changed() }.buttonStyle(.borderless)
+                }
+            }
+            if blocked.isEmpty { Text("No blocked corrections").foregroundColor(.secondary) }
         }.onAppear(perform: reload)
     }
-    private func reload() { words = LearningStore.words(settings.learningStore).map { $0.language + "\t" + $0.word } }
+    private func reload() {
+        words = LearningStore.words(settings.learningStore).map { $0.language + "\t" + $0.word }
+        rejections = LearningStore.rejected(settings.learningStore)
+    }
 }

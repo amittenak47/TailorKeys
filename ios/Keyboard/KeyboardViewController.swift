@@ -196,6 +196,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         var correction: Bool = false
         var insertedAfter: Int = 0
         var originalTail: Int = 0
+        var onKept: () -> Void = {}
         let learn: () -> Void
     }
     private var armedUndo: ArmedUndo?
@@ -219,7 +220,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func keepPendingLearning() {
         guard let pending = pendingLearning else { return }
         pendingLearning = nil
-        if learningAllowed && document == pending.snapshot { pending.model.observe(pending.word, pending.prev, pending.prev2, picked: pending.picked) }
+        if learningAllowed && document == pending.snapshot { pending.model.observeFinal(pending.word, pending.prev, pending.prev2, picked: pending.picked) }
     }
 
 
@@ -239,8 +240,10 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func finishArmedLearning() {
         let undo = armedUndo
         armedUndo = nil
-        if learningAllowed, let undo = undo, document.identifier == undo.document,
-            document.before == undo.before, document.after == undo.after, (document.selected ?? "").isEmpty { undo.learn() }
+        if let undo = undo, document.identifier == undo.document,
+            document.before == undo.before, document.after == undo.after, (document.selected ?? "").isEmpty {
+            undo.onKept(); if learningAllowed { undo.learn() }
+        }
     }
 
     func choiceInterrupted() { clearChoice(); armedUndo = nil; pendingLearning = nil }
@@ -268,9 +271,11 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         insertRaw(undo.original + undo.separator)
         if undo.originalTail > 0 { adjustRaw(-undo.originalTail) }
         if undo.correction {
+            if modelReady { predictor.recordRejection(undo.original, String(undo.inserted.dropLast(undo.separator.count))) }
             suppressedBefore = String((document.before ?? "").dropLast(undo.separator.count)); suppressedAfter = document.after
             let context = suppressedBefore ?? ""
-            deferLearning(undo.original, previousWord(context), previousWord2(context))
+            let previous = CorrectionRules.context(context, undo.original.count)
+            deferLearning(undo.original, previous.last, previous.count > 1 ? previous[previous.count - 2] : nil)
         }
         return true
     }
@@ -278,19 +283,26 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func correctWord(_ separator: String) -> Bool {
         guard correctAllowed, modelReady, state.layer == .abc, (document.selected ?? "").isEmpty, !currentGlide() else { return false }
         let before = document.before ?? ""
+        let word = String(before.reversed().prefix(while: TextInputRules.wordChar).reversed())
+        let typed = taps.hasInput(word)
+        if typed { predictor.noteTyped(word) }
         if (before == protectedBefore && document.after == protectedAfter) || (before == suppressedBefore && document.after == suppressedAfter) { return false }
         if let ch = document.after?.first, ch.isLetter || ch.isNumber { return false }
-        let word = String(before.reversed().prefix(while: TextInputRules.wordChar).reversed()), prev = previousWord(before), prev2 = previousWord2(before)
-        predictor.updateContext(before, word)
-        guard let fix = predictor.autocorrect(word, AutocorrectMode(rawValue: settings.int(Prefs.autocorrect)) ?? .confident, prev, prev2, taps: taps) else { return false }
+        let priorPrefix = String(before.dropLast(word.count)).trimmingCharacters(in: .whitespaces)
+        let pickedPrevious = protectedBefore?.trimmingCharacters(in: .whitespaces) == priorPrefix && document.after == protectedAfter
+        guard let change = predictor.correction(before, AutocorrectMode(rawValue: settings.int(Prefs.autocorrect)) ?? .confident,
+            taps: taps, userTyped: typed, allowJoin: !pickedPrevious) else { return false }
+        let context = CorrectionRules.context(before, change.original.count)
+        let prev = context.last, prev2 = context.count > 1 ? context[context.count - 2] : nil
         let model = predictor, allowed = learningAllowed
         pendingLearning = nil
         clearTaps(); clearChoice(); clearGlide(); clearAutomaticSpace()
-        for _ in word { deleteRaw() }
-        insertRaw(fix + separator)
-        armedUndo = ArmedUndo(original: word, inserted: fix + separator, separator: separator,
-            before: document.before, after: document.after, document: document.identifier, correction: true, learn: { [weak self] in
-                if allowed && self?.learningAllowed == true { model?.observe(fix, prev, prev2) }
+        for _ in change.original { deleteRaw() }
+        insertRaw(change.replacement + separator)
+        armedUndo = ArmedUndo(original: change.original, inserted: change.replacement + separator, separator: separator,
+            before: document.before, after: document.after, document: document.identifier, correction: true,
+            onKept: { model?.recordKept(change.original, change.replacement) }, learn: { [weak self] in
+                if allowed && self?.learningAllowed == true { model?.observeFinal(change.replacement, prev, prev2) }
             })
         return true
     }
@@ -598,7 +610,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         beginDocumentOperation()
         defer { endDocumentOperation() }
         choiceInterrupted()
-        insert(text)
+        insert(text, typing: true)
         updateSuggestions()
     }
 
