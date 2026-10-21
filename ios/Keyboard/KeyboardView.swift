@@ -6,6 +6,8 @@ final class ComposingTaps {
     static let maxLength = 64
     private var costs = [UInt8](repeating: 10, count: ComposingTaps.maxLength * ComposingTaps.letters)
     private var known = [Bool](repeating: false, count: ComposingTaps.maxLength)
+    private var entered = [Bool](repeating: false, count: ComposingTaps.maxLength)
+    private var enteredCount = 0
     private var count = 0
     private(set) var word = ""
     private(set) var revision: UInt64 = 0
@@ -13,8 +15,8 @@ final class ComposingTaps {
     func clear() { sync(""); revision &+= 1 }
     func sync(_ prefix: String) {
         if word == prefix { return }
-        for i in known.indices { known[i] = false }
-        count = 0
+        for i in known.indices { known[i] = false; entered[i] = false }
+        count = 0; enteredCount = 0
         word = prefix
         revision &+= 1
     }
@@ -22,6 +24,7 @@ final class ComposingTaps {
         sync(prefix)
         let index = word.count
         word += letter
+        if index < Self.maxLength && letter.count == 1 { entered[index] = true; enteredCount += 1 }
         if index < Self.maxLength, letter.count == 1, let distances = distances {
             // -log Gaussian, sigma 0.5 widths, two tenths per nat. Boundary credit
             // is capped so a point far from every letter never makes a letter free.
@@ -39,9 +42,11 @@ final class ComposingTaps {
         guard !word.isEmpty else { return }
         let index = word.count - 1
         if index < Self.maxLength && known[index] { known[index] = false; count -= 1 }
+        if index < Self.maxLength && entered[index] { entered[index] = false; enteredCount -= 1 }
         word.removeLast()
         revision &+= 1
     }
+    func hasInput(_ prefix: String) -> Bool { word == prefix && enteredCount > 0 }
     func hasTaps(_ prefix: String) -> Bool { word == prefix && count > 0 }
     func hasTap(_ index: Int) -> Bool { index < Self.maxLength && known[index] }
     func cost(_ index: Int, _ letter: Character) -> Int {

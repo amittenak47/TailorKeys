@@ -71,12 +71,37 @@ internal class EnglishContext(
         val top = IntArray(300.coerceAtMost(model.vocabularySize - 5))
         var version = 0L
         var previous2: String? = null
+        var lastWord: String? = null
+        private val currentState = model.initialState()
+        private val parentState = model.initialState()
+        private val probe = model.initialState()
+        private val probeProbabilities = FloatArray(model.vocabularySize)
+        private var probeKey: String? = null
+        internal fun capture(current: NextWordModel.State, parent: NextWordModel.State, last: String?) {
+            model.copyState(current, currentState); model.copyState(parent, parentState)
+            lastWord = last; probeKey = null
+        }
+        private fun branch(first: String?) {
+            val key = first ?: ""
+            if (probeKey == key) return
+            model.copyState(if (first == null) parentState else currentState, probe)
+            if (first != null) model.step(probe, model.normalizedIdOf(first))
+            model.logProbs(probe, probeProbabilities)
+            probeKey = key
+        }
+        fun following(first: String, word: String, rank: Int?): Double {
+            branch(first); return probability(word, rank, probeProbabilities)
+        }
+        fun preceding(word: String, rank: Int?): Double {
+            branch(null); return probability(word, rank, probeProbabilities)
+        }
 
-        fun probability(word: String, rank: Int?): Double {
+        fun probability(word: String, rank: Int?): Double = probability(word, rank, probabilities)
+        private fun probability(word: String, rank: Int?, values: FloatArray): Double {
             val id = rank?.let { ids[it] } ?: model.normalizedIdOf(word)
-            return if (id != 2) probabilities[id].toDouble()
+            return if (id != 2) values[id].toDouble()
             // <unk> also covers words absent from the keyboard dictionary. Reserve their mass.
-            else probabilities[2] + kotlin.math.ln(OOV_DICTIONARY_SHARE * (1.0 / ((rank ?: 5000) + 10)) / oovMass)
+            else values[2] + kotlin.math.ln(OOV_DICTIONARY_SHARE * (1.0 / ((rank ?: 5000) + 10)) / oovMass)
         }
     }
 
@@ -91,6 +116,7 @@ internal class EnglishContext(
     // Everything below belongs exclusively to the serial worker (or synchronous JVM caller).
     private var model: NextWordModel? = null
     private var state: NextWordModel.State? = null
+    private var parentState: NextWordModel.State? = null
     private var tokens: List<String> = emptyList()
     private var front: Scores? = null
     private var back: Scores? = null
@@ -136,7 +162,7 @@ internal class EnglishContext(
         if (model == null) {
             model = load()
             model?.let { m ->
-                state = m.initialState()
+                state = m.initialState(); parentState = m.initialState()
                 val ids = IntArray(words.size) { m.normalizedIdOf(words[it]) }
                 var mass = 0.0
                 for (i in ids.indices) if (ids[i] == 2) mass += 1.0 / (i + 10)
@@ -155,12 +181,16 @@ internal class EnglishContext(
                 state!!.reset(); resets++; start = 0
             }
             workerEpoch = resetEpoch
-            for (i in start until next.size) { m.step(state!!, m.idOf(next[i])); steps++ }
+            for (i in start until next.size) {
+                if (i == next.lastIndex) m.copyState(state!!, parentState!!)
+                m.step(state!!, m.idOf(next[i])); steps++
+            }
             tokens = next
             val output = if (unchanged) computed!! else back!!
             output.version = version
             output.previous2 = next.drop(next.indexOfLast { it == "<s>" } + 1).filter { !it.startsWith("<") }.dropLast(1).lastOrNull()
             if (!unchanged) {
+                output.capture(state!!, parentState!!, next.lastOrNull()?.takeUnless { it.startsWith("<") })
                 m.logProbs(state!!, output.probabilities); softmaxes++
                 fillTop(output)
                 computed = output

@@ -592,3 +592,43 @@ for width in [CGFloat(50), CGFloat(100)] {
         check(trace.text() == word, "intended letters lost: " + word)
     }
 }
+
+
+// Rejection preferences are explicit, permanent, per language and removable.
+let rejectionHistory = CorrectionHistory()
+rejectionHistory.reject("teh", "the")
+check(!rejectionHistory.blocked("teh", "the"), "one undo immediately banned pair")
+rejectionHistory.reject("teh", "the")
+check(rejectionHistory.blocked("teh", "the"), "two undos did not ban pair")
+let restoredHistory = CorrectionHistory(); restoredHistory.load(rejectionHistory.serialize())
+check(restoredHistory.blocked("teh", "the"), "pair did not survive serialization")
+restoredHistory.remove("teh", "the")
+check(!restoredHistory.blocked("teh", "the"), "pair removal failed")
+restoredHistory.reject("recieve", "receive"); restoredHistory.typed("recieve")
+check(restoredHistory.blocked("recieve", "receive"), "undo then retype did not ban pair")
+check(restoredHistory.penalty("receive") > 0, "undo penalty missing")
+let rejectionSuite = "app.tailorkeys.tests.rejections." + UUID().uuidString
+let rejectionStore = UserDefaults(suiteName: rejectionSuite)!
+rejectionStore.set(["corrections": restoredHistory.serialize(), "revision": ""], forKey: "user_bundle")
+check(LearningStore.rejected(rejectionStore).count == 1, "never corrected list missing pair")
+LearningStore.allowCorrection(rejectionStore, LearningStore.rejected(rejectionStore)[0])
+check(LearningStore.rejected(rejectionStore).isEmpty, "allowing a correction failed")
+rejectionStore.set(["corrections": restoredHistory.serialize(), "revision": rejectionStore.string(forKey: LearningStore.revisionKey) ?? ""], forKey: "user_bundle")
+LearningStore.forget(rejectionStore)
+check(LearningStore.rejected(rejectionStore).isEmpty, "forget all retained rejection history")
+rejectionStore.removePersistentDomain(forName: rejectionSuite)
+check(CorrectionRules.sentenceStart("Hello. i", 1), "sentence-start I context")
+check(!CorrectionRules.sentenceStart("you and i", 1), "mid-sentence I context")
+check(CorrectionRules.context("press the key board", 9) == ["press", "the"], "join context included removed word")
+// Branching preserves the live recurrent state and matches an independently replayed state.
+let liveBranchState = model.initialState(), copiedBranchState = model.initialState(), replayBranchState = model.initialState()
+for word in ["<s>", "press", "the"] { model.step(liveBranchState, wordId: model.idOf(word)); model.step(replayBranchState, wordId: model.idOf(word)) }
+model.copyState(liveBranchState, to: copiedBranchState)
+var liveBeforeBranch = [Float](repeating: 0, count: model.vocabularySize), liveAfterBranch = liveBeforeBranch
+var branchOutput = liveBeforeBranch, independentOutput = liveBeforeBranch
+model.logProbs(liveBranchState, out: &liveBeforeBranch)
+model.step(copiedBranchState, wordId: model.idOf("keyboard")); model.step(replayBranchState, wordId: model.idOf("keyboard"))
+model.logProbs(copiedBranchState, out: &branchOutput); model.logProbs(replayBranchState, out: &independentOutput)
+model.logProbs(liveBranchState, out: &liveAfterBranch)
+check(zip(branchOutput, independentOutput).allSatisfy { abs($0.0 - $0.1) < 0.00001 }, "copied state changed phrase probabilities")
+check(liveBeforeBranch == liveAfterBranch, "phrase scoring advanced live state")

@@ -44,6 +44,7 @@ final class Predictor {
     private var neighbours: [Character: Set<Character>] = [:]
     private var gridCosts = [UInt8](repeating: 10, count: ComposingTaps.letters * ComposingTaps.letters)
     private let defaults: UserDefaults
+    private let history = CorrectionHistory()
     private var observed: [String: Int] = [:]
     private var lastUse: [String: Double] = [:]
     private var decayedAt = Date().timeIntervalSince1970
@@ -71,12 +72,12 @@ final class Predictor {
         let words: [String: Int]
         let pairs: [String: [String: Int]]
         let triples: [String: [String: Int]]
-        let seen: [String: Int], used: [String: Double], decayed: Double, suffix: String
+        let seen: [String: Int], used: [String: Double], decayed: Double, suffix: String, corrections: String
         let store: UserDefaults, revision: String?
         func write() {
             guard store.string(forKey: LearningStore.revisionKey) == revision else { return }
             let bundle: [String: Any] = ["words": words, "bigrams": pairs, "trigrams": triples,
-                "seen": seen, "used": used, "decay": decayed, "revision": revision ?? ""]
+                "seen": seen, "used": used, "decay": decayed, "corrections": corrections, "revision": revision ?? ""]
             store.set(bundle, forKey: "user_bundle" + suffix)
         }
     }
@@ -347,36 +348,115 @@ final class Predictor {
         return result
     }
 
+    private func wordScore(_ word: String, _ prev: String?, _ prev2: String?, _ scores: EnglishContext.Scores?) -> Double {
+        let pair = prev.flatMap { userPairs[$0]?[word] } ?? 0
+        let triple = prev2.flatMap { first in prev.flatMap { userTriples[first + "\t" + $0]?[word] } } ?? 0
+        if let scores = scores { return scores.probability(word, rank[word]) + personalScore(word, pair, triple) }
+        tableLock.lock(); let tables = seedTables; tableLock.unlock()
+        let pairs = prev.flatMap { rank[$0] }.flatMap { tables?.pairs[UInt64($0)] } ?? []
+        let triples = prev2.flatMap { rank[$0] }.flatMap { a in prev.flatMap { rank[$0] }.flatMap { tables?.triples[Self.contextId(a, $0)] } } ?? []
+        let seedPair = count(pairs, rank[word]), seedTriple = count(triples, rank[word])
+        return log(frequency(word, tables)) + 1.5 * (log(1 + Double(seedPair)) + 1.5 * log(1 + Double(pair)) + 1.2 * (log(1 + Double(seedTriple)) + 1.5 * log(1 + Double(triple))))
+    }
+    private func common(_ word: String) -> Bool { (rank[word] ?? Int.max) < 5000 }
+    private func pairCount(_ first: String, _ second: String) -> Int {
+        tableLock.lock(); let tables = seedTables; tableLock.unlock()
+        let row = rank[first].flatMap { tables?.pairs[UInt64($0)] } ?? []
+        return count(row, rank[second]) + (userPairs[first]?[second] ?? 0)
+    }
+    func recordRejection(_ original: String, _ fix: String) { history.reject(original, fix); learningDirty = true; flushLearning() }
+    func recordKept(_ original: String, _ fix: String) { history.kept(original, fix); learningDirty = true }
+    func noteTyped(_ original: String) { if history.typed(original) { learningDirty = true; flushLearning() } }
+
     func autocorrect(_ word: String, _ mode: AutocorrectMode, _ prev: String? = nil, _ prev2: String? = nil,
-                     taps: ComposingTaps? = nil, allowed: Bool = true) -> String? {
-        let p = word.lowercased()
-        guard allowed, mode != .off, CorrectionRules.eligible(word), (user[p] == nil || rank[p] != nil), !typedTwice(p) else { return nil }
-        if rank[p] != nil && mode == .confident { return nil }
+                     taps: ComposingTaps? = nil, allowed: Bool = true, sentenceStart: Bool = false) -> String? {
+        guard allowed, mode != .off, CorrectionRules.eligible(word) else { return nil }
+        let p = word.lowercased(), known = rank[word.lowercased()] != nil
+        if language == "en" && word == "i" && sentenceStart { return history.blocked(word, "I") ? nil : "I" }
+        if p.count < 2 || (known && (p.count <= 3 || mode == .confident)) || (user[p] != nil && !known) || typedTwice(p) { return nil }
         func decide(_ scores: EnglishContext.Scores?) -> String? {
             let letters = Array(p)
             var older = [Int](repeating: 1000, count: letters.count + 1), previous = older, current = older
             let spatial = taps?.hasTaps(word) == true ? taps : nil
-            let ranked = candidates(p, prev, prev2, taps, scores).filter { abs($0.word.count - p.count) <= 1 && CorrectionRules.smallEdit(p, $0.word) }
+            let ranked = candidates(p, prev, prev2, taps, scores)
+                .filter { !history.blocked(word, $0.word) && abs($0.word.count - p.count) <= 1 && CorrectionRules.smallEdit(p, $0.word) }
+                .filter { candidate in
+                    if p.count > 3 { return true }
+                    if p.count == 3 && common(candidate.word) && CorrectionRules.transposition(p, candidate.word) { return true }
+                    guard let spatial = spatial, let scores = scores, candidate.word.count == p.count else { return false }
+                    let target = Array(candidate.word)
+                    guard letters.indices.allSatisfy({ gridCost(letters[$0], target[$0]) <= 4 }) else { return false }
+                    return cost(letters, CompactLetters(candidate.word), 22, &older, &previous, &current, spatial, complete: true) <= 6 &&
+                        scores.probability(candidate.word, rank[candidate.word]) - scores.probability(p, rank[p]) >= 5
+                }
                 .map { candidate -> (String, Double) in
                     let distance = cost(letters, CompactLetters(candidate.word), 22, &older, &previous, &current, spatial, complete: true)
-                    return (candidate.word, candidate.score + (scores != nil ? 32.0 : 2.5) * Double(candidate.distance) / 10 - 2.5 * Double(distance) / 10)
+                    return (candidate.word, candidate.score + (scores != nil ? 32.0 : 2.5) * Double(candidate.distance) / 10 - 2.5 * Double(distance) / 10 - history.penalty(candidate.word))
                 }.sorted { $0.1 > $1.1 }
-            guard let best = ranked.first else { return nil }
-            tableLock.lock(); let tables = seedTables; tableLock.unlock()
-            let pairs = prev.flatMap { rank[$0] }.flatMap { tables?.pairs[UInt64($0)] } ?? []
-            let triples = prev2.flatMap { rank[$0] }.flatMap { a in prev.flatMap { rank[$0] }.flatMap { tables?.triples[Self.contextId(a, $0)] } } ?? []
-            let pair = count(pairs, rank[p]), triple = count(triples, rank[p])
-            let up = prev.flatMap { userPairs[$0]?[p] } ?? 0
-            let ut = prev2.flatMap { a in prev.flatMap { userTriples[a + "\t" + $0]?[p] } } ?? 0
-            let keep: Double
-            if let scores = scores { keep = scores.probability(p, rank[p]) + personalScore(p, up, ut) }
-            else { keep = log(frequency(p, tables)) + 1.5 * (log(1 + Double(pair)) + 1.5 * log(1 + Double(up)) + 1.2 * (log(1 + Double(triple)) + 1.5 * log(1 + Double(ut)))) }
+            let keep = wordScore(p, prev, prev2, scores) - (known ? 0 : 4.6)
             let margin = mode == .confident ? 1.2 : 0.8
-            guard best.1 - (keep - (rank[p] == nil ? 4.6 : 0)) >= margin, ranked.count < 2 || best.1 - ranked[1].1 >= margin else { return nil }
-            return matchCase(best.0, word)
+            var result: (String, Double)?
+            if let best = ranked.first {
+                let runnerMargin = p.count <= 3 && !CorrectionRules.transposition(p, best.0) ? 3.0 : margin
+                if best.1 - keep >= margin && (ranked.count < 2 || best.1 - ranked[1].1 >= runnerMargin) { result = best }
+            }
+            if !known && p.count >= 4 {
+                var splits: [(String, Double)] = []
+                let chars = Array(p)
+                for i in 1..<chars.count {
+                    let first = String(chars[..<i]), second = String(chars[i...])
+                    guard rank[first] != nil, rank[second] != nil else { continue }
+                    if mode == .confident && (i < 2 || second.count < 2 || !common(first) || !common(second)) { continue }
+                    let split = first + " " + second
+                    if history.blocked(word, split) || pairCount(first, second) < 3 { continue }
+                    let following: Double
+                    if let scores = scores { following = scores.following(first, second, rank[second]) + personalScore(second, first, prev) }
+                    else { following = wordScore(second, first, prev, nil) }
+                    if scores != nil && following < -12 { continue }
+                    splits.append((split, wordScore(first, prev, prev2, scores) + following - 0.9 - history.penalty(split)))
+                }
+                splits.sort { $0.1 > $1.1 }
+                if let best = splits.first, best.1 - max(keep, ranked.first?.1 ?? -.infinity) >= 2,
+                    splits.count < 2 || best.1 - splits[1].1 >= 1.5 { result = best }
+            }
+            return result.map { matchCase($0.0, word) }
         }
         if let english = english { return english.withScores { decide($0) } }
         return decide(nil)
+    }
+
+    func correction(_ before: String, _ mode: AutocorrectMode, taps: ComposingTaps? = nil,
+                    allowed: Bool = true, userTyped: Bool = false, allowJoin: Bool = true) -> WordCorrection? {
+        guard allowed else { return nil }
+        let word = String(before.reversed().prefix(while: TextInputRules.wordChar).reversed())
+        if userTyped { noteTyped(word) }
+        updateContext(before, word)
+        let context = CorrectionRules.context(before, word.count)
+        let prev = context.last, prev2 = context.count > 1 ? context[context.count - 2] : nil
+        if let fix = autocorrect(word, mode, prev, prev2, taps: taps, sentenceStart: CorrectionRules.sentenceStart(before, word.count)) {
+            return WordCorrection(original: word, replacement: fix)
+        }
+        guard mode == .aggressive, allowJoin, !word.isEmpty, CorrectionRules.eligible(word) else { return nil }
+        let prefix = String(before.dropLast(word.count))
+        guard prefix.hasSuffix(" "), !prefix.hasSuffix("  ") else { return nil }
+        let first = String(prefix.dropLast().reversed().prefix(while: TextInputRules.wordChar).reversed())
+        guard CorrectionRules.eligible(first), !word.contains(where: { $0.isUppercase }), !typedTwice(first), !typedTwice(word) else { return nil }
+        let original = first + " " + word, joined = first.lowercased() + word.lowercased()
+        if userTyped { noteTyped(original) }
+        guard common(joined), !history.blocked(original, joined), pairCount(first.lowercased(), word.lowercased()) < 3 else { return nil }
+        let preceding = CorrectionRules.context(before, original.count)
+        let prior = preceding.last, older = preceding.count > 1 ? preceding[preceding.count - 2] : nil
+        func join(_ scores: EnglishContext.Scores?) -> WordCorrection? {
+            let neural = scores?.lastWord == first.lowercased() ? scores : nil
+            let joinedScore = (neural.map { $0.preceding(joined, rank[joined]) + personalScore(joined, prior, older) }
+                ?? wordScore(joined, prior, older, nil)) - 0.9 - history.penalty(joined)
+            let firstScore = neural.map { $0.preceding(first.lowercased(), rank[first.lowercased()]) } ?? wordScore(first.lowercased(), prior, older, nil)
+            let secondScore = wordScore(word.lowercased(), first.lowercased(), prior, neural)
+            let keep = firstScore + secondScore - (rank[first.lowercased()] == nil ? 4.6 : 0) - (rank[word.lowercased()] == nil ? 4.6 : 0) - 2.5
+            return joinedScore - keep >= 4 ? WordCorrection(original: original, replacement: matchCase(joined, first)) : nil
+        }
+        if let english = english { return english.withScores { join($0) } }
+        return join(nil)
     }
 
     struct Suggestions {
@@ -486,6 +566,10 @@ final class Predictor {
         if rank[w] != nil || observed[w, default: 0] >= 2 { learn(w, prev, prev2) }
         if observed.count > Self.wordLimit { boundLearning() }
     }
+    func observeFinal(_ text: String, _ prev: String?, _ prev2: String?, picked: Bool = false) {
+        var previous = prev, older = prev2
+        for word in text.components(separatedBy: " ") { observe(word, previous, older, picked: picked); older = previous; previous = word.lowercased() }
+    }
     func typedTwice(_ word: String) -> Bool { observed[word.lowercased(), default: 0] >= 2 }
     @discardableResult func refreshLearning() -> Bool {
         guard learningRevision != defaults.string(forKey: LearningStore.revisionKey) else { return false }
@@ -496,6 +580,7 @@ final class Predictor {
         saveWork?.cancel(); saveWork = nil
         learningRevision = defaults.string(forKey: LearningStore.revisionKey)
         let data = LearningStore.data(defaults, language)
+        history.load(data["corrections"] as? String ?? "")
         user = data["words"] as? [String: Int] ?? [:]
         userPairs = data["bigrams"] as? [String: [String: Int]] ?? [:]
         userTriples = data["trigrams"] as? [String: [String: Int]] ?? [:]
@@ -531,7 +616,7 @@ final class Predictor {
         if learningDirty {
             learningDirty = false
             let snapshot = LearningSnapshot(words: user, pairs: userPairs, triples: userTriples,
-                seen: observed, used: lastUse, decayed: decayedAt, suffix: suffix, store: defaults, revision: learningRevision)
+                seen: observed, used: lastUse, decayed: decayedAt, suffix: suffix, corrections: history.serialize(), store: defaults, revision: learningRevision)
             Self.persistence.async { snapshot.write() }
         }
         if wait { Self.persistence.sync {} }

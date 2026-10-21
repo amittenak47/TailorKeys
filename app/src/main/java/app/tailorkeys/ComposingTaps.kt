@@ -6,6 +6,8 @@ import kotlin.math.roundToInt
 class ComposingTaps {
     private val costs = ByteArray(MAX_LENGTH * LETTERS)
     private val known = BooleanArray(MAX_LENGTH)
+    private val entered = BooleanArray(MAX_LENGTH)
+    private var enteredCount = 0
     private var count = 0
     var word: String = ""
         private set
@@ -16,8 +18,8 @@ class ComposingTaps {
 
     fun sync(prefix: String) {
         if (word == prefix) return
-        known.fill(false)
-        count = 0
+        known.fill(false); entered.fill(false)
+        count = 0; enteredCount = 0
         word = prefix
         revision++
     }
@@ -26,6 +28,7 @@ class ComposingTaps {
         sync(prefix)
         val index = word.length
         word += letter
+        if (index < MAX_LENGTH && letter.length == 1) { entered[index] = true; enteredCount++ }
         if (index < MAX_LENGTH && letter.length == 1 && distances != null) {
             // -log Gaussian likelihood relative to the best centre (sigma = 0.5 widths).
             // Two tenths per nat => 4 * squared distance. Cap the boundary credit so
@@ -45,10 +48,12 @@ class ComposingTaps {
         if (word.isEmpty()) return
         val index = word.lastIndex
         if (index < MAX_LENGTH && known[index]) { known[index] = false; count-- }
+        if (index < MAX_LENGTH && entered[index]) { entered[index] = false; enteredCount-- }
         word = word.dropLast(1)
         revision++
     }
 
+    fun hasInput(prefix: String) = word == prefix && enteredCount > 0
     fun hasTaps(prefix: String) = word == prefix && count > 0
     fun hasTap(index: Int) = index < MAX_LENGTH && known[index]
     fun cost(index: Int, letter: Char): Int =

@@ -59,16 +59,42 @@ final class EnglishContext {
         var top: [Int]
         var version: UInt64 = 0
         var previous2: String?
+        var lastWord: String?
+        private let currentState: NextWordModel.State
+        private let parentState: NextWordModel.State
+        private let probe: NextWordModel.State
+        private var probeProbabilities: [Float]
+        private var probeKey: String?
+        func capture(_ current: NextWordModel.State, _ parent: NextWordModel.State, _ last: String?) {
+            model.copyState(current, to: currentState); model.copyState(parent, to: parentState)
+            lastWord = last; probeKey = nil
+        }
+        private func branch(_ first: String?) {
+            let key = first ?? ""
+            if probeKey == key { return }
+            model.copyState(first == nil ? parentState : currentState, to: probe)
+            if let first = first { model.step(probe, wordId: model.normalizedIdOf(first)) }
+            model.logProbs(probe, out: &probeProbabilities); probeKey = key
+        }
+        func following(_ first: String, _ word: String, _ rank: Int?) -> Double {
+            branch(first); return probability(word, rank, probeProbabilities)
+        }
+        func preceding(_ word: String, _ rank: Int?) -> Double {
+            branch(nil); return probability(word, rank, probeProbabilities)
+        }
         init(_ model: NextWordModel, _ ids: [Int], _ mass: Double) {
             self.model = model; self.ids = ids; oovMass = mass
+            currentState = model.initialState(); parentState = model.initialState(); probe = model.initialState()
+            probeProbabilities = [Float](repeating: 0, count: model.vocabularySize)
             probabilities = [Float](repeating: 0, count: model.vocabularySize)
             top = [Int](repeating: -1, count: min(300, model.vocabularySize - 5))
         }
-        func probability(_ word: String, _ rank: Int?) -> Double {
+        func probability(_ word: String, _ rank: Int?) -> Double { probability(word, rank, probabilities) }
+        private func probability(_ word: String, _ rank: Int?, _ values: [Float]) -> Double {
             let id = rank.map { ids[$0] } ?? model.normalizedIdOf(word)
-            if id != 2 { return Double(probabilities[id]) }
+            if id != 2 { return Double(values[id]) }
             // <unk> also covers words absent from the keyboard dictionary. Reserve their mass.
-            return Double(probabilities[2]) + log(0.1 * (1.0 / Double((rank ?? 5000) + 10)) / oovMass)
+            return Double(values[2]) + log(0.1 * (1.0 / Double((rank ?? 5000) + 10)) / oovMass)
         }
     }
     private let words: [String]
@@ -82,6 +108,7 @@ final class EnglishContext {
     // Worker-owned fields.
     private var model: NextWordModel?
     private var state: NextWordModel.State?
+    private var parentState: NextWordModel.State?
     private var tokens: [String] = []
     private var workerEpoch: UInt64?
     private var front: Scores?, back: Scores?
@@ -110,7 +137,7 @@ final class EnglishContext {
             let notify = !self.cancelled && self.requested != nil
             self.requested = nil; self.generation &+= 1; self.epoch &+= 1
             self.lock.unlock()
-            self.model = nil; self.state = nil; self.front = nil; self.back = nil; self.computed = nil
+            self.model = nil; self.state = nil; self.parentState = nil; self.front = nil; self.back = nil; self.computed = nil
             self.tokens.removeAll(); self.workerEpoch = nil
             EnglishModel.release()
             if notify { self.onReady() }
@@ -139,7 +166,7 @@ final class EnglishContext {
         lock.unlock()
         if stop { lock.lock(); running = false; lock.unlock(); return }
         if model == nil, let m = EnglishModel.load() {
-            model = m; state = m.initialState()
+            model = m; state = m.initialState(); parentState = m.initialState()
             let ids = words.map { m.normalizedIdOf($0) }
             var mass = 0.0
             for i in ids.indices where ids[i] == 2 { mass += 1.0 / Double(i + 10) }
@@ -166,6 +193,7 @@ final class EnglishContext {
                 if stop { running = false }
                 lock.unlock()
                 if stop { return }
+                if i == next.count - 1, let parent = parentState { m.copyState(state, to: parent) }
                 m.step(state, wordId: m.idOf(next[i]))
             } }
             tokens = next
@@ -174,6 +202,7 @@ final class EnglishContext {
             let sentenceStart = (next.lastIndex(of: "<s>") ?? -1) + 1
             output.previous2 = next.dropFirst(sentenceStart).filter { !$0.hasPrefix("<") }.dropLast().last
             if !unchanged {
+                if let parent = parentState { output.capture(state, parent, next.last.flatMap { $0.hasPrefix("<") ? nil : $0 }) }
                 m.logProbs(state, out: &output.probabilities)
                 fillTop(output)
                 computed = output

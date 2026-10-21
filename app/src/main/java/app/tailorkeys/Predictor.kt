@@ -49,6 +49,8 @@ class Predictor internal constructor(
     private val userFile = File(filesDir, "user_words${suffix}.txt")
     private val pairFile = File(filesDir, "user_bigrams${suffix}.txt")
     private val tripleFile = File(filesDir, "user_trigrams${suffix}.txt")
+    private val history = CorrectionHistory()
+    private val correctionFile = File(filesDir, "user_corrections${suffix}.txt")
     private val metadataFile = File(filesDir, "user_learning${suffix}.txt")
     private val directory = filesDir
     private var generation = PersonalStore.generation(filesDir)
@@ -315,35 +317,112 @@ class Predictor internal constructor(
         return result
     }
 
+    private fun wordScore(w: String, prev: String?, prev2: String?, scores: EnglishContext.Scores?): Double {
+        val pair = userPairs[prev]?.get(w) ?: 0
+        val triple = if (prev != null && prev2 != null) userTriples["$prev2\t$prev"]?.get(w) ?: 0 else 0
+        if (scores != null) return scores.probability(w, rank[w]) + personalScore(w, pair, triple)
+        val tables = seedTables
+        val seedPair = count(rank[prev]?.let { tables?.pairs?.get(it.toLong()) }, rank[w])
+        val seedTriple = if (prev != null && prev2 != null) count(rank[prev2]?.let { a -> rank[prev]?.let { b -> tables?.triples?.get(contextId(a, b)) } }, rank[w]) else 0
+        return ln(frequency(w)) + 1.5 * (ln(1.0 + seedPair) + 1.5 * ln(1.0 + pair) + 1.2 * (ln(1.0 + seedTriple) + 1.5 * ln(1.0 + triple)))
+    }
+    private fun common(word: String) = (rank[word] ?: Int.MAX_VALUE) < 5000
+    private fun pairCount(first: String, second: String) = count(rank[first]?.let { seedTables?.pairs?.get(it.toLong()) }, rank[second]) + (userPairs[first]?.get(second) ?: 0)
+
+    fun recordRejection(original: String, fix: String): java.util.concurrent.Future<*>? { history.reject(original, fix); dirty = true; return save() }
+    fun recordKept(original: String, fix: String) { history.kept(original, fix); dirty = true }
+    fun noteTyped(original: String) { if (history.typed(original)) { dirty = true; save() } }
+    internal fun rejectionPenalty(fix: String) = history.penalty(fix)
+
     fun autocorrect(word: String, mode: AutocorrectMode, prev: String? = null, prev2: String? = null,
-                    taps: ComposingTaps? = null, allowed: Boolean = true): String? {
-        if (!allowed || mode == AutocorrectMode.OFF || !CorrectionRules.eligible(word) || isLearned(word) && !rank.containsKey(word.lowercase()) || typedTwice(word)) return null
+                    taps: ComposingTaps? = null, allowed: Boolean = true, sentenceStart: Boolean = false): String? {
+        if (!allowed || mode == AutocorrectMode.OFF || !CorrectionRules.eligible(word)) return null
         val p = word.lowercase()
+        if (language == "en" && word == "i" && sentenceStart)
+            return "I".takeUnless { history.blocked(word, it) }
         val known = rank.containsKey(p)
-        if (known && mode == AutocorrectMode.CONFIDENT) return null
+        // Short dictionary words are intentional, even in Aggressive mode.
+        if (p.length < 2 || known && (p.length <= 3 || mode == AutocorrectMode.CONFIDENT) ||
+            isLearned(p) && !known || typedTwice(p)) return null
         fun decide(scores: EnglishContext.Scores?): String? {
             val rows = Array(3) { IntArray(p.length + 1) }
             val spatial = taps?.takeIf { it.hasTaps(word) }
             val ranked = candidates(p, prev, prev2, taps, scores).asSequence()
-                .filter { kotlin.math.abs(it.word.length - p.length) <= 1 && CorrectionRules.smallEdit(p, it.word) }
+                .filter { !history.blocked(word, it.word) && kotlin.math.abs(it.word.length - p.length) <= 1 && CorrectionRules.smallEdit(p, it.word) }
+                .filter {
+                    if (p.length > 3) true
+                    else if (p.length == 3 && common(it.word) && CorrectionRules.transposition(p, it.word)) true
+                    else spatial != null && scores != null && it.word.length == p.length &&
+                        p.indices.all { index -> gridCost(p[index], it.word[index]) <= 4 } &&
+                        cost(p, it.word, 22, rows, spatial, complete = true) <= 6 &&
+                        scores.probability(it.word, rank[it.word]) - scores.probability(p, rank[p]) >= 5.0
+                }
                 .map { it.word to (it.score + (if (scores != null) MODEL_TYPO_WEIGHT else 2.5) * it.distance / 10.0 -
-                    2.5 * cost(p, it.word, 22, rows, spatial, complete = true) / 10.0) }
+                    2.5 * cost(p, it.word, 22, rows, spatial, complete = true) / 10.0 - history.penalty(it.word)) }
                 .sortedByDescending { it.second }.toList()
-            val best = ranked.firstOrNull() ?: return null
-            val tables = seedTables
-            val pair = count(rank[prev]?.let { tables?.pairs?.get(it.toLong()) }, rank[p])
-            val triple = if (prev != null && prev2 != null) count(rank[prev2]?.let { a -> rank[prev]?.let { b -> tables?.triples?.get(contextId(a, b)) } }, rank[p]) else 0
-            val up = userPairs[prev]?.get(p) ?: 0
-            val ut = if (prev != null && prev2 != null) userTriples["$prev2\t$prev"]?.get(p) ?: 0 else 0
-            val keep = if (scores != null) scores.probability(p, rank[p]) + personalScore(p, up, ut)
-                else ln(frequency(p)) + 1.5 * (ln(1.0 + pair) + 1.5 * ln(1.0 + up) + 1.2 * (ln(1.0 + triple) + 1.5 * ln(1.0 + ut)))
-            // A transposition costs less than adding/dropping a letter. Unknown spellings
-            // also pay a dictionary prior, rather than inheriting all model <unk> mass.
+            val keep = wordScore(p, prev, prev2, scores) - if (known) 0.0 else 4.6
             val margin = if (mode == AutocorrectMode.CONFIDENT) 1.2 else .8
-            if (best.second - (keep - if (known) 0.0 else 4.6) < margin || ranked.getOrNull(1)?.let { best.second - it.second < margin } == true) return null
-            return matchCase(best.first, word)
+            var result = ranked.firstOrNull()?.takeIf { best -> best.second - keep >= margin &&
+                (ranked.getOrNull(1)?.let { best.second - it.second >= if (p.length <= 3 && !CorrectionRules.transposition(p, best.first)) 3.0 else margin } != false) }
+            // A split pays for both words plus a boundary edit; it must beat every single-word candidate.
+            if (!known && p.length >= 4) {
+                val splits = ArrayList<Pair<String, Double>>()
+                for (i in 1 until p.length) {
+                    val first = p.substring(0, i); val second = p.substring(i)
+                    if (!rank.containsKey(first) || !rank.containsKey(second)) continue
+                    if (mode == AutocorrectMode.CONFIDENT && (i < 2 || second.length < 2 || !common(first) || !common(second))) continue
+                    val split = "$first $second"
+                    if (history.blocked(word, split) || pairCount(first, second) < 3) continue
+                    val following = if (scores != null) scores.following(first, second, rank[second]) + personalScore(second, first, prev)
+                        else wordScore(second, first, prev, null)
+                    if (scores != null && following < -12.0) continue
+                    splits.add(split to (wordScore(first, prev, prev2, scores) + following - .9 - history.penalty(split)))
+                }
+                splits.sortByDescending { it.second }
+                splits.firstOrNull()?.let { best ->
+                    if (best.second - maxOf(keep, ranked.firstOrNull()?.second ?: Double.NEGATIVE_INFINITY) >= 2.0 &&
+                        (splits.getOrNull(1)?.let { best.second - it.second >= 1.5 } != false)) result = best
+                }
+            }
+            return result?.let { matchCase(it.first, word) }
         }
         return if (english != null) english.withScores { decide(it) } else decide(null)
+    }
+
+    /** A bounded editor span, used by both IMEs so joins share ordinary correction undo. */
+    fun correction(before: String, mode: AutocorrectMode, taps: ComposingTaps? = null,
+                   allowed: Boolean = true, userTyped: Boolean = false, allowJoin: Boolean = true): WordCorrection? {
+        if (!allowed) return null
+        val word = before.takeLastWhile(TextInputRules::wordChar)
+        if (userTyped) noteTyped(word)
+        updateContext(before, word)
+        val context = CorrectionRules.context(before, word.length)
+        val fix = autocorrect(word, mode, context.lastOrNull(), context.getOrNull(context.size - 2), taps,
+            sentenceStart = CorrectionRules.sentenceStart(before, word.length))
+        if (fix != null) return WordCorrection(word, fix)
+        if (mode != AutocorrectMode.AGGRESSIVE || !allowJoin || word.isEmpty() || !CorrectionRules.eligible(word)) return null
+        val prefix = before.dropLast(word.length)
+        if (!prefix.endsWith(" ") || prefix.endsWith("  ")) return null
+        val first = prefix.dropLast(1).takeLastWhile(TextInputRules::wordChar)
+        if (!CorrectionRules.eligible(first) || word.any { it.isUpperCase() } || typedTwice(first) || typedTwice(word)) return null
+        val original = "$first $word"; val joined = first.lowercase() + word.lowercase()
+        if (userTyped) noteTyped(original)
+        if (!common(joined) || history.blocked(original, joined)) return null
+        // "Rare" includes contextually rare pairs (key board); established phrases (in to) stay intact.
+        if (pairCount(first.lowercase(), word.lowercase()) >= 3) return null
+        val preceding = CorrectionRules.context(before, original.length)
+        val prev = preceding.lastOrNull(); val prev2 = preceding.getOrNull(preceding.size - 2)
+        fun join(scores: EnglishContext.Scores?): WordCorrection? {
+            val neural = scores?.takeIf { it.lastWord == first.lowercase() }
+            val joinedScore = (neural?.preceding(joined, rank[joined])?.plus(personalScore(joined, prev, prev2))
+                ?: wordScore(joined, prev, prev2, null)) - .9 - history.penalty(joined)
+            val firstScore = neural?.preceding(first.lowercase(), rank[first.lowercase()]) ?: wordScore(first.lowercase(), prev, prev2, null)
+            val secondScore = wordScore(word.lowercase(), first.lowercase(), prev, neural)
+            val keep = firstScore + secondScore - (if (rank.containsKey(first.lowercase())) 0.0 else 4.6) - (if (rank.containsKey(word.lowercase())) 0.0 else 4.6) - 2.5
+            // A pair absent from the corpus pays a boundary-error prior as well as LM likelihood.
+            return if (joinedScore - keep >= 4.0) WordCorrection(original, matchCase(joined, first)) else null
+        }
+        return if (english != null) english.withScores { join(it) } else join(null)
     }
 
     fun nextLetters(prefix: String, prev: String?, prev2: String? = null, taps: ComposingTaps? = null): Map<Char, Double> {
@@ -425,6 +504,10 @@ class Predictor internal constructor(
         if (rank.containsKey(w) || observed.getValue(w) >= 2) learn(w, prev, prev2)
         trimLearning()
     }
+    fun observeFinal(text: String, prev: String?, prev2: String?, picked: Boolean = false) {
+        var previous = prev; var older = prev2
+        for (word in text.split(' ')) { observe(word, previous, older, picked); older = previous; previous = word.lowercase() }
+    }
     fun typedTwice(word: String) = (observed[word.lowercase()] ?: 0) >= 2
     fun isLearned(word: String) = user.containsKey(word.lowercase())
 
@@ -433,6 +516,7 @@ class Predictor internal constructor(
     fun reloadLearning() {
         user.clear(); learnedWords.clear(); userPairs.clear(); userTriples.clear(); observed.clear(); lastUse.clear()
         generation = PersonalStore.generation(directory)
+        history.load(if (correctionFile.exists()) correctionFile.readText() else "")
         if (userFile.exists()) userFile.forEachLine { line ->
             val p = line.split('\t')
             if (p.size == 2) p[1].toIntOrNull()?.takeIf { it > 0 }?.let { user[p[0]] = it }
@@ -498,12 +582,12 @@ class Predictor internal constructor(
             append("@decay\t$decayedAt\n")
             for ((word, seen) in observed) append("$word\t$seen\t${lastUse[word] ?: 0}\n")
         }
-        val snapshot = PersonalStore.Snapshot(user, userPairs, userTriples, metadata)
+        val snapshot = PersonalStore.Snapshot(user, userPairs, userTriples, metadata, history.serialize())
         val savedGeneration = generation
         dirty = false
         saveFailed = false
         return PersonalStore.submit {
-            try { if (PersonalStore.generation(directory) == savedGeneration) snapshot.write(userFile, pairFile, tripleFile, metadataFile) }
+            try { if (PersonalStore.generation(directory) == savedGeneration) snapshot.write(userFile, pairFile, tripleFile, metadataFile, correctionFile) }
             catch (e: java.io.IOException) { saveFailed = true; throw e }
         }
     }

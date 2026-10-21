@@ -50,6 +50,12 @@ class NextWordModel private constructor(
     internal fun normalizedIdOf(word: String): Int = ids[word] ?: 2
     fun initialState(): State = State(this)
 
+    /** Copies only recurrent/output state into already allocated branch storage. */
+    internal fun copyState(from: State, to: State) {
+        require(from.owner === this && to.owner === this)
+        from.hidden.copyInto(to.hidden); from.cell.copyInto(to.cell); from.projected.copyInto(to.projected)
+    }
+
     /** Updates and returns state. No allocations; states must not be used concurrently. */
     fun step(state: State, wordId: Int): State {
         require(state.owner === this) { "State belongs to another model" }

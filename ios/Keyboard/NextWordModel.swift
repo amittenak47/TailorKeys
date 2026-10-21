@@ -70,6 +70,13 @@ final class NextWordModel {
     func initialState() -> State { State(self) }
     func normalizedIdOf(_ word: String) -> Int { ids[word] ?? 2 }
 
+    /// Copies into uniquely owned, preallocated branch buffers.
+    func copyState(_ from: State, to: State) {
+        precondition(from.owner === self && to.owner === self)
+        for i in from.hidden.indices { to.hidden[i] = from.hidden[i]; to.cell[i] = from.cell[i] }
+        for i in from.projected.indices { to.projected[i] = from.projected[i] }
+    }
+
     /// Mutates and returns state; all buffers are allocated by initialState().
     @discardableResult
     func step(_ state: State, wordId: Int) -> State {
