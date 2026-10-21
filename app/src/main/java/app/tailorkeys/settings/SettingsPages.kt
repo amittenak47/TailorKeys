@@ -66,7 +66,6 @@ internal fun LazyListScope.sizeOptions(state: SettingsState, page: Boolean, onPa
                 if (p.split) {
                     SettingSlider("Center gap", p.gap, Prefs.splitGap(page), "${p.gap}%") { state.setFor(page, Prefs::splitGap, it) }
                     SettingSlider("Tilt", p.tilt, Prefs.tilt(page), degrees(p.tilt)) { state.setFor(page, Prefs::tilt, it) }
-                    SettingSlider("Space row tilt", p.spaceTilt, Prefs.spaceTilt(page), degrees(p.spaceTilt)) { state.setFor(page, Prefs::spaceTilt, it) }
                     val curve = state.int(Prefs.CURVE)
                     SettingSlider("Curve", curve, Prefs.CURVE, "$curve%") { state.setFor(page, { Prefs.CURVE }, it) }
                 }

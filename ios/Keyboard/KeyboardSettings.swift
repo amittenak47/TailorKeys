@@ -24,7 +24,6 @@ enum Prefs {
     static func bottomPadding(_ l: Bool) -> IntPref { IntPref(key: l ? "bottom_pad_l" : "bottom_pad_p", def: 0, min: 0, max: 48) }
     static func splitGap(_ l: Bool) -> IntPref { l ? IntPref(key: "split_gap_l", def: 22, min: 2, max: 40) : IntPref(key: "split_gap_p", def: 16, min: 2, max: 40) }
     static func tilt(_ l: Bool) -> IntPref { IntPref(key: l ? "tilt_l" : "tilt_p", def: 0, min: -10, max: 10) }
-    static func spaceTilt(_ l: Bool) -> IntPref { IntPref(key: l ? "space_tilt_l" : "space_tilt_p", def: 0, min: -10, max: 10) }
     static func alignKey(_ l: Bool) -> String { l ? "align_l" : "align_p" }
     static func splitKey(_ l: Bool) -> String { l ? "split_l" : "split_p" }
 
@@ -83,7 +82,7 @@ enum Prefs {
                                                  layoutsSaved, layoutDraft, layoutDraftSplit, layoutSelected, layoutTrialPrevious, layoutTrialSplit, typingResults]
         keys += [curve, keyGap, cornerRadius, keyRepeatGuard, touchSlack, textScale, longPressMs].map { $0.key }
         for l in [false, true] {
-            keys += [height(l), width(l), bottomPadding(l), splitGap(l), tilt(l), spaceTilt(l)].map { $0.key }
+            keys += [height(l), width(l), bottomPadding(l), splitGap(l), tilt(l)].map { $0.key }
             keys += [alignKey(l), splitKey(l)]
         }
         return keys
@@ -98,7 +97,6 @@ struct SizeProfile {
     let split: Bool
     let gap: Int
     let tilt: Int
-    let spaceTilt: Int
 }
 
 final class KeyboardSettings {
@@ -118,6 +116,8 @@ final class KeyboardSettings {
     init(tablet: Bool, store: UserDefaults = .standard) {
         self.tablet = tablet
         d = store
+        d.removeObject(forKey: "space_tilt_p")
+        d.removeObject(forKey: "space_tilt_l")
     }
 
     convenience init(tablet: Bool, hasFullAccess: Bool) {
@@ -226,7 +226,7 @@ final class KeyboardSettings {
     }
 
     func linkOrientations(from l: Bool) {
-        for pref in [Prefs.height, Prefs.width, Prefs.bottomPadding, Prefs.splitGap, Prefs.tilt, Prefs.spaceTilt] { set(pref(!l), int(pref(l))) }
+        for pref in [Prefs.height, Prefs.width, Prefs.bottomPadding, Prefs.splitGap, Prefs.tilt] { set(pref(!l), int(pref(l))) }
         d.set(align(l).rawValue, forKey: Prefs.alignKey(!l))
         d.set(split(l), forKey: Prefs.splitKey(!l))
         set(Prefs.sameOrientations, true)
@@ -243,7 +243,7 @@ final class KeyboardSettings {
         }
         return SizeProfile(heightPercent: int(Prefs.height(l)), widthPercent: int(Prefs.width(l)), align: align(l),
                     bottomPadding: int(Prefs.bottomPadding(l)), split: previewSplit ?? trialSplit ?? split(l),
-                    gap: int(Prefs.splitGap(l)), tilt: int(Prefs.tilt(l)), spaceTilt: int(Prefs.spaceTilt(l)))
+                    gap: int(Prefs.splitGap(l)), tilt: int(Prefs.tilt(l)))
     }
 
     var theme: ThemeName {

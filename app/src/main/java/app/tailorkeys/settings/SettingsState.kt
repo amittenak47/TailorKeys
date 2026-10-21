@@ -104,7 +104,7 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
     fun profile(page: Boolean): SizeProfile {
         revisions.read(Prefs.height(page).key, Prefs.width(page).key, Prefs.alignKey(page),
             Prefs.bottomPadding(page).key, Prefs.splitKey(page), Prefs.splitGap(page).key,
-            Prefs.tilt(page).key, Prefs.spaceTilt(page).key)
+            Prefs.tilt(page).key)
         return settings.profile(page)
     }
     fun cursorControl() = run { revisions.read(Prefs.CURSOR_CONTROL); settings.cursorControl() }

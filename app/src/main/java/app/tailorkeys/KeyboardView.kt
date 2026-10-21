@@ -366,7 +366,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val split = p.split
         val curve = if (editMode || !split) 0f else settings.int(Prefs.CURVE) / 100f
         val tilt = if (editMode || !split) 0f else p.tilt.toFloat()
-        val spaceTilt = if (editMode || !split) 0f else p.spaceTilt.toFloat()
         val n = grid.rows
         val gap = settings.int(Prefs.KEY_GAP) * d
         stripH = max((if (screenH / d < 500) 34 else 40) * d, 22 * d * labelScale + 8 * d)
@@ -393,7 +392,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
         val reserve = split && !editMode
         val s = layoutSolver.compute(d, n, gap, stripH, handleH, pad, bottomPad,
-            target, half, innerW, split, editMode, tilt, spaceTilt, curve, grid)
+            target, half, innerW, split, editMode, tilt, curve, grid)
         unit = s.un
         // Centre the active key area in the space reserved for the worst case.
         // Split: key size comes from the worst-case tilt (so keys never resize), but the frame fits the keys at the
@@ -414,9 +413,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             val lx = innerLeft + s.pv - s.cw
             val rx = innerLeft + half + gapPx + half - s.pv
             fun base(x: Float, side: Int, space: Boolean): Matrix {
-                val top = y0 + if (space) s.spaceY - letterH else s.letterY
-                val pivotY = if (space) y0 + s.spaceY else top + letterH
-                val angle = (if (space) spaceTilt else tilt) * (if (side == 0) 1 else -1)
+                val top = y0 + s.letterY
+                val pivotY = top + n * unit
+                val angle = tilt * (if (side == 0) 1 else -1)
                 return Matrix().apply {
                     setTranslate(x, top)
                     postRotate(angle, x + (if (side == 0) s.cw else 0f), pivotY)
@@ -452,7 +451,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 val rect = RectF(lc * rowUnit + gap / 2, item.r * unit + gap / 2, (lc + b - a) * rowUnit - gap / 2, (item.r + 1) * unit - gap / 2)
                 val m = Matrix()
                 // Ergonomic curve: raise the middle fingers' columns and angle each key like a fan.
-                if (ct.side >= 0 && curve > 0f && item.r < n - 1) {
+                if (ct.side >= 0 && curve > 0f) {
                     m.setRotate(ANG[ct.side][lc] * curve, rect.centerX(), rect.centerY())
                     m.postTranslate(0f, -RAISE[ct.side][lc] * curve * unit)
                 }
@@ -491,7 +490,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             hintRect.set(undoRect.right, 0f, right - undoRect.width(), stripH)
         }
         handleRect.set(areaLeft, y0 + hc, areaLeft + areaW, y0 + hc + handleH)
-        // All cursor regions use the same row-edge geometry, including fan rotation and separate space-row tilt.
+        // All cursor regions use the same row-edge geometry, including the shared tilt and fan.
         fun keyEdge(leftHalf: Boolean, inner: Boolean): List<ZonePoint> {
             val edgeRight = leftHalf == inner
             val pt = FloatArray(2)

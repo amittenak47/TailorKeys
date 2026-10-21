@@ -76,7 +76,7 @@ class TypingLayoutBenchmarkTest {
             fun layout(resize: Boolean) { repeat(80) { i ->
                 val target = if (resize) 340f + i % 20 else 360f
                 val s = solver.compute(1.5f, 4, 7.5f, 60f, 21f, 6f, 0f, target,
-                    270f, 630f, true, false, (i % 21 - 10).toFloat(), 0f, .7f, grid)
+                    270f, 630f, true, false, (i % 21 - 10).toFloat(), .7f, grid)
                 checksum += s.total.toBits()
             } }
             repeat(4) { typing(); layout(true); layout(false) }

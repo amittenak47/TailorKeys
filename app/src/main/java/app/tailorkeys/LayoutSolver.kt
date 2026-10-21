@@ -46,7 +46,7 @@ internal class LayoutSolver {
     fun compute(
         d: Float, n: Int, gap: Float, stripH: Float, handleH: Float, pad: Float, bottomPad: Float,
         target: Float, half: Float, innerW: Float, split: Boolean, editMode: Boolean,
-        tilt: Float, spaceTilt: Float, curve: Float, grid: KeyGrid,
+        tilt: Float, curve: Float, grid: KeyGrid,
     ): Solution {
         val th = Math.toRadians(tilt.toDouble())
         fun solution(un: Float, hc: Float, cw: Float, pv: Float, disp: Float, padTop: Float,
@@ -95,11 +95,12 @@ internal class LayoutSolver {
         // every key in every binary-search trial, including wide/custom keys.
         fun fans(bend: Float, sines: FloatArray) {
             sines.fill(0f)
-            for (item in grid.items) if (item.r < n - 1 && item.c != KeyGrid.CENTER) {
+            for (item in grid.items) if (item.c != KeyGrid.CENTER) {
                 val side = if (item.c < KeyGrid.CENTER) 0 else 1
                 val lc = if (side == 0) item.c else item.c - 6
                 val value = sin(Math.toRadians((abs(ANG[side][lc]) * bend).toDouble())).toFloat()
-                sines[item.w] = max(sines[item.w], value)
+                val width = ceil(item.w * 5f / grid.rowColumns(item.r, item.c)).toInt().coerceIn(1, 5)
+                sines[width] = max(sines[width], value)
             }
         }
         val reserve = split && !editMode
@@ -120,7 +121,7 @@ internal class LayoutSolver {
             if (fanCurve != curve) { fans(curve, liveFans); fanCurve = curve }
         }
         // Bounds include every key's fan rotation, even wide keys, at any smaller curve.
-        fun blocks(un: Float, cw: Float, angle: Double, spaceAngle: Double, bend: Float): Work {
+        fun blocks(un: Float, cw: Float, angle: Double, bend: Float): Work {
             val letterH = un * (n - 1)
             var fanX = 0f
             var fanY = 0f
@@ -141,23 +142,19 @@ internal class LayoutSolver {
                 out[1] = min(min(ay, by), min(cy, dy)); out[3] = max(max(ay, by), max(cy, dy))
             }
             val letters = boundsLetters
-            val space = boundsSpace
-            bounds(-cw + gap / 2 - fanX, -letterH + gap / 2 - 0.38f * bend * un - fanY, -gap / 2 + fanX, -gap / 2 + fanY, angle, letters)
-            bounds(-cw + gap / 2, gap / 2, -gap / 2, un - gap / 2, spaceAngle, space)
-            // Separate the complete rotated bounds by the normal gap, including opposing tilts.
-            val lettersH = letters[3] - letters[1]
-            val contentH = lettersH + gap + (space[3] - space[1])
+            // One transformed block: row spacing is preserved through the shared tilt and fan.
+            bounds(-cw + gap / 2 - fanX, -n * un + gap / 2 - 0.38f * bend * un - fanY,
+                -gap / 2 + fanX, -gap / 2 + fanY, angle, letters)
+            val contentH = letters[3] - letters[1]
             val hc = max(n * un, contentH)
             val extra = (hc - contentH) / 2
-            val left = min(letters[0], space[0])
-            val right = max(letters[2], space[2])
-            return solution(un, hc, cw, -left, 0f, pad, -letters[1] - letterH + extra,
-                lettersH + gap - space[1] + extra, right - left)
+            val top = -letters[1] - n * un + extra
+            return solution(un, hc, cw, -letters[0], 0f, pad, top,
+                top + letterH, letters[2] - letters[0])
         }
         val s = if (reserve) {
             // Fit both ranges together at maximum curve; neither live angle changes key dimensions.
             val angles = EXTREME_ANGLES
-            val spaceAngles = EXTREME_ANGLES
             // 14 halvings resolve widths and heights far below a pixel.
             fun worst(un: Float): Work {
                 var lo = gap
@@ -166,14 +163,14 @@ internal class LayoutSolver {
                     val cw = (lo + hi) / 2
                     var fits = true
                     for (a in angles) {
-                        for (b in spaceAngles) if (blocks(un, cw, a, b, 1f).span > half) { fits = false; break }
+                        if (blocks(un, cw, a, 1f).span > half) { fits = false; break }
                         if (!fits) break
                     }
                     if (fits) lo = cw else hi = cw
                 }
                 worstWork.total = Float.NEGATIVE_INFINITY
-                for (a in angles) for (b in spaceAngles) {
-                    val candidate = blocks(un, lo, a, b, 1f)
+                for (a in angles) {
+                    val candidate = blocks(un, lo, a, 1f)
                     if (candidate.total > worstWork.total) worstWork.copy(candidate)
                 }
                 return worstWork
@@ -194,7 +191,7 @@ internal class LayoutSolver {
                 lastStrip = stripH; lastBottom = bottomPad; lastDensity = d; lastPad = pad; lastHandle = handleH
                 haveReserved = true
             }
-            blocks(reserved[0], reserved[1], th, Math.toRadians(spaceTilt.toDouble()), curve)
+            blocks(reserved[0], reserved[1], th, curve)
         } else fit(th, curve)
         return Solution(s.un, s.hc, s.cw, s.pv, s.disp, s.padTop, s.letterY, s.spaceY, s.span, s.total)
     }

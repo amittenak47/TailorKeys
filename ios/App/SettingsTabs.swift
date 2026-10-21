@@ -141,7 +141,6 @@ struct SettingsScreen: View {
                 if prefs.split(l) {
                     orientationSlider("Center gap", Prefs.splitGap, suffix: "%")
                     orientationSlider("Tilt", Prefs.tilt, suffix: "\u{00B0}", signed: true)
-                    orientationSlider("Space row tilt", Prefs.spaceTilt, suffix: "\u{00B0}", signed: true)
                     SettingSlider(title: "Curve", pref: Prefs.curve, value: model.integer(Prefs.curve), suffix: "%")
                 }
             }
