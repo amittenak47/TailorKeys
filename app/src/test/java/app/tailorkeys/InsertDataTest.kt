@@ -7,6 +7,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class InsertDataTest {
+    @org.junit.Test fun emojiCellsKeepMinimumTargets() {
+        for (width in listOf(320f, 360f, 390f, 412f)) {
+            val available = width - 8f
+            val cols = app.tailorkeys.insert.emojiColumns(available, false)
+            org.junit.Assert.assertTrue(cols <= 8 && cols * 44 <= available)
+            org.junit.Assert.assertTrue(available - cols * 44 < 44)
+        }
+        org.junit.Assert.assertEquals(14, app.tailorkeys.insert.emojiColumns(776f, true))
+        org.junit.Assert.assertEquals(11, app.tailorkeys.insert.emojiColumns(576f, true))
+    }
     private fun asset(name: String) = File("src/main/assets/insert/$name")
     private fun catalog() = asset("emoji.tsv").bufferedReader().use { EmojiCatalog.load(it.lineSequence()) }
     @Test fun unicodeDataAndKeywordSearch() {

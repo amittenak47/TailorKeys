@@ -6,6 +6,24 @@ import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
 
+object InsertPrefs {
+    const val HISTORY = "insert_history"
+    const val KEEP = "insert_keep"
+    const val TONE = "insert_tone"
+    const val RECENTS = "insert_recents"
+    const val KAOMOJI = "insert_kaomoji"
+    const val VOICE = "insert_voice"
+    const val DEVICE_ONLY = "insert_device_only"
+    const val STORE = "insert_clips"
+    const val SECTION = "insert_section"
+    const val HAD_CLIPS = "insert_had_clips"
+    val toneNames = listOf("Default", "Light", "Medium-light", "Medium", "Medium-dark", "Dark")
+}
+
+/** Remaining width is spacing, never a narrower touch target. */
+fun emojiColumns(widthDp: Float, tablet: Boolean): Int =
+    minOf(if (tablet) 14 else 8, (widthDp / if (tablet) 52 else 44).toInt()).coerceAtLeast(1)
+
 data class InsertSymbol(val text: String, val name: String, val category: String, val keywords: String = "")
 
 /** The bundled Unicode fully-qualified sequences are authoritative, including ZWJ placement. */

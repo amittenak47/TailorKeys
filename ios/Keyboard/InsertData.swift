@@ -108,6 +108,7 @@ final class ClipboardStore {
 }
 
 enum InsertPrefs {
+    static let kaomoji = "insert_kaomoji"
     static let history = "insert_history", keep = "insert_keep", tone = "insert_tone", recents = "insert_recents", section = "insert_section"
     static let toneNames = ["Default", "Light", "Medium-light", "Medium", "Medium-dark", "Dark"]
     static let promptSeen = "insert_key_prompt_v1"
@@ -146,4 +147,8 @@ final class InsertRepository {
 
 extension UserDefaults {
     func boolDefault(_ key: String, _ value: Bool) -> Bool { object(forKey: key) == nil ? value : bool(forKey: key) }
+}
+
+func emojiColumns(width: Double, tablet: Bool) -> Int {
+    max(1, min(tablet ? 14 : 8, Int(width / (tablet ? 52 : 44))))
 }

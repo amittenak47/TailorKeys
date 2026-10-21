@@ -835,3 +835,9 @@ do {
     switched.update("h", at: 6); switched.update("hello", at: 10)
     check(switched.result(at: Date())?.keyboard == "other" && switched.wpm(at: 10) == 15, "switched test retained old timing or keyboard")
 }
+
+for width in [320.0, 360, 390, 412] {
+    let available = width - 8, cols = emojiColumns(width: width - 8, tablet: false)
+    check(cols <= 8 && Double(cols) * 44 <= available && available - Double(cols) * 44 < 44, "emoji targets shrank or overflowed")
+}
+check(emojiColumns(width: 776, tablet: true) == 14 && emojiColumns(width: 576, tablet: true) == 11, "tablet emoji columns")
