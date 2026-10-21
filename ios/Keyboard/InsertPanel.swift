@@ -67,7 +67,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
     private var toneChoice = -1
     private var expiry: Timer?
     private var footer: UIStackView?
-    private var palette: Palette { Palette.of(settings.theme, dark: traitCollection.userInterfaceStyle == .dark) }
+    private var palette: Palette { Palette.of(settings, dark: traitCollection.userInterfaceStyle == .dark) }
     private var tablet: Bool { UIDevice.current.userInterfaceIdiom == .pad && (bounds.width == 0 || bounds.width >= 600) }
     var acceptsText: Bool { mode != nil && !isHidden }
     var session = 0
@@ -104,7 +104,8 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         retainDraft(); restoreKeys()
         if mode != nil { onTyping?(false, 0) }; mode = nil; session += 1
         isHidden = false; accessibilityElementsHidden = false
-        if renderedEditor || builtStyle != signature { render() }
+        if section == "Emoji" || section == "Kaomoji" { category = "Recent"; render(); collection.setContentOffset(.zero, animated: false) }
+        else if renderedEditor || builtStyle != signature { render() }
         expiry?.invalidate(); expiry = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             guard let self = self else { return }; self.repository.change { _ in }; if self.section == "Clipboard" && self.mode == nil { self.render() }
         }
@@ -112,7 +113,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
     func hide() { retainDraft(); restoreKeys(); expiry?.invalidate(); expiry = nil; mode = nil; session += 1; onTyping?(false, 0); isHidden = true; accessibilityElementsHidden = true; tonePopover?.removeFromSuperview() }
     func refresh() { if !isHidden { if mode == nil { if builtStyle != signature { render() } } else { renderEditor() } } }
     private var signature: String {
-        "\(settings.theme.rawValue):\(traitCollection.userInterfaceStyle.rawValue):\(settings.int(Prefs.cornerRadius)):\(repository.prefs.integer(forKey: InsertPrefs.tone)):\(repository.prefs.bool(forKey: InsertPrefs.history)):\(repository.keep.rawValue):\(repository.recent("Emoji")):\(repository.recent("Kaomoji")):\(repository.prefs.data(forKey: "insert_clips")?.hashValue ?? 0):\(fullAccess())"
+        "\(settings.themeID):\(CustomTheme.encode(settings.customThemes)):\(traitCollection.userInterfaceStyle.rawValue):\(settings.int(Prefs.cornerRadius)):\(repository.prefs.integer(forKey: InsertPrefs.tone)):\(repository.prefs.bool(forKey: InsertPrefs.history)):\(repository.keep.rawValue):\(repository.prefs.boolDefault(InsertPrefs.recents, true)):\(repository.recent("Emoji")):\(repository.recent("Kaomoji")):\(repository.prefs.data(forKey: "insert_clips")?.hashValue ?? 0):\(fullAccess())"
     }
     private func reset() { main.arrangedSubviews.forEach { main.removeArrangedSubview($0); $0.removeFromSuperview() }; tonePopover?.removeFromSuperview(); tonePopover = nil; categoryButtons = [:]; setNeedsLayout() }
     private func stack(_ axis: NSLayoutConstraint.Axis = .horizontal) -> UIStackView { let s = UIStackView(); s.axis = axis; s.spacing = 4; return s }
@@ -122,7 +123,8 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         b.setTitleColor(selected ? palette.smallAccent : palette.text, for: .normal)
         b.tintColor = selected ? palette.smallAccent : palette.text
         b.backgroundColor = selected ? palette.key : palette.functionKey
-        b.layer.cornerRadius = CGFloat(settings.int(Prefs.cornerRadius)); b.layer.borderWidth = selected ? 2 : 0; b.layer.borderColor = palette.accent.cgColor
+        b.layer.cornerRadius = CGFloat(settings.int(Prefs.cornerRadius)); b.layer.borderWidth = selected ? 2 : 1
+        b.layer.borderColor = (selected ? palette.accent : palette.keyOutline).cgColor
         if selected { b.accessibilityTraits.insert(.selected) }
         b.contentEdgeInsets = UIEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
         b.heightAnchor.constraint(greaterThanOrEqualToConstant: 48).isActive = true
@@ -174,7 +176,6 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
     }
     private func renderSymbols() {
         let all = section == "Emoji" ? InsertAssets.renderable : InsertAssets.kaomoji
-        if section == "Kaomoji" && category == "Recent" && recents().isEmpty { category = "Happy" }
         let tabs = stack()
         if !tablet { tabs.addArrangedSubview(button("⌕", label: "Search \(section.lowercased())") { [weak self] in self?.search() }) }
         var cats = ["Recent"]; for entry in all where !cats.contains(entry.category) { cats.append(entry.category) }
@@ -185,7 +186,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
                 if self.section == "Emoji" {
                     let index = cat == "Recent" ? 0 : self.symbols.firstIndex(where: { $0.category == cat }) ?? 0
                     if self.symbols.indices.contains(index) { self.collection.scrollToItem(at: IndexPath(item: index, section: 0), at: .top, animated: !UIAccessibility.isReduceMotionEnabled) }; self.markCategories()
-                } else { self.symbols = cat == "Recent" ? self.recents() : all.filter { $0.category == cat }; self.collection.reloadData(); self.markCategories() }
+                } else { self.symbols = cat == "Recent" ? self.kaomojiWithRecents() : all.filter { $0.category == cat }; self.collection.reloadData(); self.markCategories() }
             }
             if section == "Emoji" {
                 let names = ["clock", "face.smiling", "person", "pawprint", "cup.and.saucer", "car", "sportscourt", "lightbulb", "heart", "flag"]
@@ -194,7 +195,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
             categoryButtons[cat] = b; styleTab(b, selected: cat == category); tabs.addArrangedSubview(b)
         }
         let tabScroll = scroll(tabs, horizontal: true); tabScroll.heightAnchor.constraint(equalToConstant: 48).isActive = true; main.addArrangedSubview(tabScroll)
-        symbols = section == "Emoji" ? emojiCells() : category == "Recent" ? recents() : all.filter { $0.category == category }
+        symbols = section == "Emoji" ? emojiCells() : category == "Recent" ? kaomojiWithRecents() : all.filter { $0.category == category }
         if gridWidth == nil { gridWidth = collection.widthAnchor.constraint(equalToConstant: tablet ? 784 : 384); gridWidth?.isActive = true }
         main.addArrangedSubview(gridViewport); collection.reloadData()
     }
@@ -224,6 +225,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         let entry = section == "Emoji" ? shown(symbols[indexPath.item]) : symbols[indexPath.item]
         cell.text.text = entry.text.isEmpty ? entry.name : entry.text; cell.text.font = .systemFont(ofSize: entry.text.isEmpty ? 12 : section == "Emoji" ? 28 : 16); cell.text.textColor = palette.text
         cell.backgroundColor = section == "Emoji" ? .clear : palette.key; cell.layer.cornerRadius = CGFloat(settings.int(Prefs.cornerRadius))
+        cell.layer.borderWidth = section == "Emoji" || entry.text.isEmpty ? 0 : 1; cell.layer.borderColor = palette.keyOutline.cgColor
         cell.isAccessibilityElement = !entry.text.isEmpty || !entry.name.isEmpty; cell.accessibilityLabel = entry.name; cell.accessibilityTraits = entry.text.isEmpty ? .header : .button
         cell.accessibilityCustomActions = entry.text.isEmpty || section != "Emoji" ? nil : InsertAssets.emoji.variants(entry.text).filter { InsertAssets.hasGlyph($0.text) }.map { e in UIAccessibilityCustomAction(name: e.name) { [weak self] _ in self?.use(e); return true } }
         return cell
@@ -241,7 +243,18 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
             category = symbols[index.item].category; markCategories()
         }
     }
-    private func use(_ entry: InsertSymbol) { onInsert?(entry.text); repository.used(section, entry.text) }
+    private func kaomojiWithRecents() -> [InsertSymbol] {
+        let recent = recents()
+        return recent + InsertAssets.kaomoji.filter { entry in !recent.contains { $0.text == entry.text } }
+    }
+    private func use(_ entry: InsertSymbol) {
+        let which = section
+        repository.insertSymbol(which, entry) { [weak self] in self?.onInsert?($0) }
+        guard mode == nil, section == which else { return }
+        category = "Recent"; markCategories()
+        symbols = which == "Emoji" ? emojiCells() : kaomojiWithRecents()
+        collection.reloadData(); collection.setContentOffset(.zero, animated: false)
+    }
     @objc private func holdEmoji(_ gesture: UILongPressGestureRecognizer) {
         guard section == "Emoji", mode == nil else { return }
         if gesture.state == .began {
@@ -375,21 +388,25 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         }); column.addArrangedSubview(header)
         let list = stack(.vertical)
         let enabled = repository.prefs.boolDefault(InsertPrefs.history, false)
-        if !notes && !fullAccess() { list.addArrangedSubview(label("Turn on Full Access to keep clipboard history. Notes still work.")) }
-        else if !notes && !enabled {
-            list.addArrangedSubview(label("Clipboard history is off. Turn it on to keep what you copy for a while. Notes still work."))
-            list.addArrangedSubview(button("Turn on") { [weak self] in self?.repository.prefs.set(true, forKey: InsertPrefs.history); self?.render() })
-        } else if !notes {
-            if !repository.prefs.bool(forKey: "insert_first_use") {
-                list.addArrangedSubview(button("History stays on this device · Got it") { [weak self] in self?.repository.prefs.set(true, forKey: "insert_first_use"); self?.render() })
+        let items = notes ? store.notes : enabled && fullAccess() ? store.clips : []
+        if notes && items.isEmpty { list.addArrangedSubview(label("No notes yet. Write one with + New, or hold a clip and Save as note.")) }
+        if !notes {
+            switch clipboardPanelState(enabled: enabled, hasItems: !items.isEmpty, hadItems: repository.prefs.bool(forKey: InsertPrefs.hadClips), dismissed: repository.prefs.bool(forKey: "insert_first_use"), fullAccess: fullAccess()) {
+            case .historyOff:
+                list.addArrangedSubview(label("Clipboard history is off. Turn it on to keep what you copy for a while. Notes still work."))
+                list.addArrangedSubview(button("Turn on") { [weak self] in self?.repository.prefs.set(true, forKey: InsertPrefs.history); self?.render() })
+            case .accessRequired: list.addArrangedSubview(label("Turn on Full Access to keep clipboard history. Notes still work."))
+            case .firstUse: list.addArrangedSubview(button("History stays on this device · Got it") { [weak self] in self?.repository.prefs.set(true, forKey: "insert_first_use"); self?.render() })
+            case .empty: list.addArrangedSubview(label("Nothing copied yet. Read clipboard to add copied text."))
+            case .items: break
             }
+        }
+        if !notes && enabled && fullAccess() {
             list.addArrangedSubview(button("Read clipboard", label: "Read clipboard. iOS may ask permission to paste.") { [weak self] in
                 guard let self = self, self.fullAccess(), !self.password(), self.repository.prefs.bool(forKey: InsertPrefs.history) else { return }
                 if let text = UIPasteboard.general.string { self.repository.change { $0.capture(text, enabled: true, sensitive: false, password: self.password(), fullAccess: self.fullAccess()) } }; self.render()
             })
         }
-        let items = notes ? store.notes : enabled && fullAccess() ? store.clips : []
-        if items.isEmpty && (notes || enabled && fullAccess()) { list.addArrangedSubview(label(notes ? "No notes yet. Write one with + New, or hold a clip and Save as note." : "Nothing copied yet. Read clipboard to add copied text.")) }
         var pinSection: Bool?
         for item in items {
             if !notes && pinSection != item.pinned { pinSection = item.pinned; list.addArrangedSubview(label(item.pinned ? "Pinned" : "Recent", size: 12)) }

@@ -965,7 +965,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             drawCells(canvas)
         } else {
             drawWheels(canvas)
-            if (gearRect.width() >= 20 * density) drawGear(canvas, gearRect.centerX(), gearRect.centerY(), 20 * density, palette.hint)
+            if (gearRect.width() >= 20 * density) drawGear(canvas, gearRect.centerX(), gearRect.centerY(), 20 * density, palette.gear)
         }
         val radius = cornerRadius
         // Under the keys, so it shows through the split and the spaces between keys.
@@ -1060,8 +1060,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             canvas.drawRoundRect(rect, radius, radius, fill)
         }
         fill.alpha = 255
-        if (highContrast) {
-            stroke.color = palette.text; stroke.alpha = 255; stroke.strokeWidth = 2 * density
+        if (palette.keyOutline ushr 24 != 0) {
+            stroke.color = palette.keyOutline; stroke.strokeWidth = 2 * density
             outlineRect.set(rect); outlineRect.inset(density, density)
             canvas.drawRoundRect(outlineRect, radius, radius, stroke)
         }
@@ -1230,7 +1230,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             drawLabel(canvas, rect, line, 13 * sp, if (editHint != null || editTitle != null) palette.smallAccent else palette.hint, 255)
         }
         if (!doneRect.isEmpty) {
-            drawGear(canvas, moreRect.centerX(), moreRect.centerY(), s, palette.hint)
+            drawGear(canvas, moreRect.centerX(), moreRect.centerY(), s, palette.gear)
             text.isFakeBoldText = true
             drawLabel(canvas, doneRect, "Done", 15 * sp, palette.smallAccent, 255)
             text.isFakeBoldText = false

@@ -6,12 +6,46 @@ import org.junit.Test
 class CustomThemeTest {
     @Test fun jsonRoundTripUsesPortableHexAndPreservesIdentity() {
         val themes = listOf(CustomTheme("sand", "Sand", ThemeColors.from(Palette.of(ThemeName.WARM))),
-            CustomTheme("night", "Night", ThemeColors.from(Palette.of(ThemeName.MIDNIGHT))))
+            CustomTheme("night", "Night", ThemeColors.from(Palette.of(ThemeName.MIDNIGHT))),
+            CustomTheme("outlined", "Outlined", ThemeColors.from(Palette.of(ThemeName.HIGH_CONTRAST))),
+            CustomTheme("faint", "Faint", ThemeColors.from(Palette.of(ThemeName.HIGH_CONTRAST)).copy(keyOutline = 0x40FFFFFF)))
         val json = CustomTheme.encode(themes)
         assertTrue(json.contains("#E9E2D6"))
+        assertTrue(json.contains("#00000000"))
+        assertTrue(json.contains("#40FFFFFF"))
         assertEquals(themes, CustomTheme.decode(json))
         assertEquals(emptyList<CustomTheme>(), CustomTheme.decode("broken"))
         assertEquals(themes, CustomTheme.decode(json.dropLast(1) + ",{\"id\":\"bad\"}]"))
+    }
+    @Test fun oldThemesDefaultToTransparentOutlines() {
+        val original = CustomTheme("old", "Old", ThemeColors.from(Palette.of(ThemeName.WARM)))
+        val array = org.json.JSONArray(CustomTheme.encode(listOf(original)))
+        array.getJSONObject(0).getJSONObject("colors").remove("keyOutline")
+        assertEquals(listOf(original), CustomTheme.decode(array.toString()))
+    }
+    @Test fun outlinesAreCopiedAndBlendWarningsUseVisibleContrast() {
+        val high = ThemeColors.from(Palette.of(ThemeName.HIGH_CONTRAST))
+        assertEquals(0xFFFFFFFF.toInt(), high.keyOutline)
+        assertFalse(high.keysBlend)
+        assertTrue(high.copy(keyOutline = 0).keysBlend)
+        assertTrue(high.copy(keyOutline = 0xFF101010.toInt()).keysBlend)
+        assertTrue(high.copy(keyOutline = 0xFF444444.toInt()).keysBlend)
+        assertTrue(high.copy(keyOutline = 0x10FFFFFF).keysBlend)
+        assertFalse(high.copy(key = 0xFFFFFFFF.toInt(), keyOutline = 0).keysBlend)
+        ThemeName.entries.filter { it != ThemeName.HIGH_CONTRAST }.forEach {
+            assertEquals(0, ThemeColors.from(Palette.of(it)).keyOutline)
+        }
+        assertEquals(high.keyOutline, high.palette().keyOutline)
+    }
+    @Test fun gearMeetsNonTextContrastForEveryBuiltInAndCustomFallback() {
+        for (theme in ThemeName.entries) for (night in listOf(false, true)) {
+            val palette = Palette.of(theme, night)
+            assertTrue("$theme/$night", contrastRatio(palette.gear, palette.background) >= 3.0)
+        }
+        for (background in listOf(0xFF000000.toInt(), 0xFFFFFFFF.toInt(), 0xFF777777.toInt())) {
+            val palette = Palette.of(ThemeName.WARM).copy(background = background, text = background, hint = background)
+            assertTrue(contrastRatio(palette.gear, background) >= 3.0)
+        }
     }
     @Test fun wcagLinearizesSrgbAndIsSymmetric() {
         val black = 0xFF000000.toInt(); val white = 0xFFFFFFFF.toInt(); val gray = 0xFF777777.toInt()
@@ -54,6 +88,10 @@ class CustomThemeTest {
         val theme = CustomTheme("sand", "Sand", ThemeColors.from(Palette.of(ThemeName.WARM)))
         settings.saveTheme(theme)
         assertEquals("custom:sand", settings.themeId())
+        settings.setTheme(ThemeName.HIGH_CONTRAST); settings.cycleQuickTheme()
+        assertEquals(theme.selection, settings.themeId())
+        settings.cycleQuickTheme(); assertEquals(ThemeName.SYSTEM.name, settings.themeId())
+        settings.setThemeId(theme.selection)
         val saved = library.add("Desk", settings.loadGrid())
         assertEquals("custom:sand", org.json.JSONObject(requireNotNull(saved.settings)).getString("theme"))
         settings.setTheme(ThemeName.LIGHT)

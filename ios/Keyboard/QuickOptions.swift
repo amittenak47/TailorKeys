@@ -18,7 +18,9 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
     private let trailing = UIButton(type: .system)
     private let message = UILabel()
     private let pages = UIView()
-    private let main = UIView()
+    private let main = UIScrollView()
+    private let mainFade = CAGradientLayer()
+    private let tileFade = CAGradientLayer()
     private let all = UIScrollView()
     private let strip = UIScrollView()
     private let fade = CAGradientLayer()
@@ -135,6 +137,9 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
         addSubview(confirm)
         for view in [editButton, newButton, strip, tileScroll] as [UIView] { main.addSubview(view) }
         tileScroll.addSubview(tileGrid)
+        main.delegate = self; tileScroll.delegate = self
+        main.layer.mask = mainFade; tileScroll.layer.mask = tileFade
+        main.showsVerticalScrollIndicator = false
         strip.showsHorizontalScrollIndicator = false
         strip.delegate = self
         strip.layer.mask = fade
@@ -186,10 +191,10 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
                 self.settings.adjustQuickHeight(self.landscape, delta); self.onChange?(); self.refresh()
             }
         }
-        _ = tile("Learning", "brain") { s in s.settings.set(Prefs.learning, !s.settings.learning) }
+        _ = tile("Theme", "paintpalette") { $0.settings.cycleQuickTheme() }
+        _ = tile("Swipe", "hand.draw") { s in s.settings.set(Prefs.swipeTyping, !s.settings.bool(Prefs.swipeTyping, true)) }
         let language = tile("Language", nil)
         language.action = { [weak self] in self?.onLanguage?(); self?.refresh() }
-        _ = tile("Tidy", "text.badge.checkmark") { $0.onTidy?() }
         let settingsTile = tile("Settings", "slider.horizontal.3")
         // SwiftUI Link handles app URLs in a keyboard extension without UIApplication.shared.
         let link = UIHostingController(rootView: QuickSettingsLink())
@@ -197,6 +202,8 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
         settingsTile.addSubview(link.view)
         settingsTile.isAccessibilityElement = false
         settingsLinkController = link
+        _ = tile("Pause learning", "brain") { s in s.settings.set(Prefs.learning, !s.settings.learning) }
+        _ = tile("Tidy", "text.badge.checkmark") { $0.onTidy?() }
         confirm.isHidden = true
         confirm.backgroundColor = UIColor.black.withAlphaComponent(0.4)
         confirm.accessibilityViewIsModal = true
@@ -271,10 +278,10 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
 
     func refresh(resetScroll: Bool = false) {
         library.reload()
-        if resetScroll { review?.removeFromSuperview(); review = nil; showAll(false, animated: false); hideConfirm(); message.isHidden = true; tileScroll.contentOffset = .zero; scrollToApplied = true }
+        if resetScroll { review?.removeFromSuperview(); review = nil; showAll(false, animated: false); hideConfirm(); message.isHidden = true; tileScroll.contentOffset = .zero; main.contentOffset = .zero; scrollToApplied = true }
         let p = Palette.of(settings, dark: traitCollection.userInterfaceStyle == .dark)
         let choices = library.quickTiles
-        let signature = "\(choices.map { $0.choice.id + $0.choice.name + $0.choice.gridJSON })|\(library.appliedKey)|\(settings.themeID)|\(CustomTheme.encode(settings.customThemes))|\(traitCollection.userInterfaceStyle.rawValue)|\(settings.profile(landscape))|\(settings.currentLanguage)|\(settings.languages)|\(settings.learning)|\(settings.int(Prefs.curve))|\(settings.int(Prefs.keyGap))|\(settings.int(Prefs.cornerRadius))|\(settings.int(Prefs.textScale))|\(settings.followSystemText)|\(UITraitCollection.current.preferredContentSizeCategory.rawValue)|\(UIScreen.main.bounds.size)"
+        let signature = "\(choices.map { $0.choice.id + $0.choice.name + $0.choice.gridJSON })|\(library.appliedKey)|\(settings.themeID)|\(CustomTheme.encode(settings.customThemes))|\(traitCollection.userInterfaceStyle.rawValue)|\(settings.profile(landscape))|\(settings.currentLanguage)|\(settings.languages)|\(settings.learning)|\(settings.bool(Prefs.swipeTyping, true))|\(settings.int(Prefs.curve))|\(settings.int(Prefs.keyGap))|\(settings.int(Prefs.cornerRadius))|\(settings.int(Prefs.textScale))|\(settings.followSystemText)|\(UITraitCollection.current.preferredContentSizeCategory.rawValue)|\(UIScreen.main.bounds.size)"
         guard signature != renderedSignature else { if resetScroll { setNeedsLayout() }; return }
         renderedSignature = signature
         backgroundColor = p.background
@@ -282,7 +289,10 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
         editButton.tintColor = p.text
         heading.textColor = p.text; message.textColor = p.text
         let radius = CGFloat(settings.int(Prefs.cornerRadius))
-        for b in [editButton, newButton, cancel] { b.backgroundColor = p.key; b.layer.cornerRadius = radius }
+        for b in [editButton, newButton, cancel] {
+            b.backgroundColor = p.key; b.layer.cornerRadius = radius
+            b.layer.borderWidth = 1; b.layer.borderColor = p.keyOutline.cgColor
+        }
         confirmBox.backgroundColor = p.key; confirmBox.layer.cornerRadius = radius
         confirmTitle.textColor = p.text; confirmText.textColor = p.hint; cancel.tintColor = p.text
         saveContinue.backgroundColor = p.accent; saveContinue.tintColor = p.onAccent; saveContinue.layer.cornerRadius = radius
@@ -310,7 +320,7 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
                 card.backgroundColor = p.key
                 card.layer.cornerRadius = radius
                 card.layer.borderWidth = CGFloat(state.outlineWidth)
-                card.layer.borderColor = (state.inUse ? p.accent : settings.theme == .highContrast ? p.text : .clear).cgColor
+                card.layer.borderColor = (state.inUse ? p.accent : p.keyOutline).cgColor
                 card.check.isHidden = !state.inUse
                 card.check.backgroundColor = p.accent; card.check.textColor = p.onAccent
                 card.unsaved.isHidden = !choice.isDraft
@@ -338,22 +348,24 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
         switch settings.quickOneHand(landscape) { case .center: hand = "Off"; case .left: hand = "Left"; case .right: hand = "Right" }
         let height = settings.int(Prefs.height(landscape))
         let split = settings.split(landscape), learning = settings.learning
-        let values = [split ? "On" : "Off", hand, "\(height)%", learning ? "On" : "Paused",
-                      settings.languages.count > 1 ? "Tap to switch" : "Only one", "Review text", "All"]
+        let themeLabel = settings.customThemes.first { $0.selection == settings.themeID }?.name ?? settings.theme.title
+        let swipe = settings.bool(Prefs.swipeTyping, true)
+        let values = [split ? "On" : "Off", hand, "\(height)%", themeLabel, swipe ? "On" : "Off",
+                      settings.languages.count > 1 ? "Tap to switch" : "Only one", "All", learning ? "Off" : "On", "Review text"]
         for (index, tile) in tiles.enumerated() {
             tile.state.text = values[index]
-            let on = index == 0 ? split : index == 1 ? hand != "Off" : index == 3 ? learning : false
+            let on = index == 0 ? split : index == 1 ? hand != "Off" : index == 4 ? swipe : index == 7 ? !learning : false
             let ink = on ? p.smallAccent : p.text
             tile.icon.tintColor = ink; tile.title.textColor = ink; tile.glyph.textColor = ink
             tile.state.textColor = on ? p.smallAccent : p.hint
             tile.backgroundColor = p.key; tile.layer.cornerRadius = radius
-            tile.layer.borderWidth = settings.theme == .highContrast ? 1 : 0; tile.layer.borderColor = p.text.cgColor
-            tile.isEnabled = index != 4 || settings.languages.count > 1
+            tile.layer.borderWidth = 1; tile.layer.borderColor = p.keyOutline.cgColor
+            tile.isEnabled = index != 5 || settings.languages.count > 1
             tile.alpha = tile.isEnabled ? 1 : 0.45
             tile.accessibilityLabel = tile.title.text
             tile.accessibilityValue = values[index]
         }
-        tiles[4].glyph.text = settings.currentLanguage.uppercased()
+        tiles[5].glyph.text = settings.currentLanguage.uppercased()
         smaller.accessibilityLabel = "Size, decrease"; larger.accessibilityLabel = "Size, increase"
         for b in [smaller, larger] { b.accessibilityValue = "\(height) percent"; b.tintColor = p.text }
         smaller.isEnabled = height > Prefs.height(landscape).min; larger.isEnabled = height < Prefs.height(landscape).max
@@ -364,7 +376,7 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
         super.layoutSubviews()
         let w = bounds.width, h = bounds.height
         guard w > 0, h > 0 else { return }
-        let tablet = w >= 600, short = h < 250
+        let tablet = w >= 600
         if renderedTablet != tablet {
             renderedTablet = tablet
             for card in Array(stripViews.values) + Array(gridViews.values) {
@@ -379,31 +391,33 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
         message.frame = CGRect(x: 12, y: headerH, width: w - 24, height: messageH)
         pages.frame = CGRect(x: 0, y: headerH + messageH, width: w, height: max(0, h - headerH - messageH))
         main.frame = pages.bounds; all.frame = pages.bounds; confirm.frame = bounds
-        let rowH: CGFloat = tablet && !short ? 138 : 100
-        let gap: CGFloat = tablet && !short ? 24 : 8
-        let tileH: CGFloat = tablet ? 72 : 60
-        let top = max(0, (pages.bounds.height - rowH - gap - tileH * 2 - 14) / 2)
-        let actionW: CGFloat = tablet ? 96 : 58
-        let actionH = (rowH - 4) / 2
-        editButton.frame = CGRect(x: 8, y: top, width: actionW, height: actionH)
-        newButton.frame = CGRect(x: 8, y: top + actionH + 4, width: actionW, height: actionH)
+        let geometry = QuickPanelGeometry.fit(width: Int(w), height: Int(h - messageH), header: Int(ceil(headerH)))
+        let rowH = CGFloat(geometry.strip), gap = CGFloat(geometry.gap), tileH = CGFloat(geometry.tile), top = CGFloat(geometry.top)
+        let compact = rowH < 100
+        let actionW: CGFloat = compact ? 104 : tablet ? 96 : 58
+        let actionH = compact ? rowH : (rowH - 4) / 2
+        editButton.frame = CGRect(x: 8, y: top, width: compact ? 50 : actionW, height: actionH)
+        newButton.frame = CGRect(x: compact ? 62 : 8, y: compact ? top : top + actionH + 4, width: compact ? 50 : actionW, height: actionH)
         strip.frame = CGRect(x: actionW + 16, y: top, width: max(0, w - actionW - 24), height: rowH)
         let cardW: CGFloat = tablet ? 188 : w < 340 ? 108 : 124
-        let cardH: CGFloat = short ? 80 : rowH
+        let cardH = rowH
         for (index, key) in orderedKeys.enumerated() { stripViews[key]?.frame = CGRect(x: CGFloat(index) * (cardW + 8), y: (rowH - cardH) / 2, width: cardW, height: cardH) }
         strip.contentSize = CGSize(width: CGFloat(orderedKeys.count) * (cardW + 8), height: rowH)
         let tileTop = top + rowH + gap
-        tileScroll.frame = CGRect(x: 8, y: tileTop, width: w - 16, height: max(0, pages.bounds.height - tileTop))
+        tileScroll.frame = CGRect(x: 8, y: tileTop, width: w - 16, height: CGFloat(geometry.viewport))
+        main.contentSize = CGSize(width: w, height: max(main.bounds.height, tileScroll.frame.maxY))
         let narrow = w < 260
-        let gridH = (tileH + 6) * (narrow ? 4 : 2) + 6
+        let gridH = (tileH + 6) * (narrow ? 5 : 3) + 4
         tileGrid.frame = CGRect(x: 0, y: 0, width: w - 16, height: gridH)
         tileScroll.contentSize = CGSize(width: w - 16, height: max(gridH, tileScroll.bounds.height))
         let unit = (tileGrid.bounds.width - (narrow ? 6 : 18)) / (narrow ? 2 : 4)
         let positions: [(CGFloat, CGFloat, CGFloat)] = narrow
             ? [(0, 0, unit), (unit + 6, 0, unit), (0, tileH + 6, tileGrid.bounds.width),
-               (0, (tileH + 6) * 2, unit), (unit + 6, (tileH + 6) * 2, unit), (0, (tileH + 6) * 3, unit), (unit + 6, (tileH + 6) * 3, unit)]
+               (0, (tileH + 6) * 2, unit), (unit + 6, (tileH + 6) * 2, unit), (0, (tileH + 6) * 3, unit), (unit + 6, (tileH + 6) * 3, unit),
+               (0, (tileH + 6) * 4, unit), (unit + 6, (tileH + 6) * 4, unit)]
             : [(0, 0, unit), (unit + 6, 0, unit), ((unit + 6) * 2, 0, unit * 2 + 6),
-               (0, tileH + 6, unit), (unit + 6, tileH + 6, unit), ((unit + 6) * 2, tileH + 6, unit), ((unit + 6) * 3, tileH + 6, unit)]
+               (0, tileH + 6, unit), (unit + 6, tileH + 6, unit), ((unit + 6) * 2, tileH + 6, unit), ((unit + 6) * 3, tileH + 6, unit),
+               (0, (tileH + 6) * 2, unit * 2 + 6), ((unit + 6) * 2, (tileH + 6) * 2, unit * 2 + 6)]
         for (index, tile) in tiles.enumerated() { let v = positions[index]; tile.frame = CGRect(x: v.0, y: v.1, width: v.2, height: tileH) }
         smaller.frame = CGRect(x: 0, y: 0, width: 48, height: tileH)
         larger.frame = CGRect(x: tiles[2].bounds.width - 48, y: 0, width: 48, height: tileH)
@@ -432,13 +446,22 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
         if scrollToApplied, let card = stripViews[library.appliedKey] { strip.scrollRectToVisible(card.frame.insetBy(dx: -6, dy: 0), animated: false); scrollToApplied = false }
     }
 
-    func scrollViewDidScroll(_ scrollView: UIScrollView) { if scrollView === strip { updateFade() } }
+    func scrollViewDidScroll(_ scrollView: UIScrollView) { updateFade() }
     private func updateFade() {
         fade.frame = strip.bounds
         fade.startPoint = CGPoint(x: 0, y: 0.5); fade.endPoint = CGPoint(x: 1, y: 0.5)
         let more = strip.contentOffset.x + strip.bounds.width < strip.contentSize.width - 1
         fade.colors = [UIColor.black.cgColor, UIColor.black.cgColor, (more ? UIColor.clear : UIColor.black).cgColor]
         fade.locations = [0, NSNumber(value: Double(max(0, 1 - 36 / max(1, strip.bounds.width)))), 1]
+        for (scroll, mask) in [(tileScroll, tileFade), (main, mainFade)] {
+            mask.frame = scroll.bounds
+            mask.startPoint = CGPoint(x: 0.5, y: 0); mask.endPoint = CGPoint(x: 0.5, y: 1)
+            let bottom = scroll.contentOffset.y + scroll.bounds.height < scroll.contentSize.height - 1
+            let top = scroll.contentOffset.y > 1
+            let edge = min(0.49, 18 / max(1, scroll.bounds.height))
+            mask.colors = [(top ? UIColor.clear : .black).cgColor, UIColor.black.cgColor, UIColor.black.cgColor, (bottom ? UIColor.clear : .black).cgColor]
+            mask.locations = [0, NSNumber(value: Double(edge)), NSNumber(value: Double(1 - edge)), 1]
+        }
     }
 
     private func showAll(_ value: Bool, animated: Bool = true) {

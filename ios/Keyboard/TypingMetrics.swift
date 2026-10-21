@@ -8,7 +8,7 @@ struct SpeedSample {
 }
 
 /// Counts text changes in Characters (including composed Unicode), not UTF-16 units.
-/// A replacement is both an insertion and a correction. Unchanged suffixes do not count twice.
+/// IME replacements are normal typing. Only deletion-only edits count as free-mode corrections.
 struct TypingSession {
     let mode: TypingMode
     let sentence: String
@@ -22,6 +22,11 @@ struct TypingSession {
     private(set) var mistakeTimes: [TimeInterval] = []
     private(set) var slippedPositions = Set<Int>()
     private(set) var samples: [SpeedSample] = []
+    private struct ProgressPoint { let time: TimeInterval; let characters: Int }
+    private var progressPoints: [ProgressPoint] = []
+    private var typedCharacters = 0
+    private var assistedEdit: (before: String, after: String)?
+    private(set) var peakWpm = 0.0
 
     init(mode: TypingMode, sentence: String, keyboard: String = "tailorkeys") {
         self.mode = mode; self.sentence = sentence; self.keyboard = keyboard
@@ -62,10 +67,20 @@ struct TypingSession {
         while suffix < min(before.count, after.count) - prefix && before[before.count - suffix - 1] == after[after.count - suffix - 1] { suffix += 1 }
         let added = after.count - prefix - suffix
         let removed = before.count - prefix - suffix
-        if startedAt == nil && added > 0 { startedAt = now; samples = [SpeedSample(time: 0, wpm: 0)] }
+        if startedAt == nil && added > 0 {
+            startedAt = now; samples = [SpeedSample(time: 0, wpm: 0)]
+            progressPoints = [ProgressPoint(time: now, characters: 0)]
+        }
+        let undo = assistedEdit.map { text == $0.after && value == $0.before } ?? false
+        let corrections = mode == .free && (added > 0 || undo) ? 0 : removed
         inserted += added
-        deleted += removed
-        var errors = mode == .free ? removed : 0
+        deleted += corrections
+        var errors = mode == .free ? corrections : 0
+        if added > 0 && (removed > 0 || prefix > 0 && suffix > 0) { assistedEdit = (text, value) }
+        else if undo { assistedEdit = (value, text) }
+        else { assistedEdit = nil }
+        typedCharacters += max(0, added - removed)
+        if startedAt != nil { progressPoints.append(ProgressPoint(time: now, characters: typedCharacters)) }
         if mode == .test && added > 0 {
             for index in prefix..<(prefix + added) where index >= target.count || after[index] != target[index] {
                 errors += 1
@@ -82,12 +97,29 @@ struct TypingSession {
     mutating func sample(at now: TimeInterval, force: Bool = false) {
         guard startedAt != nil else { return }
         let time = elapsed(at: now)
+        let speed = rollingWpm(at: finishedAt ?? now)
+        peakWpm = max(peakWpm, speed)
         guard force || time - (samples.last?.time ?? 0) >= 1 else { return }
-        let point = SpeedSample(time: time, wpm: wpm(at: now))
+        let point = SpeedSample(time: time, wpm: speed)
         if samples.last?.time == time { samples[samples.count - 1] = point }
         else { samples.append(point) }
         // Free typing may run indefinitely; bound the chart without changing totals.
         if samples.count > 1200 { samples.removeFirst(samples.count - 1200) }
+    }
+
+    /// Expand the trailing five seconds until at least ten characters of progress are included.
+    private mutating func rollingWpm(at now: TimeInterval) -> Double {
+        guard let start = startedAt, now - start >= 5, typedCharacters >= 10 else { return 0 }
+        var baseline = 0
+        while baseline + 1 < progressPoints.count {
+            let next = progressPoints[baseline + 1]
+            if next.time > now - 5 || next.characters > typedCharacters - 10 { break }
+            baseline += 1
+        }
+        if baseline > 0 { progressPoints.removeFirst(baseline) }
+        guard let first = progressPoints.first else { return 0 }
+        let duration = progressPoints.count == 1 || progressPoints[1].time > now - 5 ? 5 : now - first.time
+        return Self.wpm(characters: typedCharacters - first.characters, seconds: duration)
     }
 
     func result(at date: Date) -> TypingResult? {

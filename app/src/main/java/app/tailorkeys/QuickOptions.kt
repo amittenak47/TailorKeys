@@ -124,6 +124,10 @@ class QuickOptions(
     private val trailing = button("All layouts \u203a") { if (showingAll) edit(false) else showAll(true) }
     private val pages = FrameLayout(context)
     private val main = LinearLayout(context).apply { orientation = VERTICAL }
+    private val mainScroll = ScrollView(context).apply {
+        isFillViewport = true; isVerticalScrollBarEnabled = false
+        isVerticalFadingEdgeEnabled = true; setFadingEdgeLength(dp(18))
+    }
     private val stripRow = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
     private val actions = LinearLayout(context).apply { orientation = VERTICAL }
     private val editButton = button("Edit") { edit(false) }
@@ -138,7 +142,10 @@ class QuickOptions(
         setFadingEdgeLength(dp(36))
     }
     private val stripCards = LinearLayout(context)
-    private val tileScroll = ScrollView(context).apply { isFillViewport = true; isVerticalScrollBarEnabled = false }
+    private val tileScroll = ScrollView(context).apply {
+        isFillViewport = true; isVerticalScrollBarEnabled = false
+        isVerticalFadingEdgeEnabled = true; setFadingEdgeLength(dp(18))
+    }
     private val tileGrid = LinearLayout(context).apply { orientation = VERTICAL; gravity = Gravity.TOP }
     private val allScroll = ScrollView(context).apply { isVerticalScrollBarEnabled = true; visibility = View.INVISIBLE }
     private val allGrid = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(8), 0, dp(8), dp(8)) }
@@ -240,7 +247,7 @@ class QuickOptions(
             box.contentDescription = state.label
             box.isSelected = state.inUse
             bg.setColor(p.key); bg.cornerRadius = radius
-            bg.setStroke(dp(state.outlineDp), if (state.inUse) p.accent else if (settings.theme() == ThemeName.HIGH_CONTRAST) p.text else android.graphics.Color.TRANSPARENT)
+            bg.setStroke(dp(state.outlineDp), if (state.inUse) p.accent else p.keyOutline)
             check.visibility = if (state.inUse) View.VISIBLE else View.INVISIBLE
             check.setTextColor(p.onAccent)
             check.background = rounded(p.accent, dp(12).toFloat())
@@ -275,7 +282,8 @@ class QuickOptions(
         addView(header, LayoutParams(-1, dp(48)))
         addView(message, LayoutParams(-1, -2))
         addView(pages, LayoutParams(-1, 0, 1f))
-        pages.addView(main, FrameLayout.LayoutParams(-1, -1))
+        mainScroll.addView(main, FrameLayout.LayoutParams(-1, -2))
+        pages.addView(mainScroll, FrameLayout.LayoutParams(-1, -1))
         pages.addView(allScroll, FrameLayout.LayoutParams(-1, -1))
         stripRow.setPadding(dp(8), 0, dp(8), 0)
         actions.addView(editButton, LayoutParams(-1, 0, 1f).apply { bottomMargin = dp(4) })
@@ -285,7 +293,7 @@ class QuickOptions(
         stripRow.addView(strip, LayoutParams(0, -1, 1f))
         main.addView(stripRow, LayoutParams(-1, dp(100)))
         tileScroll.addView(tileGrid)
-        main.addView(tileScroll, LayoutParams(-1, 0, 1f).apply { topMargin = dp(8) })
+        main.addView(tileScroll, LayoutParams(-1, -2).apply { topMargin = dp(8) })
         allScroll.addView(allGrid)
         fun row() = LinearLayout(context).also { tileGrid.addView(it, LayoutParams(-1, -2)) }
         fun tile(row: LinearLayout, title: String, icon: Int?, weight: Float = 1f, action: (() -> Unit)? = null): Tile = Tile(icon, title).also { t ->
@@ -303,10 +311,13 @@ class QuickOptions(
         size.box.addView(smaller, FrameLayout.LayoutParams(dp(48), -1, Gravity.START))
         size.box.addView(larger, FrameLayout.LayoutParams(dp(48), -1, Gravity.END))
         val second = row()
-        tile(second, "Learning", R.drawable.ic_settings_look) { settings.set(Prefs.LEARNING, !settings.bool(Prefs.LEARNING)) }
+        tile(second, "Theme", R.drawable.ic_settings_look) { settings.cycleQuickTheme() }
+        tile(second, "Swipe", R.drawable.ic_settings_typing) { settings.set(Prefs.SWIPE_TYPING, !settings.bool(Prefs.SWIPE_TYPING)) }
         tile(second, "Language", null) { language() }
-        tile(second, "Tidy", R.drawable.ic_settings_typing) { tidy() }
         tile(second, "Settings", R.drawable.ic_settings_tune) { allSettings() }
+        val third = row()
+        tile(third, "Pause learning", R.drawable.ic_settings_look) { settings.set(Prefs.LEARNING, !settings.bool(Prefs.LEARNING)) }
+        tile(third, "Tidy", R.drawable.ic_settings_typing) { tidy() }
         confirmBox.addView(confirmTitle); confirmBox.addView(confirmText)
         val buttons = LinearLayout(context)
         buttons.addView(cancel, LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
@@ -338,7 +349,10 @@ class QuickOptions(
         pages.addView(review, FrameLayout.LayoutParams(-1, -1))
     }
 
-    private fun rounded(color: Int, radius: Float) = GradientDrawable().apply { setColor(color); cornerRadius = radius }
+    private fun rounded(color: Int, radius: Float) = GradientDrawable().apply {
+        setColor(color); cornerRadius = radius
+        setStroke(dp(1), palette?.keyOutline ?: 0)
+    }
 
     fun updateStripHeight() {
         val h = max(dp(if (measuredWidth / d >= 600) 56 else 48), stripHeight())
@@ -349,27 +363,36 @@ class QuickOptions(
         val w = View.MeasureSpec.getSize(widthMeasureSpec) / d
         val h = View.MeasureSpec.getSize(heightMeasureSpec) / d
         val tablet = w >= 600
-        val short = h < 250
-        val rowHeight = if (tablet && !short) 138 else 100
+        header.layoutParams.height = max(dp(if (tablet) 56 else 48), stripHeight())
+        val minimumTile = max(60, kotlin.math.ceil(28 + 32 * resources.displayMetrics.scaledDensity / d).toInt())
+        val geometry = QuickPanelGeometry.fit(w.toInt(), h.toInt(), kotlin.math.ceil(header.layoutParams.height / d).toInt(), minimumTile)
+        val rowHeight = geometry.strip
         val nextWidth = if (tablet) 188 else if (w < 340) 108 else 124
-        val nextHeight = if (short) 80 else rowHeight
+        val nextHeight = rowHeight
         val nextColumns = if (tablet) 4 else if (w < 340) 2 else 3
         val nextGridHeight = if (tablet) 162 else 112
-        val tileHeight = if (tablet) 72 else 60
-        header.layoutParams.height = max(dp(if (tablet) 56 else 48), stripHeight())
+        val tileHeight = geometry.tile
         stripViews.values.forEach { it.sizeFor(tablet) }
         gridViews.values.forEach { it.sizeFor(tablet) }
         if (stripRow.layoutParams.height != dp(rowHeight)) stripRow.layoutParams.height = dp(rowHeight)
-        actions.layoutParams.width = dp(if (tablet) 96 else 58)
-        val gap = if (tablet && !short) 24 else 8
+        val compactStrip = rowHeight < 100
+        actions.orientation = if (compactStrip) HORIZONTAL else VERTICAL
+        actions.layoutParams.width = dp(if (compactStrip) 104 else if (tablet) 96 else 58)
+        for (b in listOf(editButton, newButton)) {
+            val params = b.layoutParams as LayoutParams
+            val actionWidth = if (compactStrip) 0 else -1
+            val actionHeight = if (compactStrip) -1 else 0
+            if (params.width != actionWidth || params.height != actionHeight) b.layoutParams = LayoutParams(actionWidth, actionHeight, 1f)
+        }
+        val gap = geometry.gap
         (tileScroll.layoutParams as LayoutParams).topMargin = dp(gap)
         val narrow = w < 260
         if (narrowGrid != narrow) {
             narrowGrid = narrow
             tileGrid.removeAllViews()
             tiles.forEach { (it.box.parent as? android.view.ViewGroup)?.removeView(it.box) }
-            val rows = if (narrow) listOf(listOf(0, 1), listOf(2), listOf(3, 4), listOf(5, 6))
-                else listOf(listOf(0, 1, 2), listOf(3, 4, 5, 6))
+            val rows = if (narrow) listOf(listOf(0, 1), listOf(2), listOf(3, 4), listOf(5, 6), listOf(7, 8))
+                else listOf(listOf(0, 1, 2), listOf(3, 4, 5, 6), listOf(7, 8))
             rows.forEach { indices ->
                 val row = LinearLayout(context)
                 tileGrid.addView(row, LayoutParams(-1, -2))
@@ -377,9 +400,8 @@ class QuickOptions(
             }
         }
         tiles.forEach { if (it.box.layoutParams.height != dp(tileHeight)) it.box.layoutParams.height = dp(tileHeight) }
-        val gridHeight = (tileHeight + 6) * if (narrow) 4 else 2
-        val extra = max(0, h.toInt() - (header.layoutParams.height / d).toInt() - rowHeight - gap - gridHeight - 10)
-        main.setPadding(0, dp(extra / 2), 0, 0)
+        tileScroll.layoutParams.height = dp(geometry.viewport)
+        main.setPadding(0, dp(geometry.top), 0, 0)
         if (cardWidth != nextWidth || cardHeight != nextHeight) {
             cardWidth = nextWidth; cardHeight = nextHeight
             stripViews.values.forEach { it.box.layoutParams = stripParams() }
@@ -413,6 +435,7 @@ class QuickOptions(
             review?.let { pages.removeView(it) }; review = null
             showAll(false, animate = false); hideConfirm(); message.visibility = View.GONE
             tileScroll.scrollTo(0, 0)
+            mainScroll.scrollTo(0, 0)
             // Done can have just added a draft. Reveal it after its first measure, before drawing.
             viewTreeObserver.removeOnPreDrawListener(revealInUse)
             viewTreeObserver.addOnPreDrawListener(revealInUse)
@@ -420,7 +443,8 @@ class QuickOptions(
         val l = landscape()
         val next = QuickOptionsState(settings.theme(), resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK,
             settings.int(Prefs.CORNER_RADIUS), settings.split(l), settings.quickOneHand(l), settings.int(Prefs.height(l)),
-            settings.currentLanguage(), settings.languages().size > 1, settings.bool(Prefs.SWIPE_TYPING), settings.bool(Prefs.LEARNING), settings.themeId() + settings.prefs.getString(Prefs.THEMES_CUSTOM, ""))
+            settings.currentLanguage(), settings.languages().size > 1, settings.bool(Prefs.SWIPE_TYPING), settings.bool(Prefs.LEARNING), settings.themeId() + settings.prefs.getString(Prefs.THEMES_CUSTOM, ""),
+            settings.customThemes().firstOrNull { it.selection == settings.themeId() }?.name ?: settings.theme().title)
         val entries = library.entries()
         val geometry = "${settings.profile(l)}|${settings.int(Prefs.CURVE)}|${settings.int(Prefs.KEY_GAP)}|${settings.bool(Prefs.SAME_ORIENTATIONS)}|${resources.displayMetrics}"
         if (rendered == next && renderedEntries == entries && renderedSelection == library.inUse && renderedGeometry == geometry) return
@@ -476,7 +500,7 @@ class QuickOptions(
                 t.rendered = value
             }
             t.background.setColor(p.key); t.background.cornerRadius = next.radius * d
-            if (next.theme == ThemeName.HIGH_CONTRAST) t.background.setStroke(dp(1), p.text) else t.background.setStroke(0, p.key)
+            t.background.setStroke(dp(1), p.keyOutline)
             val color = if (value.on) ink else p.text
             t.iconView.setColorFilter(color); t.glyphView.setTextColor(color); t.labelView.setTextColor(color)
             t.stateView.setTextColor(if (value.on) ink else p.hint)
@@ -495,8 +519,8 @@ class QuickOptions(
     private fun showAll(all: Boolean, animate: Boolean = true) {
         if (showingAll == all) return
         showingAll = all
-        val incoming = if (all) allScroll else main
-        val outgoing = if (all) main else allScroll
+        val incoming = if (all) allScroll else mainScroll
+        val outgoing = if (all) mainScroll else allScroll
         outgoing.animate().cancel(); incoming.animate().cancel()
         outgoing.visibility = View.INVISIBLE; outgoing.alpha = 1f; outgoing.translationX = 0f
         incoming.visibility = View.VISIBLE

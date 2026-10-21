@@ -6,7 +6,7 @@ internal enum class TypingMode { FREE, TEST }
 internal data class SpeedSample(val elapsed: Long, val wpm: Double, val mistake: Boolean)
 internal data class TypingMetrics(val wpm: Double, val accuracy: Double, val mistakes: Int, val elapsed: Long)
 
-/** Counts edits to the committed text, including replacements and multi-character IME commits. */
+/** Replacements are IME commits; only deletion-only edits count as free-typing corrections. */
 internal class TypingSession(val mode: TypingMode, val sentence: String = "", val keyboard: String = app.tailorkeys.TAILORKEYS_IME) {
     var text = ""; private set
     var inserted = 0; private set
@@ -16,6 +16,11 @@ internal class TypingSession(val mode: TypingMode, val sentence: String = "", va
     private val wrongPositions = mutableSetOf<Int>()
     private var wrongKeystrokes = 0
     private val history = ArrayList<SpeedSample>()
+    private data class ProgressPoint(val time: Long, val characters: Int)
+    private val progressPoints = java.util.ArrayDeque<ProgressPoint>()
+    private var typedCharacters = 0
+    private var assistedEdit: Pair<String, String>? = null
+    var peakWpm = 0.0; private set
     val samples: List<SpeedSample> get() = history
     val complete get() = mode == TypingMode.TEST && text.length >= sentence.length && sentence.isNotEmpty()
     val slips: Set<Int> get() = wrongPositions
@@ -34,7 +39,9 @@ internal class TypingSession(val mode: TypingMode, val sentence: String = "", va
     /** Never let an unfinished sentence span two keyboards. The target stays the same. */
     fun forKeyboard(id: String): TypingSession = if (keyboard == id) this else TypingSession(mode, sentence, id)
 
-    fun startTyping(now: Long) { if (startedAt == null) startedAt = now }
+    fun startTyping(now: Long) {
+        if (startedAt == null) { startedAt = now; progressPoints.add(ProgressPoint(now, 0)) }
+    }
 
     fun update(next: String, now: Long) {
         if (finishedAt != null || next == text) return
@@ -45,9 +52,17 @@ internal class TypingSession(val mode: TypingMode, val sentence: String = "", va
         while (suffix < minOf(text.length, next.length) - prefix && text[text.lastIndex - suffix] == next[next.lastIndex - suffix]) suffix++
         val removed = text.length - prefix - suffix
         val added = next.length - prefix - suffix
-        corrections += removed
+        val undo = assistedEdit?.let { (before, after) -> text == after && next == before } == true
+        val deleted = if (mode == TypingMode.FREE && (added > 0 || undo)) 0 else removed
+        corrections += deleted
         inserted += added
-        var mistake = removed > 0
+        var mistake = deleted > 0
+        // Remember punctuation/spacing inserted inside a word too (don't -> dont on undo).
+        if (added > 0 && (removed > 0 || prefix > 0 && suffix > 0)) assistedEdit = text to next
+        else if (undo) assistedEdit = next to text
+        else assistedEdit = null
+        typedCharacters += (added - removed).coerceAtLeast(0)
+        if (startedAt != null) progressPoints.add(ProgressPoint(now, typedCharacters))
         if (mode == TypingMode.TEST) for (i in prefix until next.length - suffix) {
             if (i >= sentence.length || !next[i].equals(sentence[i], ignoreCase = true)) {
                 wrongPositions += i
@@ -74,7 +89,24 @@ internal class TypingSession(val mode: TypingMode, val sentence: String = "", va
         val metrics = metrics(now)
         // Preserve mistake dots; cap time samples for a long free-typing session.
         if (history.size >= 600) history.removeAt(0)
-        history += SpeedSample(metrics.elapsed, metrics.wpm, mistake)
+        val speed = rollingWpm(finishedAt ?: now)
+        peakWpm = maxOf(peakWpm, speed)
+        history += SpeedSample(metrics.elapsed, speed, mistake)
+    }
+
+    /** Expand a trailing five-second window until it includes ten characters of progress. */
+    private fun rollingWpm(now: Long): Double {
+        val start = startedAt ?: return 0.0
+        if (now - start < 5_000 || typedCharacters < 10) return 0.0
+        while (progressPoints.size > 1) {
+            val second = progressPoints.elementAt(1)
+            if (second.time > now - 5_000 || second.characters > typedCharacters - 10) break
+            progressPoints.removeFirst()
+        }
+        val baseline = progressPoints.first()
+        // If this count stayed unchanged through the cutoff, use the cutoff itself, including idle time.
+        val duration = if (progressPoints.size == 1 || progressPoints.elementAt(1).time > now - 5_000) 5_000L else now - baseline.time
+        return wpm(typedCharacters - baseline.characters, duration)
     }
 
     companion object {

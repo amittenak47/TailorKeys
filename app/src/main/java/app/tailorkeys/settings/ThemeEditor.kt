@@ -67,7 +67,12 @@ internal fun ThemeControl(state: SettingsState) {
             customs.forEach { theme -> ThemeTile(theme.name, theme.colors.palette(), selected == theme.selection) {
                 state.settings.setThemeId(theme.selection); deleting = false
             } }
-            TextButton({ creating = true; editor = null }, Modifier.width(84.dp).heightIn(min = 76.dp)) { Text("+\nCreate theme") }
+            TextButton({ creating = true; editor = null }, Modifier.widthIn(min = 112.dp).heightIn(min = 88.dp)) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Box(Modifier.size(44.dp).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) { Text("+") }
+                    Text("Create theme", maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelMedium)
+                }
+            }
         }
         if (custom != null) {
             Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -96,12 +101,13 @@ private fun ThemeTile(name: String, palette: Palette, selected: Boolean, modifie
         .padding(4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.size(48.dp).border(if (selected) 2.dp else 0.dp, if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
             RoundedCornerShape(18.dp)).padding(4.dp)) {
-            Canvas(Modifier.fillMaxSize().clip(RoundedCornerShape(14.dp)).background(Color(palette.background))) {
+            Canvas(Modifier.fillMaxSize().clip(RoundedCornerShape(14.dp)).background(Color(palette.background))
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))) {
                 for (i in 0..1) {
                     val offset = Offset(size.width * (.14f + i * .42f), size.height * .28f)
                     val keySize = Size(size.width * .3f, size.height * .44f)
                     drawRoundRect(Color(if (i == 0) palette.key else palette.functionKey), offset, keySize, CornerRadius(3.dp.toPx()))
-                    if (palette.key == palette.background) drawRoundRect(Color(palette.text), offset, keySize, CornerRadius(3.dp.toPx()), style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
+                    if (palette.keyOutline ushr 24 != 0) drawRoundRect(Color(palette.keyOutline), offset, keySize, CornerRadius(3.dp.toPx()), style = androidx.compose.ui.graphics.drawscope.Stroke(1.dp.toPx()))
                 }
             }
             if (selected) Text("✓", Modifier.align(Alignment.TopEnd).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(20.dp)).padding(horizontal = 3.dp),
@@ -160,14 +166,14 @@ private fun ThemeEditor(state: SettingsState, existing: CustomTheme?, close: () 
                             if (!wide) Readability(colors)
                         }
                         if (wide) Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            key(channel) { ThemeColorPicker(ThemeColors.labels[channel], colors.values()[channel]) { colors = colors.replacing(channel, it) } }
+                            key(channel) { ThemeColorPicker(ThemeColors.labels[channel], colors.values()[channel], channel == 6) { colors = colors.replacing(channel, it) } }
                             Readability(colors)
                         }
                     }
                 }
                 if (picker && !wide) ModalBottomSheet(onDismissRequest = { picker = false }) {
                     Column(Modifier.heightIn(max = this@BoxWithConstraints.maxHeight * .65f).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        key(channel) { ThemeColorPicker(ThemeColors.labels[channel], colors.values()[channel]) { colors = colors.replacing(channel, it) } }
+                        key(channel) { ThemeColorPicker(ThemeColors.labels[channel], colors.values()[channel], channel == 6) { colors = colors.replacing(channel, it) } }
                         Readability(colors)
                         Button({ picker = false }, Modifier.align(Alignment.End)) { Text("✓ Done") }
                     }
@@ -182,6 +188,7 @@ private fun Readability(colors: ThemeColors) {
     Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Readability", fontWeight = FontWeight.Bold)
+            if (colors.keysBlend) Text("Keys blend into the background", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelLarge)
             colors.checks().forEach { (label, ratio) ->
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(if (ratio < 4.5) "⚠" else "✓")
@@ -198,7 +205,7 @@ private fun Readability(colors: ThemeColors) {
 }
 
 @Composable
-private fun ThemeColorPicker(label: String, color: Int, change: (Int) -> Unit) {
+private fun ThemeColorPicker(label: String, color: Int, allowTransparent: Boolean = false, change: (Int) -> Unit) {
     val initial = remember { FloatArray(3).also { AndroidColor.colorToHSV(color, it) } }
     var hue by remember { mutableFloatStateOf(initial[0]) }
     var saturation by remember { mutableFloatStateOf(initial[1]) }
@@ -217,8 +224,12 @@ private fun ThemeColorPicker(label: String, color: Int, change: (Int) -> Unit) {
     }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("$label colour", fontWeight = FontWeight.Bold)
-        OutlinedTextField(hex, { hex = it; ThemeColors.parseHex(it)?.let(change) }, label = { Text("Hex colour") },
-            isError = ThemeColors.parseHex(hex) == null, singleLine = true, modifier = Modifier.fillMaxWidth())
+        if (allowTransparent) Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Show key outline", Modifier.weight(1f))
+            Switch(color ushr 24 != 0, { change(if (it) AndroidColor.HSVToColor(hsv) else 0) })
+        }
+        OutlinedTextField(hex, { hex = it; ThemeColors.parseHex(it, allowTransparent)?.let(change) }, label = { Text("Hex colour") },
+            isError = ThemeColors.parseHex(hex, allowTransparent) == null, singleLine = true, modifier = Modifier.fillMaxWidth())
         Canvas(Modifier.fillMaxWidth().height(110.dp).clip(RoundedCornerShape(14.dp))
             .pointerInput(hsv[0]) { detectTapGestures { update(s = (it.x / size.width).coerceIn(0f, 1f), v = (1 - it.y / size.height).coerceIn(0f, 1f)) } }
             .pointerInput(hsv[0]) { detectDragGestures { point, _ -> point.consume(); update(s = (point.position.x / size.width).coerceIn(0f, 1f), v = (1 - point.position.y / size.height).coerceIn(0f, 1f)) } }) {

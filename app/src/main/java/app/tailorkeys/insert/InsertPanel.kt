@@ -13,6 +13,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.*
 import app.tailorkeys.KeyboardSettings
+import app.tailorkeys.CustomTheme
 import app.tailorkeys.Palette
 import app.tailorkeys.Prefs
 import app.tailorkeys.SettingsActivity
@@ -28,7 +29,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
     private val d = resources.displayMetrics.density
     private fun dp(n: Int) = (n * d).toInt()
     private val tablet get() = resources.configuration.smallestScreenWidthDp >= 600 && (width == 0 || width / d >= 600)
-    private var palette = Palette.of(context, settings.theme())
+    private var palette = Palette.of(context, settings)
     private val body = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val top = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
     private val categories = LinearLayout(context)
@@ -125,7 +126,10 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         return if (supported(toned.text)) toned else entry
     }
     private fun label(text: String, size: Float = 14f) = TextView(context).apply { this.text = text; textSize = size; setTextColor(palette.text); gravity = Gravity.CENTER_VERTICAL; minimumHeight = dp(48) }
-    private fun shape(color: Int, stroke: Boolean = false) = GradientDrawable().apply { setColor(color); cornerRadius = dp(settings.int(Prefs.CORNER_RADIUS)).toFloat(); if (stroke) setStroke(dp(2), palette.accent) }
+    private fun shape(color: Int, stroke: Boolean = false) = GradientDrawable().apply {
+        setColor(color); cornerRadius = dp(settings.int(Prefs.CORNER_RADIUS)).toFloat()
+        setStroke(dp(if (stroke) 2 else 1), if (stroke) palette.accent else palette.keyOutline)
+    }
     private fun button(text: String, description: String = text, selected: Boolean = false, action: () -> Unit) = label(text).apply {
         contentDescription = description; gravity = Gravity.CENTER; setPadding(dp(8), 0, dp(8), 0)
         minimumWidth = dp(48)
@@ -151,17 +155,21 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         if (editor == "Note") retainDraft(); restoreKeys(); if (editor != null) typing(false, 0); editor = null; field = null; session++
         visibility = VISIBLE; importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_AUTO
         refresh(renderedEditor)
-        if (section == "Emoji") { symbols = emojiCells(); adapter.notifyDataSetChanged() }
+        if (section in listOf("Emoji", "Kaomoji") && editor == null) {
+            activeCategory = "Recent"
+            pages.removeAllViews(); categories.removeAllViews(); categoryButtons.clear(); renderSymbols()
+            if (section == "Emoji") grid.setSelection(0)
+        }
         if (section == "Clipboard") clipboardChanged()
         if (section == "Voice") { pages.removeAllViews(); renderVoice() }
     }
     fun hide() { voice.cancel(); listening = false; session++; toneLayer.visibility = GONE; if (editor == "Note") retainDraft(); restoreKeys(); editor = null; field = null; typing(false, 0); visibility = INVISIBLE; importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
     fun refresh(force: Boolean = false) {
         if (visibility != VISIBLE) return
-        val style = "${settings.theme()}:${resources.configuration.uiMode}:${settings.int(Prefs.CORNER_RADIUS)}:" +
+        val style = "${settings.themeId()}:${CustomTheme.encode(settings.customThemes())}:${resources.configuration.uiMode}:${settings.int(Prefs.CORNER_RADIUS)}:" +
             listOf(InsertPrefs.TONE, InsertPrefs.HISTORY, InsertPrefs.RECENTS, InsertPrefs.KEEP, InsertPrefs.VOICE, InsertPrefs.DEVICE_ONLY).joinToString { repository.prefs.all[it].toString() }
         if (!force && lastStyle == style) return
-        lastStyle = style; palette = Palette.of(context, settings.theme())
+        lastStyle = style; palette = Palette.of(context, settings)
         if (editor != null) renderEditor() else renderPanel()
     }
     private fun clearBody() { body.removeAllViews(); top.removeAllViews(); categories.removeAllViews(); pages.removeAllViews(); footer.removeAllViews(); sectionButtons.clear(); categoryButtons.clear(); toneLayer.visibility = GONE }
@@ -196,7 +204,6 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         return repository.recent(which).mapNotNull { byText[it] }.filter { which != "Emoji" || supported(it.text) }
     }
     private fun renderSymbols() {
-        if (section == "Kaomoji" && activeCategory == "Recent" && recentSymbols(section).isEmpty()) activeCategory = "Happy"
         val all = if (section == "Emoji") cachedEmoji else kaomoji
         val cats = listOf("Recent") + all.map { it.category }.distinct()
         val tabs = LinearLayout(context)
@@ -207,7 +214,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
             val b = button(if (section == "Emoji") icon else cat, cat, cat == activeCategory) {
                 activeCategory = cat; markCategories()
                 if (section == "Emoji") { val index = if (cat == "Recent") 0 else symbols.indexOfFirst { it.category == cat }.coerceAtLeast(0); grid.setSelection(index) }
-                else showKaomoji(if (cat == "Recent") recentSymbols(section) else all.filter { it.category == cat })
+                else showKaomoji(if (cat == "Recent") kaomojiWithRecents() else all.filter { it.category == cat })
             }
             categoryButtons[cat] = b; tabs.addView(b, LinearLayout.LayoutParams(-2, dp(48)))
             b.background = tabShape(cat == activeCategory)
@@ -220,7 +227,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
             // Directly in the page at full width: a HorizontalScrollView measures with an unbounded width,
             // which collapses STRETCH_COLUMN_WIDTH columns to nothing.
             pages.addView(grid, LayoutParams(-1, -1)); adapter.notifyDataSetChanged()
-        } else showKaomoji(if (activeCategory == "Recent") recentSymbols(section).ifEmpty { all.filter { it.category == "Happy" } } else all.filter { it.category == activeCategory })
+        } else showKaomoji(if (activeCategory == "Recent") kaomojiWithRecents() else all.filter { it.category == activeCategory })
     }
     private fun emojiCells(): List<InsertSymbol> {
         val cols = if (tablet) 14 else 8
@@ -237,13 +244,25 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         return out
     }
     private fun markCategories() { categoryButtons.forEach { (name, b) -> b.isSelected = name == activeCategory; b.background = tabShape(b.isSelected); b.setTextColor(if (b.isSelected) palette.smallAccent else palette.text) } }
+    private fun kaomojiWithRecents(): List<InsertSymbol> {
+        val recent = recentSymbols("Kaomoji")
+        return recent + kaomoji.filter { entry -> recent.none { it.text == entry.text } }
+    }
     private fun showKaomoji(items: List<InsertSymbol>) {
         pages.removeAllViews()
         val flow = ChipFlow(context, dp(4))
         items.forEach { entry -> flow.addView(button(entry.text, entry.name) { use(entry) }.apply { textSize = 16f; minimumWidth = dp(64); background = shape(palette.key) }, ViewGroup.LayoutParams(-2, dp(48))) }
         pages.addView(ScrollView(context).apply { addView(flow) }, LayoutParams(-1, -1))
     }
-    private fun use(entry: InsertSymbol) { insert(entry.text); repository.used(section, entry.text) }
+    private fun use(entry: InsertSymbol) {
+        val which = section
+        repository.insertSymbol(which, entry, insert)
+        if (editor != null || section != which) return
+        activeCategory = "Recent"; markCategories()
+        if (which == "Emoji") {
+            symbols = emojiCells(); adapter.notifyDataSetChanged(); grid.setSelection(0)
+        } else if (which == "Kaomoji") showKaomoji(kaomojiWithRecents())
+    }
     private fun showTones(anchor: View, entry: InsertSymbol): Boolean {
         val variants = emoji.variants(entry.text).withIndex().filter { supported(it.value.text) }
         if (variants.size < 2) return false
@@ -380,12 +399,17 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
             actions.addView(button(if (isNotes) "+ New" else "Clear", if (isNotes) "Create note" else "Clear unpinned clipboard history") { if (isNotes) edit() else { repository.change { it.clear() }; clipboardChanged() } })
             col.addView(actions)
             val list = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-            if (!isNotes && !repository.prefs.getBoolean("insert_first_use", false)) list.addView(button("History stays on this device. Got it", "History stays on this device and clears after ${repository.keep.title}. Got it") { repository.prefs.edit().putBoolean("insert_first_use", true).apply(); clipboardChanged() })
             val enabled = repository.prefs.getBoolean(InsertPrefs.HISTORY, false)
             val items = if (isNotes) store.notes() else if (enabled) store.clips() else emptyList()
-            if (items.isEmpty()) {
-                list.addView(label(if (isNotes) "No notes yet\nWrite one with + New, or save a clip as a note." else if (!enabled) "Clipboard history is off\nTurn it on to keep what you copy for a while. Notes still work." else "Nothing copied yet\nCopy text and it shows up here.").apply { gravity = Gravity.CENTER; setPadding(dp(12), dp(16), dp(12), dp(16)) })
-                if (!isNotes && !enabled) list.addView(button("Turn on") { repository.prefs.edit().putBoolean(InsertPrefs.HISTORY, true).apply(); clipboardChanged() })
+            if (isNotes && items.isEmpty()) list.addView(label("No notes yet\nWrite one with + New, or save a clip as a note."))
+            if (!isNotes) when (clipboardPanelState(enabled, items.isNotEmpty(), repository.prefs.getBoolean(InsertPrefs.HAD_CLIPS, false), repository.prefs.getBoolean("insert_first_use", false))) {
+                ClipboardPanelState.HISTORY_OFF -> {
+                    list.addView(label("Clipboard history is off\nTurn it on to keep what you copy for a while. Notes still work.").apply { gravity = Gravity.CENTER; setPadding(dp(12), dp(16), dp(12), dp(16)) })
+                    list.addView(button("Turn on") { repository.prefs.edit().putBoolean(InsertPrefs.HISTORY, true).apply(); clipboardChanged() })
+                }
+                ClipboardPanelState.FIRST_USE -> list.addView(button("History stays on this device. Got it", "History stays on this device and clears after ${repository.keep.title}. Got it") { repository.prefs.edit().putBoolean("insert_first_use", true).apply(); clipboardChanged() })
+                ClipboardPanelState.EMPTY -> list.addView(label("Nothing copied yet\nCopy text and it shows up here."))
+                else -> Unit
             }
             var pinned: Boolean? = null
             items.forEach { clip ->

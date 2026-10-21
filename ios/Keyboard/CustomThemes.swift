@@ -1,6 +1,6 @@
 import Foundation
 
-/// Portable six-colour sRGB format; the Android app writes the same JSON keys and hex values.
+/// Portable sRGB fills and optional ARGB outline, shared with Android.
 struct ThemeColors: Codable, Equatable {
     var background: String
     var key: String
@@ -8,20 +8,46 @@ struct ThemeColors: Codable, Equatable {
     var text: String
     var accent: String
     var pressed: String
-    static let labels = ["Background", "Keys", "Function keys", "Text", "Accent", "Pressed"]
-    var values: [String] { [background, key, functionKey, text, accent, pressed] }
-    var isValid: Bool { values.allSatisfy { Self.parse($0) != nil } }
+    var keyOutline: String = "#00000000"
+    static let labels = ["Background", "Keys", "Function keys", "Text", "Accent", "Pressed", "Key outline"]
+    var values: [String] { [background, key, functionKey, text, accent, pressed, keyOutline] }
+    var isValid: Bool { values.prefix(6).allSatisfy { Self.parse($0) != nil } && Self.parse(keyOutline, alpha: true) != nil }
+    enum CodingKeys: String, CodingKey { case background, key, functionKey, text, accent, pressed, keyOutline }
+    init(background: String, key: String, functionKey: String, text: String, accent: String, pressed: String, keyOutline: String = "#00000000") {
+        self.background = background; self.key = key; self.functionKey = functionKey
+        self.text = text; self.accent = accent; self.pressed = pressed; self.keyOutline = keyOutline
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        background = try c.decode(String.self, forKey: .background); key = try c.decode(String.self, forKey: .key)
+        functionKey = try c.decode(String.self, forKey: .functionKey); text = try c.decode(String.self, forKey: .text)
+        accent = try c.decode(String.self, forKey: .accent); pressed = try c.decode(String.self, forKey: .pressed)
+        keyOutline = try c.decodeIfPresent(String.self, forKey: .keyOutline) ?? "#00000000"
+    }
     func replacing(_ index: Int, with value: String) -> ThemeColors {
         var v = values; v[index] = value
-        return ThemeColors(background: v[0], key: v[1], functionKey: v[2], text: v[3], accent: v[4], pressed: v[5])
+        return ThemeColors(background: v[0], key: v[1], functionKey: v[2], text: v[3], accent: v[4], pressed: v[5], keyOutline: v[6])
     }
     var checks: [(String, Double)] {
         [("Text on keys", Self.contrast(text, key)), ("Text on background", Self.contrast(text, background)),
          ("Text on function keys", Self.contrast(text, functionKey)), ("Accent on keys", Self.contrast(accent, key))]
     }
-    static func parse(_ value: String) -> UInt32? {
+    var keysBlend: Bool {
+        Self.contrast(key, background) < 1.5 && Self.contrast(Self.composite(keyOutline, on: background), background) < 3
+    }
+    static func composite(_ outline: String, on background: String) -> String {
+        let value = parse(outline, alpha: true) ?? 0, bg = parse(background) ?? 0
+        let alpha = opacity(outline)
+        func channel(_ shift: UInt32) -> UInt32 { UInt32(Double((value >> shift) & 255) * alpha + Double((bg >> shift) & 255) * (1 - alpha)) << shift }
+        return String(format: "#%06X", channel(16) | channel(8) | channel(0))
+    }
+    static func opacity(_ value: String) -> Double {
         let hex = value.hasPrefix("#") ? String(value.dropFirst()) : value
-        guard hex.count == 6, hex.unicodeScalars.allSatisfy({ CharacterSet(charactersIn: "0123456789abcdefABCDEF").contains($0) }) else { return nil }
+        return hex.count == 8 ? Double((parse(value, alpha: true) ?? 0) >> 24) / 255 : 1
+    }
+    static func parse(_ value: String, alpha: Bool = false) -> UInt32? {
+        let hex = value.hasPrefix("#") ? String(value.dropFirst()) : value
+        guard (hex.count == 6 || alpha && hex.count == 8), hex.unicodeScalars.allSatisfy({ CharacterSet(charactersIn: "0123456789abcdefABCDEF").contains($0) }) else { return nil }
         return UInt32(hex, radix: 16)
     }
     static func contrast(_ first: String, _ second: String) -> Double {

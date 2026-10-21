@@ -1,6 +1,7 @@
 // Run on a Mac with: bash ios/test-safety.sh
 // This executable deliberately avoids UIKit, Xcode projects, signing and real preference domains.
 import Foundation
+
 import CoreGraphics
 
 // KeyboardSettings only needs this value type; the production palette imports UIKit.
@@ -10,7 +11,28 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
     if !condition() { fatalError(message) }
 }
 
+for width in [240, 320, 390, 600, 800, 1200] {
+    for height in [160, 192, 230, 307, 384, 460, 600, 845] {
+        let header = width >= 600 ? 56 : 48
+        let g = QuickPanelGeometry.fit(width: width, height: height, header: header)
+        let content = (width < 260 ? 5 : 3) * (g.tile + 6) + 4
+        check(g.tile >= 60 && g.strip >= 56, "quick controls became too small")
+        if g.viewport < content {
+            check(g.viewport % (g.tile + 6) == 18 && g.viewport >= g.tile + 6 + 18, "quick row clipped through its label")
+            check(header + g.top + g.strip + g.gap + g.viewport <= height, "quick grid exceeds panel")
+        } else { check(g.viewport == content, "outer quick scroll lost rows") }
+    }
+}
+
 // Insert models deliberately avoid UIKit and all device permissions.
+for has in [false, true] { for had in [false, true] { for dismissed in [false, true] {
+    check(clipboardPanelState(enabled: false, hasItems: has, hadItems: had, dismissed: dismissed, fullAccess: false) == .historyOff, "disabled clipboard did not win")
+    check(clipboardPanelState(enabled: true, hasItems: has, hadItems: had, dismissed: dismissed, fullAccess: false) == .accessRequired, "clipboard access state missing")
+} } }
+check(clipboardPanelState(enabled: true, hasItems: false, hadItems: false, dismissed: false) == .firstUse, "first-use clipboard missing")
+check(clipboardPanelState(enabled: true, hasItems: false, hadItems: true, dismissed: false) == .empty, "first-use returned after clips were cleared")
+check(clipboardPanelState(enabled: true, hasItems: false, hadItems: false, dismissed: true) == .empty, "dismissed clipboard onboarding returned")
+check(clipboardPanelState(enabled: true, hasItems: true, hadItems: false, dismissed: false) == .items, "clipboard items and onboarding overlap")
 let emojiTSV = try String(contentsOfFile: "app/src/main/assets/insert/emoji.tsv", encoding: .utf8)
 let emojiCatalog = EmojiCatalog(emojiTSV)
 check(emojiCatalog.entries.count > 3900, "Unicode emoji data was truncated")
@@ -31,6 +53,29 @@ check(kaomojiTSV.split(whereSeparator: \.isNewline).count == 150 && kaomojiTSV.u
 var insertRecents = InsertRecents()
 for value in 0...40 { insertRecents.use(String(value)) }; insertRecents.use("12")
 check(insertRecents.values.count == 32 && insertRecents.values[0] == "12" && insertRecents.values[1] == "40", "recents ordering/cap failed")
+do {
+    let suite = "tailorkeys.insert.tests." + UUID().uuidString
+    let defaults = UserDefaults(suiteName: suite)!; defer { defaults.removePersistentDomain(forName: suite) }
+    let repo = InsertRepository(defaults: { defaults })
+    let plain = emojiCatalog.variants("👍")[0], toned = emojiCatalog.variants("👍")[3]
+    for entry in [plain, toned] {
+        repo.insertSymbol("Emoji", entry) { text in
+            check(text == entry.text && InsertRepository(defaults: { defaults }).recent("Emoji").first == text, "insert happened before recent persisted")
+        }
+    }
+    let face = InsertSymbol("(^_^)", "happy", "Happy")
+    repo.insertSymbol("Kaomoji", face) { _ in }
+    check(repo.recent("Emoji") == [toned.text, plain.text] && repo.recent("Kaomoji") == [face.text], "recents mixed sections or lost tone")
+    defaults.set(false, forKey: InsertPrefs.recents); repo.insertSymbol("Emoji", plain) { _ in }
+    check(repo.recent("Emoji").isEmpty, "hidden recents still displayed")
+    defaults.set(true, forKey: InsertPrefs.recents)
+    check(repo.recent("Emoji") == [toned.text, plain.text], "recents recorded while turned off")
+    for i in 0..<40 { repo.insertSymbol("Kaomoji", InsertSymbol("face\(i)", "face", "Happy")) { _ in } }
+    check(repo.recent("Kaomoji").count == 32 && repo.recent("Emoji").count == 2, "recents cap crossed sections")
+    repo.change { $0.capture("copied", enabled: true, sensitive: false, password: false) }; repo.change { $0.clear() }
+    check(defaults.bool(forKey: InsertPrefs.hadClips), "clipboard forgot that items had existed")
+    repo.clearRecents(); check(repo.recent("Emoji").isEmpty && repo.recent("Kaomoji").isEmpty, "recents did not clear")
+}
 var insertNow: TimeInterval = 0
 let clips = ClipboardStore(now: { insertNow })
 check(!clips.capture("secret", enabled: true, sensitive: true, password: false), "sensitive clip stored")
@@ -391,11 +436,30 @@ check(free.inserted == 6 && free.deleted == 1 && free.mistakes == 1, "free typin
 check(abs(free.accuracy - 5.0 / 6.0) < 0.0001, "free accuracy is not undeleted keystroke share")
 check(free.wpm(at: 160) == 1 && free.result(at: Date()) == nil, "free session saved a result or computed wrong speed")
 free.update("hallo", at: 103)
-check(free.inserted == 7 && free.deleted == 2 && free.mistakes == 2, "replacement counted unchanged suffix")
+check(free.inserted == 7 && free.deleted == 1 && free.mistakes == 1, "replacement counted as a correction")
 free.update("ha🌻llo", at: 104)
 check(free.characterCount == 6 && free.inserted == 8, "metrics counted UTF-16 units instead of characters")
 free.update("", at: 105)
-check(free.accuracy == 0 && free.wpm(at: 105) == 0, "cleared text has negative accuracy or speed")
+check(free.deleted == 7 && abs(free.accuracy - 1.0 / 8) < 0.0001 && free.wpm(at: 105) == 0, "clear counted a replacement as a correction")
+var commits = TypingSession(mode: .free, sentence: "")
+for (i, value) in ["teh", "the ", "teh ", "the ", "the keyboard ", "the keyboard swiping "].enumerated() { commits.update(value, at: Double(i)) }
+check(commits.mistakes == 0 && commits.accuracy == 1, "autocorrect, undo, suggestion or swipe counted as mistakes")
+commits.update("the keyboard swipin ", at: 7)
+check(commits.mistakes == 1, "manual deletion inside a word was not a correction")
+var punctuation = TypingSession(mode: .free, sentence: "")
+punctuation.update("dont ", at: 0); punctuation.update("don't ", at: 1); punctuation.update("dont ", at: 2)
+check(punctuation.mistakes == 0, "punctuation autocorrect undo counted as a mistake")
+var burst = TypingSession(mode: .free, sentence: "")
+burst.update("keyboardword", at: 0); burst.sample(at: 4.999)
+check(burst.peakWpm == 0, "one word spiked peak before five seconds")
+burst.sample(at: 5); check(abs(burst.peakWpm - 28.8) < 0.0001, "burst peak did not use five seconds")
+var slow = TypingSession(mode: .free, sentence: "")
+slow.update("hello", at: 0); slow.sample(at: 10); check(slow.peakWpm == 0, "peak did not wait for ten characters")
+slow.update("hello worl", at: 20); check(abs(slow.peakWpm - 6) < 0.0001, "slow peak did not expand its window")
+slow.sample(at: 60); slow.update("hello worl more text", at: 65)
+check(abs(slow.samples.last!.wpm - 24) < 0.0001 && abs(slow.peakWpm - 24) < 0.0001, "peak used lifetime speed instead of a rolling window")
+for i in 0..<1300 { slow.sample(at: 70 + Double(i)) }
+check(abs(slow.peakWpm - 24) < 0.0001, "chart cap erased peak")
 
 var test = TypingSession(mode: .test, sentence: "hello world")
 test.update("heXlo", at: 100)
@@ -718,11 +782,22 @@ check(zip(branchOutput, independentOutput).allSatisfy { abs($0.0 - $0.1) < 0.000
 check(liveBeforeBranch == liveAfterBranch, "phrase scoring advanced live state")
 
 
-// Custom themes share Android's opaque hex JSON and retain identity through saved layouts.
+// Custom themes share Android's RGB/ARGB JSON and retain identity through saved layouts.
 do {
     let colors = ThemeColors(background: "#E9E2D6", key: "#FBF8F2", functionKey: "#D3C9B8", text: "#2B2620", accent: "#C2562B", pressed: "#C7BBA6")
     let theme = CustomTheme(id: "sand", name: "Sand", colors: colors)
     check(CustomTheme.decode(CustomTheme.encode([theme])) == [theme], "custom theme JSON did not round trip")
+    let outlined = CustomTheme(id: "outlined", name: "Outlined", colors: colors.replacing(6, with: "#40FFFFFF"))
+    check(CustomTheme.decode(CustomTheme.encode([outlined])) == [outlined], "outline alpha did not round trip")
+    var legacyObject = try! JSONSerialization.jsonObject(with: Data(CustomTheme.encode([theme]).utf8)) as! [[String: Any]]
+    var legacyColors = legacyObject[0]["colors"] as! [String: Any]; legacyColors.removeValue(forKey: "keyOutline"); legacyObject[0]["colors"] = legacyColors
+    let legacy = String(decoding: try! JSONSerialization.data(withJSONObject: legacyObject), as: UTF8.self)
+    check(CustomTheme.decode(legacy).first?.colors.keyOutline == "#00000000", "legacy theme outline must be transparent")
+    let blackKeys = ThemeColors(background: "#000000", key: "#000000", functionKey: "#000000", text: "#FFFFFF", accent: "#FFD400", pressed: "#000000")
+    check(blackKeys.keysBlend && blackKeys.replacing(6, with: "#FF101010").keysBlend && blackKeys.replacing(6, with: "#10FFFFFF").keysBlend, "invisible outlines must warn")
+    check(!blackKeys.replacing(6, with: "#FFFFFF").keysBlend, "visible outlines should prevent blend warning")
+    check(blackKeys.replacing(6, with: "#444444").keysBlend, "outline below 3:1 did not warn")
+    check(ThemeColors.opacity("00000000") == 0 && ThemeColors.opacity("#FFFFFF") == 1, "outline opacity depends on hash prefix")
     check(CustomTheme.decode("broken").isEmpty, "invalid theme JSON accepted")
     check(abs(ThemeColors.contrast("#000000", "#FFFFFF") - 21) < 0.00001, "WCAG endpoints incorrect")
     check(abs(ThemeColors.contrast("#777777", "#FFFFFF") - 4.478) < 0.001, "WCAG sRGB linearisation incorrect")
@@ -732,6 +807,10 @@ do {
     let settings = KeyboardSettings(tablet: true, store: defaults)
     settings.saveTheme(theme)
     check(settings.themeID == "custom:sand" && settings.customThemes == [theme], "custom selection not stored")
+    settings.theme = .highContrast; settings.cycleQuickTheme()
+    check(settings.themeID == theme.selection, "quick theme cycle skipped custom themes")
+    settings.cycleQuickTheme(); check(settings.theme == .system, "quick theme cycle did not wrap")
+    settings.themeID = theme.selection
     let snapshot = settings.layoutSettings()
     check(snapshot[Prefs.theme] as? String == "custom:sand", "saved layout lost custom theme id")
     settings.deleteTheme(theme.id)
