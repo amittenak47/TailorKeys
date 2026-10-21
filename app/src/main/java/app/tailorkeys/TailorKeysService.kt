@@ -116,6 +116,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private var glideExplore = emptyList<String>()
     private var keyboardView: KeyboardView? = null
     private var quickOptions: QuickOptions? = null
+    private var editingLayoutKey: String? = null
     private val state = InputState()
     private var grid: KeyGrid = KeyGrid.default()
     private var lastSpaceAt = 0L
@@ -345,6 +346,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     override fun onCreateInputView(): View {
         closeQuickOptions()
+        editingLayoutKey = null
         val keyboard = KeyboardView(this, settings).also {
             it.chordLibrary = models[state.language]?.chords
             it.listener = this
@@ -363,8 +365,13 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
                 // unchanged keyboard measure specs use View's existing measurement cache.
                 quickOptions?.updateStripHeight()
                 for (i in 1 until childCount) getChildAt(i).measure(
-                    View.MeasureSpec.makeMeasureSpec(measuredWidth, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(keyboard.quickOptionsBounds.width().toInt(), View.MeasureSpec.EXACTLY),
                     View.MeasureSpec.makeMeasureSpec(measuredHeight, View.MeasureSpec.EXACTLY))
+            }
+            override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+                keyboard.layout(0, 0, measuredWidth, measuredHeight)
+                for (i in 1 until childCount) getChildAt(i).layout(keyboard.quickOptionsBounds.left.toInt(), 0,
+                    keyboard.quickOptionsBounds.right.toInt(), measuredHeight)
             }
         }.also {
             it.addView(keyboard, android.widget.FrameLayout.LayoutParams(-1, -2))
@@ -372,7 +379,16 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
                 landscape = { resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE },
                 stripHeight = { keyboard.suggestionStripHeight },
                 close = { closeQuickOptions() },
-                rearrange = { closeQuickOptions(); keyboard.editMode = true },
+                rearrange = { key, title ->
+                    closeQuickOptions()
+                    editingLayoutKey = key
+                    keyboard.editTitle = title
+                    grid = settings.loadGrid()
+                    keyboard.grid = grid
+                    if (modelReady) predictor.setLayout(grid)
+                    keyboard.editMode = true
+                    keyboard.announceForAccessibility(title)
+                },
                 language = { onSwitchLanguage(1) },
                 allSettings = { closeQuickOptions(); onOpenSettings() }).apply {
                 visibility = View.INVISIBLE
@@ -392,20 +408,29 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         onChoiceInterrupted()
         keyboard.cancelTouches()
         keyboard.setOptionsCovered(true)
+        keyboard.animate().cancel()
+        keyboard.alpha = 1f
+        val scale = android.provider.Settings.Global.getFloat(contentResolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+        if (android.animation.ValueAnimator.areAnimatorsEnabled()) keyboard.animate().alpha(0f).setDuration(if (scale < 1f) 100 else 80).start()
+        else keyboard.alpha = 0f
         keyboard.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         panel.refresh(resetScroll = true)
         panel.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
         panel.visibility = View.VISIBLE
+        panel.animateOpen()
         panel.sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
     }
 
     private fun closeQuickOptions() {
         quickOptions?.let {
+            it.animate().cancel(); it.alpha = 1f; it.translationY = 0f
             it.clearFocus()
             it.visibility = View.INVISIBLE
             it.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         }
         keyboardView?.setOptionsCovered(false)
+        keyboardView?.animate()?.cancel()
+        keyboardView?.alpha = 1f
         keyboardView?.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
     }
 
@@ -466,7 +491,8 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         clearTaps()
         onChoiceInterrupted()
         closeQuickOptions()
-        keyboardView?.let { it.cancelTouches(); it.editMode = false }
+        keyboardView?.let { it.cancelTouches(); it.editMode = false; it.editTitle = null }
+        editingLayoutKey = null
         models.values.forEach { it.predictor.save() }
         super.onFinishInputView(finishingInput)
     }
@@ -839,7 +865,17 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         clearTaps()
         grid = keyboardView?.grid ?: return
         if (modelReady) predictor.setLayout(grid)
-        settings.saveGrid(grid)
+        val library = LayoutLibrary(settings)
+        val key = editingLayoutKey?.takeIf { it == library.inUse }
+        if (key != null) library.edit(key, grid) else settings.saveGrid(grid)
+    }
+
+    override fun onEditDone() {
+        if (editingLayoutKey == null) return
+        onEdited()
+        editingLayoutKey = null
+        keyboardView?.editTitle = null
+        onQuickOptions()
     }
 
     override fun onOpenSettings() {

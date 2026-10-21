@@ -1,4 +1,4 @@
-package app.tailorkeys.settings
+package app.tailorkeys
 
 import app.tailorkeys.KeyboardSettings
 import app.tailorkeys.layout.KeyGrid
@@ -83,8 +83,8 @@ internal class LayoutLibrary(
             .put("grid", JSONObject(it.json))) }
     }.toString()
 
-    fun migrate() {
-        restoreTrial()
+    fun migrate(recoverTrial: Boolean = true) {
+        if (recoverTrial) restoreTrial()
         if (prefs.get(LayoutKeys.SELECTED) != null) return
         val grid = loadGrid()
         val preset = entries().firstOrNull { it.preset != null && sameGrid(it.grid(), grid) }
@@ -103,6 +103,25 @@ internal class LayoutLibrary(
     }
 
     fun requestNew(): NewLayoutFlow = if (hasDraft) NewLayoutFlow.SAVE_FIRST else NewLayoutFlow.EDIT
+
+    fun nextName(prefix: String): String {
+        val names = saved().map { it.name.lowercase(java.util.Locale.ROOT) }.toSet()
+        return generateSequence(1) { it + 1 }.map { "$prefix $it" }
+            .first { it.lowercase(java.util.Locale.ROOT) !in names }
+    }
+
+    /** Both entry points preserve the sole draft. The caller presents Save first before retrying. */
+    fun quickEdit(source: LayoutEntry, newCopy: Boolean): LayoutEntry {
+        val entry = if (newCopy || !source.custom) startDraft(source.grid()) else source
+        use(entry)
+        return entry
+    }
+
+    fun importCode(text: String?): ClipboardLayoutResult {
+        if (text.isNullOrBlank()) return ClipboardLayoutResult.Empty
+        val decoded = KeyGrid.decodeCode(text) ?: return ClipboardLayoutResult.Invalid
+        return ClipboardLayoutResult.Added(add(decoded.name ?: nextName("Imported"), decoded.grid))
+    }
 
     fun startDraft(source: KeyGrid): LayoutEntry {
         check(!hasDraft) { "Save the existing draft first" }
@@ -203,4 +222,10 @@ internal class LayoutLibrary(
                 x.r == y.r && x.c == y.c && x.w == y.w && x.keys == y.keys
             }
     }
+}
+
+internal sealed interface ClipboardLayoutResult {
+    data object Empty : ClipboardLayoutResult
+    data object Invalid : ClipboardLayoutResult
+    data class Added(val entry: LayoutEntry) : ClipboardLayoutResult
 }

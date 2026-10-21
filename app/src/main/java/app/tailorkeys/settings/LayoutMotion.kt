@@ -1,5 +1,7 @@
 package app.tailorkeys.settings
 
+import app.tailorkeys.LayoutEntry
+
 import androidx.compose.animation.*
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Animatable

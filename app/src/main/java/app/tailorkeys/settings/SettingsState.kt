@@ -1,5 +1,9 @@
 package app.tailorkeys.settings
 
+import app.tailorkeys.LayoutEntry
+import app.tailorkeys.LayoutLibrary
+import app.tailorkeys.LayoutKeys
+
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.res.Configuration

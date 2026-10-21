@@ -13,12 +13,11 @@ internal data class QuickOptionsState(
     val swipe: Boolean,
 ) {
     fun tiles(): List<QuickTileState> = listOf(
-        QuickTileState("Rearrange"),
         QuickTileState("Split", if (split) "On" else "Off", on = split),
         QuickTileState("One hand", when (oneHand) {
             Align.CENTER -> "Off"; Align.LEFT -> "Left"; Align.RIGHT -> "Right"
         }, on = oneHand != Align.CENTER),
-        QuickTileState("Size $height%", description = "Size, $height percent"),
+        QuickTileState("Size", "$height%", description = "Size, $height percent"),
         QuickTileState("Theme", if (theme == ThemeName.SYSTEM) "System" else theme.title),
         QuickTileState("Language", if (multipleLanguages) "Tap to switch" else "Only one",
             glyph = language.uppercase(), enabled = multipleLanguages),
@@ -35,3 +34,11 @@ internal data class QuickTileState(
     val enabled: Boolean = true,
     val description: String? = if (state.isEmpty()) null else "$label, $state",
 )
+
+internal data class QuickLayoutTileState(val entry: LayoutEntry, val inUse: Boolean) {
+    val label get() = entry.name + (if (inUse) ", in use" else "") + (if (entry.draft) ", unsaved" else "")
+    val bold get() = inUse
+    val outlineDp get() = if (inUse) 2 else 1
+}
+
+internal fun LayoutLibrary.quickTiles() = entries().map { QuickLayoutTileState(it, it.key == inUse) }

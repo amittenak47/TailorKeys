@@ -1,6 +1,6 @@
 package app.tailorkeys.layout
 
-import android.util.Base64
+import java.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -217,7 +217,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         val buf = ByteArray(raw.size + 64)
         val n = d.deflate(buf)
         d.end()
-        return CODE_PREFIX + Base64.encodeToString(buf, 0, n, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        return CODE_PREFIX + Base64.getUrlEncoder().withoutPadding().encodeToString(buf.copyOf(n))
     }
 
     companion object {
@@ -230,12 +230,18 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         fun bounds(c: Int) = when (region(c)) { 0 -> 0..4; 1 -> 5..5; else -> 6..10 }
 
         /** Finds a layout code anywhere in [text], so a whole pasted message works. Null if there's none or it's broken. */
-        fun fromCode(text: String): KeyGrid? {
+        data class DecodedLayout(val grid: KeyGrid, val name: String?)
+
+        fun fromCode(text: String): KeyGrid? = decodeCode(text)?.grid
+
+        /** Bound clipboard input as well as inflated output. Optional names share the same decode. */
+        fun decodeCode(text: String): DecodedLayout? {
+            if (text.length > 128 * 1024) return null
             val m = CODE.find(text) ?: return null
             return try {
                 val inf = Inflater(true)
                 try {
-                    inf.setInput(Base64.decode(m.groupValues[1], Base64.URL_SAFE) + 0)
+                    inf.setInput(Base64.getUrlDecoder().decode(m.groupValues[1]) + 0)
                     val out = ByteArrayOutputStream()
                     val buf = ByteArray(1024)
                     while (!inf.finished()) {
@@ -243,7 +249,10 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
                         if (n == 0 || out.size() + n > 64 * 1024) return null
                         out.write(buf, 0, n)
                     }
-                    fromJson(out.toString("UTF-8"))
+                    val json = out.toString("UTF-8")
+                    val grid = fromJson(json) ?: return null
+                    val name = JSONObject(json).opt("name") as? String
+                    DecodedLayout(grid, name?.trim()?.take(24)?.takeIf { it.isNotEmpty() })
                 } finally {
                     inf.end()
                 }

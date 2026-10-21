@@ -17,6 +17,12 @@ class Palette(
     val accent: Int,
     val onAccent: Int,
 ) {
+    /** Text uses a contrast-safe variant; fills and selection outlines retain the real accent. */
+    val smallAccent: Int get() = when (accent) {
+        0xFFC2562B.toInt() -> 0xFF9C4A28.toInt()
+        0xFF5B8DEF.toInt() -> 0xFF8DB1FF.toInt()
+        else -> accent
+    }
     companion object {
         fun of(context: Context, name: ThemeName): Palette {
             val night = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES

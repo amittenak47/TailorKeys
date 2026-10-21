@@ -1,5 +1,8 @@
 package app.tailorkeys.settings
 
+import app.tailorkeys.LayoutEntry
+import app.tailorkeys.TypingResult
+
 import android.provider.Settings
 import android.os.SystemClock
 import android.view.inputmethod.InputMethodManager

@@ -77,6 +77,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         fun onCursor(steps: Int, select: Boolean) {}
         fun onSelectMode(on: Boolean) {}
         fun onEdited() {}
+        fun onEditDone() {}
         fun onOpenSettings() {}
         fun onQuickOptions() {}
     }
@@ -109,6 +110,12 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val history = ArrayList<String>()
     private var keepHistory = false
     private var editHint: String? = null
+    var editTitle: String? = null
+    /** Bounds already resolved by layoutFor, including narrow/one-hand profiles. */
+    internal var quickOptionsBounds = RectF()
+        private set
+
+    private fun finishEditing() { editMode = false; listener?.onEditDone() }
 
     private var sugLeft = emptyList<String>()
     private var sugRight = emptyList<String>()
@@ -553,6 +560,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         slideProfile = nextProfile
         slideViewWidth = width
         layoutHeight = ceil(if (reserve) s.total else max(target, s.total)).toInt()
+        quickOptionsBounds.set(areaLeft, 0f, areaLeft + areaW, layoutHeight.toFloat())
         builtWidth = width
         builtGeometry = geometrySettings()
         rebuildDrawingCache()
@@ -779,7 +787,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             A_GEAR -> listener?.onQuickOptions()
             A_UNDO -> { if (history.isEmpty()) return false; undo() }
             A_SETTINGS -> listener?.onOpenSettings()
-            A_DONE -> editMode = false
+            A_DONE -> finishEditing()
             A_SWITCH -> switchRect?.let { moveKeyboardToward(it.centerX(), it.centerY()) }
             else -> {
                 val item = placed[id].item
@@ -929,7 +937,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     override fun onDraw(canvas: Canvas) {
         // The panel is opaque. Do not record the keyboard or continue wiggle/trail animation loops.
-        if (optionsCovered) return
+        if (optionsCovered && alpha == 0f) return
         ensureLayout()
         canvas.drawColor(palette.background)
         canvas.save()
@@ -1176,11 +1184,18 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val s = 20 * density
         drawUndo(canvas, undoRect.centerX(), undoRect.centerY(), s, palette.text, if (history.isEmpty()) 70 else 255)
         val sp = resources.displayMetrics.scaledDensity
-        drawLabel(canvas, hintRect, editHint ?: "Drag keys to rearrange", 13 * sp, if (editHint != null) palette.accent else palette.hint, 255)
+        val title = editHint ?: editTitle ?: "Drag keys to rearrange"
+        val lines = if (editHint == null) title.split("; ", limit = 2) else listOf(title)
+        lines.forEachIndexed { index, line ->
+            val rect = if (lines.size == 1) hintRect else RectF(hintRect).apply {
+                if (index == 0) bottom = centerY() else top = centerY()
+            }
+            drawLabel(canvas, rect, line, 13 * sp, if (editHint != null || editTitle != null) palette.smallAccent else palette.hint, 255)
+        }
         if (!doneRect.isEmpty) {
             drawGear(canvas, moreRect.centerX(), moreRect.centerY(), s, palette.hint)
             text.isFakeBoldText = true
-            drawLabel(canvas, doneRect, "Done", 15 * sp, palette.accent, 255)
+            drawLabel(canvas, doneRect, "Done", 15 * sp, palette.smallAccent, 255)
             text.isFakeBoldText = false
         }
     }
@@ -2149,7 +2164,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     when {
                         undoRect.contains(x, y) -> undo()
                         moreRect.contains(x, y) -> listener?.onOpenSettings()
-                        doneRect.contains(x, y) -> editMode = false
+                        doneRect.contains(x, y) -> finishEditing()
                     }
                     return true
                 }

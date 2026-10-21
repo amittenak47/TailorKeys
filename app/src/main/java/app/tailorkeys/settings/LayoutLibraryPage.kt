@@ -1,5 +1,8 @@
 package app.tailorkeys.settings
 
+import app.tailorkeys.LayoutEntry
+import app.tailorkeys.NewLayoutFlow
+
 import android.content.ClipboardManager
 import android.content.Intent
 import androidx.activity.compose.BackHandler

@@ -16,7 +16,6 @@ import androidx.compose.runtime.setValue
 import app.tailorkeys.settings.SettingsScreen
 import app.tailorkeys.settings.SettingsTheme
 import app.tailorkeys.settings.SetupStatus
-import app.tailorkeys.settings.LayoutLibrary
 
 class SettingsActivity : ComponentActivity() {
     private lateinit var settings: KeyboardSettings

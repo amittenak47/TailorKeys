@@ -1,5 +1,7 @@
 package app.tailorkeys.settings
 
+import app.tailorkeys.LayoutEntry
+
 import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility

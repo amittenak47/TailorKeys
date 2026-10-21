@@ -9,6 +9,86 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LayoutLibraryTest {
+    @Test fun quickStripOrdersPresetsSavedAndDraftAndMarksOnlyAppliedTile() {
+        val f = Fixture(); val store = f.store(); store.migrate()
+        val saved = store.add("Desk", KeyGrid.default())
+        val draft = store.startDraft(KeyGrid.template(Template.THUMBS))
+        store.use(saved)
+        val tiles = store.quickTiles()
+        assertEquals(listOf("preset:STANDARD", "preset:SPLIT", "preset:THUMBS", saved.key, draft.key), tiles.map { it.entry.key })
+        assertEquals(saved.key, tiles.single { it.inUse }.entry.key)
+        assertTrue(tiles.single { it.inUse }.bold)
+        assertEquals(2, tiles.single { it.inUse }.outlineDp)
+        assertEquals("Desk, in use", tiles.single { it.inUse }.label)
+        assertEquals("Custom, unsaved", tiles.last().label)
+        store.use(draft)
+        assertEquals("Custom, in use, unsaved", store.quickTiles().single { it.inUse }.label)
+    }
+
+    @Test fun quickNamesFillHolesAndSavedEditsKeepTheirIdentity() {
+        val f = Fixture(); val store = f.store(); store.migrate()
+        listOf("Custom 1", "Custom 3", "Imported 1", "Imported 3").forEach { store.add(it, KeyGrid.default()) }
+        assertEquals("Custom 2", store.nextName("Custom"))
+        assertEquals("Imported 2", store.nextName("Imported"))
+        val saved = store.entries().first { it.custom }
+        assertEquals(saved.key, store.quickEdit(saved, false).key)
+        val changed = saved.grid().apply { items.first().keys[0] = "!" }
+        store.edit(saved.key, changed)
+        assertEquals(saved.key, store.inUse)
+        assertEquals(changed.toJson(), store.entries().first { it.key == saved.key }.json)
+        assertFalse(store.hasDraft)
+    }
+
+    @Test fun quickPresetEditForksAndExistingDraftMustBeSavedBeforeNewOrFork() {
+        val f = Fixture(); val store = f.store(); store.migrate()
+        val preset = store.entries().first()
+        val draft = store.quickEdit(preset, false)
+        assertEquals("draft", store.inUse)
+        assertEquals(preset.json, draft.json)
+        assertEquals(preset.json, store.entries().first().json)
+        assertEquals(draft, store.quickEdit(draft, false))
+        val before = f.values.toMap()
+        assertThrows(IllegalStateException::class.java) { store.quickEdit(preset, false) }
+        assertThrows(IllegalStateException::class.java) { store.quickEdit(draft, true) }
+        assertEquals(before, f.values)
+        store.saveDraft(store.nextName("Custom"))
+        val next = store.quickEdit(preset, true)
+        assertEquals("draft", next.key)
+        assertEquals("Custom 1", store.entries().single { it.custom && !it.draft }.name)
+    }
+
+    @Test fun clipboardImportUsesBoundedDecoderAndOptionalNameWithoutApplying() {
+        val f = Fixture(); val store = f.store(); store.migrate()
+        assertEquals(ClipboardLayoutResult.Empty, store.importCode(null))
+        assertEquals(ClipboardLayoutResult.Empty, store.importCode("  "))
+        for (code in listOf("hello", "TK1-bad", "TK2-abc", "TK1-" + "A".repeat(140000))) {
+            assertEquals(ClipboardLayoutResult.Invalid, store.importCode(code))
+        }
+        val grid = KeyGrid.template(Template.THUMBS)
+        val added = store.importCode("Shared layout: " + grid.toCode()) as ClipboardLayoutResult.Added
+        assertEquals("Imported 1", added.entry.name)
+        assertEquals(grid.toJson(), added.entry.json)
+        assertEquals("preset:STANDARD", store.inUse)
+        assertEquals("Imported 2", (store.importCode(grid.toCode()) as ClipboardLayoutResult.Added).entry.name)
+        val raw = JSONObject(grid.toJson()).put("name", "Travel").toString().toByteArray()
+        val deflater = java.util.zip.Deflater(9, true)
+        deflater.setInput(raw); deflater.finish()
+        val buffer = ByteArray(raw.size + 64)
+        val count = deflater.deflate(buffer); deflater.end()
+        val code = "TK1-" + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(buffer.copyOf(count))
+        assertEquals("Travel", (store.importCode(code) as ClipboardLayoutResult.Added).entry.name)
+    }
+
+    @Test fun creatingKeyboardLibraryDoesNotRecoverAnActiveTypingTrial() {
+        val f = Fixture(); val store = f.store(); store.migrate()
+        val trial = store.entries().first { it.key == "preset:SPLIT" }
+        store.beginTrial(trial)
+        val before = f.grid.toJson()
+        f.store().migrate(recoverTrial = false)
+        assertEquals(before, f.grid.toJson())
+        assertNotNull(f.values[LayoutKeys.TRIAL])
+        assertEquals("preset:STANDARD", store.inUse)
+    }
     private class Fixture {
         val values = mutableMapOf<String, String>()
         var grid = KeyGrid.default()

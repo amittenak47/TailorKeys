@@ -5,6 +5,9 @@ import android.content.res.Configuration
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
+import android.view.View
+import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -98,171 +101,449 @@ internal class GapPresses {
     fun clear() { liftedAt = null }
 }
 
-/**
- * Compact quick options over the keys: a 4 × 2 grid of key-styled tiles (icon, label, state) that fits the keyboard
- * without scrolling; a scroll view remains only as a fallback for very small keyboards.
- */
+/** Retained native panel. Preference refreshes update existing cards; opening never lays out keys. */
 class QuickOptions(
     context: Context,
     private val settings: KeyboardSettings,
     private val landscape: () -> Boolean,
     private val stripHeight: () -> Int,
     private val close: () -> Unit,
-    private val rearrange: () -> Unit,
+    private val rearrange: (String, String) -> Unit,
     private val language: () -> Unit,
     private val allSettings: () -> Unit,
 ) : LinearLayout(context) {
     private val d = resources.displayMetrics.density
     private fun dp(n: Int) = (n * d).toInt()
-    private val header = LinearLayout(context)
-    private val closeButton = TextView(context)
-    private val scroll = ScrollView(context).apply { isFillViewport = true; isVerticalScrollBarEnabled = false }
+    private val library = LayoutLibrary(settings).also { it.migrate(recoverTrial = false) }
+    private val thumbnails = LayoutThumbnailCache(context, settings)
+    private val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
+    private val back = button("\u2039  Back") { if (confirm.visibility == View.VISIBLE) hideConfirm() else if (showingAll) showAll(false) else close() }
+    private val heading = TextView(context).apply { textSize = 15f; setTypeface(typeface, Typeface.BOLD) }
+    private val trailing = button("All layouts \u203a") { if (showingAll) edit(false) else showAll(true) }
+    private val pages = FrameLayout(context)
+    private val main = LinearLayout(context).apply { orientation = VERTICAL }
+    private val stripRow = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
+    private val actions = LinearLayout(context).apply { orientation = VERTICAL }
+    private val editButton = button("Edit") { edit(false) }
+    private val newButton = button("+\nNew") {
+        if (library.inUse == "draft") { library.saveDraft(library.nextName("Custom")); refresh() } else edit(true)
+    }
+    private val strip = object : HorizontalScrollView(context) {
+        override fun getLeftFadingEdgeStrength() = 0f
+    }.apply {
+        isHorizontalScrollBarEnabled = false
+        isHorizontalFadingEdgeEnabled = true
+        setFadingEdgeLength(dp(36))
+    }
+    private val stripCards = LinearLayout(context)
+    private val tileScroll = ScrollView(context).apply { isFillViewport = true; isVerticalScrollBarEnabled = false }
+    private val tileGrid = LinearLayout(context).apply { orientation = VERTICAL; gravity = Gravity.TOP }
+    private val allScroll = ScrollView(context).apply { isVerticalScrollBarEnabled = true; visibility = View.INVISIBLE }
+    private val allGrid = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(8), 0, dp(8), dp(8)) }
+    private val message = TextView(context).apply { textSize = 12f; setPadding(dp(12), 0, dp(12), dp(4)); visibility = View.GONE; accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
+    private val confirm = FrameLayout(context).apply { visibility = View.GONE; isClickable = true; isFocusable = true }
+    private val confirmBox = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(16), dp(12), dp(16), dp(12)) }
+    private val confirmTitle = TextView(context).apply { text = "Save your unsaved Custom first?"; textSize = 16f; setTypeface(typeface, Typeface.BOLD) }
+    private val confirmText = TextView(context).apply { text = "There is room for one draft. Save this one before starting another."; textSize = 13f; setPadding(0, dp(6), 0, dp(10)) }
+    private val cancel = button("Keep Custom") { hideConfirm() }
+    private val saveContinue = button("Save and continue") { continueEdit() }
+    private var pendingCopy: Pair<LayoutEntry, Boolean>? = null
+    private var showingAll = false
     private var rendered: QuickOptionsState? = null
+    private var renderedEntries: List<LayoutEntry>? = null
+    private var renderedSelection: String? = null
     private var palette: Palette? = null
+    private var columns = 0
+    private var cardWidth = 124
+    private var cardHeight = 100
+    private var gridCardHeight = 108
+    private var narrowGrid = false
+    private var renderedGeometry: String? = null
+    private var renderedStyles: String? = null
+    private val revealInUse = object : android.view.ViewTreeObserver.OnPreDrawListener {
+        override fun onPreDraw(): Boolean {
+            viewTreeObserver.removeOnPreDrawListener(this)
+            scrollInUse()
+            return true
+        }
+    }
+    private val stripViews = linkedMapOf<String, LayoutCard>()
+    private val gridViews = linkedMapOf<String, LayoutCard>()
+    private val newLayout = button("+\nNew layout") { edit(true) }
+    private val paste = button("Paste code") { pasteCode() }
+    private val tiles = ArrayList<Tile>()
+    private lateinit var size: Tile
+    private val smaller = button("\u2212") { settings.adjustQuickHeight(landscape(), -2); refresh() }
+    private val larger = button("+") { settings.adjustQuickHeight(landscape(), 2); refresh() }
 
-    /** One grid cell: icon over label over a muted state line. */
-    private inner class Tile(val icon: Int?, val glyph: String?, val label: String) {
-        val box = LinearLayout(context).apply { orientation = VERTICAL; gravity = Gravity.CENTER; isClickable = true; isFocusable = true }
-        val iconView = ImageView(context)
+    private fun button(title: String, action: () -> Unit) = TextView(context).apply {
+        text = title; textSize = 14f; gravity = Gravity.CENTER
+        minWidth = dp(48); minHeight = dp(48)
+        isClickable = true; isFocusable = true
+        setOnClickListener { action() }
+    }
+
+    private inner class Tile(icon: Int?, title: String) {
+        val box = FrameLayout(context).apply { isClickable = true; isFocusable = true }
+        val background = GradientDrawable()
+        val iconView = ImageView(context).apply { if (icon != null) setImageResource(icon) }
         val glyphView = TextView(context).apply { textSize = 15f; gravity = Gravity.CENTER; setTypeface(typeface, Typeface.BOLD) }
-        val labelView = TextView(context).apply { textSize = 12f; gravity = Gravity.CENTER; maxLines = 1 }
+        val labelView = TextView(context).apply { text = title; textSize = 12f; gravity = Gravity.CENTER; maxLines = 1 }
         val stateView = TextView(context).apply { textSize = 11f; gravity = Gravity.CENTER; maxLines = 1 }
-        val tileBackground = GradientDrawable()
         var rendered: QuickTileState? = null
         init {
-            box.background = tileBackground
-            if (icon != null) iconView.setImageResource(icon)
-            if (icon != null) box.addView(iconView, LayoutParams(dp(20), dp(20)).apply { bottomMargin = dp(2) })
-            else box.addView(glyphView, LayoutParams(LayoutParams.MATCH_PARENT, dp(20)).apply { bottomMargin = dp(2) })
-            labelView.text = label
-            // A fixed width lets TextView replace a single line without relaying out the grid.
-            box.addView(labelView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-            box.addView(stateView, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+            box.background = background
+            val stack = LinearLayout(context).apply { orientation = VERTICAL; gravity = Gravity.CENTER; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
+            stack.addView(if (icon != null) iconView else glyphView, LayoutParams(dp(20), dp(20)))
+            stack.addView(labelView, LayoutParams(-1, -2))
+            stack.addView(stateView, LayoutParams(-1, -2))
+            box.addView(stack, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
         }
     }
 
-    private val tiles = ArrayList<Tile>()
-    private val size: Tile
-    private val smaller = TextView(context)
-    private val larger = TextView(context)
+    private inner class LayoutCard(var entry: LayoutEntry, val fullName: Boolean) {
+        val box = LinearLayout(context).apply {
+            orientation = VERTICAL; setPadding(dp(6), dp(6), dp(6), dp(4))
+            isClickable = true; isFocusable = true
+        }
+        val bg = GradientDrawable()
+        val preview = FrameLayout(context)
+        val drawing = LayoutThumbnailView(context)
+        val check = TextView(context).apply { text = "\u2713"; textSize = 12f; gravity = Gravity.CENTER; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+        val unsaved = TextView(context).apply { text = "Unsaved"; textSize = 10f; gravity = Gravity.CENTER; setPadding(dp(4), 0, dp(4), 0); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+        val name = TextView(context).apply {
+            textSize = 12f; maxLines = if (fullName) 2 else 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        private var keys: List<KeyboardView.ThumbnailKey>? = null
+        private var tabletSized: Boolean? = null
+        init {
+            box.background = bg
+            preview.addView(drawing, FrameLayout.LayoutParams(-1, -1))
+            preview.addView(check, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.TOP or Gravity.START))
+            preview.addView(unsaved, FrameLayout.LayoutParams(-2, dp(20), Gravity.TOP or Gravity.END))
+            box.addView(preview, LayoutParams(-1, 0, 1f))
+            box.addView(name, LayoutParams(-1, if (fullName) dp(34) else dp(22)))
+            box.setOnClickListener {
+                library.use(entry)
+                if (entry.preset?.split == true) settings.setSplitFor(landscape(), true)
+                refresh()
+            }
+        }
+        fun bind(state: QuickLayoutTileState, p: Palette, radius: Float) {
+            entry = state.entry
+            name.text = entry.name
+            name.setTypeface(null, if (state.bold) Typeface.BOLD else Typeface.NORMAL)
+            name.setTextColor(p.text)
+            box.contentDescription = state.label
+            box.isSelected = state.inUse
+            bg.setColor(p.key); bg.cornerRadius = radius
+            bg.setStroke(dp(state.outlineDp), if (state.inUse) p.accent else if (settings.theme() == ThemeName.HIGH_CONTRAST) p.text else android.graphics.Color.TRANSPARENT)
+            check.visibility = if (state.inUse) View.VISIBLE else View.INVISIBLE
+            check.setTextColor(p.onAccent)
+            check.background = rounded(p.accent, dp(12).toFloat())
+            unsaved.visibility = if (entry.draft) View.VISIBLE else View.GONE
+            unsaved.setTextColor(p.text)
+            unsaved.background = rounded(p.functionKey, dp(10).toFloat())
+            val nextKeys = thumbnails.keys(entry)
+            if (keys !== nextKeys) { keys = nextKeys; drawing.artwork = ThumbnailArtwork(nextKeys) }
+            drawing.palette = p; drawing.invalidate()
+        }
+        fun sizeFor(tablet: Boolean) {
+            if (tabletSized == tablet) return
+            tabletSized = tablet
+            check.text = if (tablet) "\u2713 In use" else "\u2713"
+            check.layoutParams.width = dp(if (tablet) 70 else 24)
+            name.textSize = if (tablet) 14f else 12f
+        }
+    }
 
     init {
-        orientation = VERTICAL
-        isClickable = true
-        // The strip holds just a back button; the tiles below say what this is.
-        closeButton.text = "‹  Back"
-        closeButton.textSize = 15f
-        closeButton.setTypeface(closeButton.typeface, Typeface.BOLD)
-        closeButton.gravity = Gravity.CENTER_VERTICAL
-        closeButton.setPadding(dp(14), 0, dp(14), 0)
-        closeButton.contentDescription = "Back to keyboard"
-        closeButton.setOnClickListener { close() }
-        header.gravity = Gravity.CENTER_VERTICAL
-        header.addView(closeButton, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
-        addView(header, LayoutParams(LayoutParams.MATCH_PARENT, stripHeight()))
-        // Centred vertically in whatever height the keyboard has, instead of leaving a gap at the bottom.
-        val grid = LinearLayout(context).apply { orientation = VERTICAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(6), dp(2), dp(6), dp(6)) }
-        scroll.addView(grid)
-        addView(scroll, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
-        fun row(): LinearLayout = LinearLayout(context).also {
-            grid.addView(it, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        orientation = VERTICAL; isClickable = true
+        back.contentDescription = "Back to keyboard"
+        back.setTypeface(null, Typeface.BOLD)
+        back.textSize = 15f
+        editButton.textSize = 12f; newButton.textSize = 12f; newLayout.textSize = 12f
+        back.setPadding(dp(14), 0, dp(14), 0)
+        trailing.setPadding(dp(8), 0, dp(8), 0)
+        editButton.setCompoundDrawablesWithIntrinsicBounds(0, R.drawable.ic_settings_edit, 0, 0)
+        header.addView(back, LayoutParams(-2, -1))
+        header.addView(heading, LayoutParams(0, -2, 1f))
+        header.addView(trailing, LayoutParams(-2, -1))
+        addView(header, LayoutParams(-1, dp(48)))
+        addView(message, LayoutParams(-1, -2))
+        addView(pages, LayoutParams(-1, 0, 1f))
+        pages.addView(main, FrameLayout.LayoutParams(-1, -1))
+        pages.addView(allScroll, FrameLayout.LayoutParams(-1, -1))
+        stripRow.setPadding(dp(8), 0, dp(8), 0)
+        actions.addView(editButton, LayoutParams(-1, 0, 1f).apply { bottomMargin = dp(4) })
+        actions.addView(newButton, LayoutParams(-1, 0, 1f))
+        stripRow.addView(actions, LayoutParams(dp(58), -1).apply { marginEnd = dp(8) })
+        strip.addView(stripCards)
+        stripRow.addView(strip, LayoutParams(0, -1, 1f))
+        main.addView(stripRow, LayoutParams(-1, dp(100)))
+        tileScroll.addView(tileGrid)
+        main.addView(tileScroll, LayoutParams(-1, 0, 1f).apply { topMargin = dp(8) })
+        allScroll.addView(allGrid)
+        fun row() = LinearLayout(context).also { tileGrid.addView(it, LayoutParams(-1, -2)) }
+        fun tile(row: LinearLayout, title: String, icon: Int?, weight: Float = 1f, action: (() -> Unit)? = null): Tile = Tile(icon, title).also { t ->
+            row.addView(t.box, LayoutParams(0, dp(64), weight).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) })
+            if (action != null) t.box.setOnClickListener { action(); refresh() }
+            tiles += t
         }
-        fun tile(parent: LinearLayout, icon: Int?, glyph: String?, label: String, action: (() -> Unit)?): Tile =
-            Tile(icon, glyph, label).also { t ->
-                t.glyphView.text = glyph
-                parent.addView(t.box, LayoutParams(0, dp(64), 1f).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) })
-                if (action != null) t.box.setOnClickListener { action(); refresh() }
-                tiles += t
-            }
+        tileGrid.setPadding(dp(5), 0, dp(5), dp(4))
         val first = row()
-        tile(first, R.drawable.ic_settings_edit, null, "Rearrange") { rearrange() }
-        tile(first, R.drawable.ic_settings_layout, null, "Split") { val l = landscape(); settings.setSplitFor(l, !settings.split(l)) }
-        tile(first, R.drawable.ic_settings_expand, null, "One hand") { settings.cycleQuickOneHand(landscape()) }
-        size = tile(first, R.drawable.ic_settings_size, null, "Size", null)
-        // Size keeps its − / + as two halves of its state line.
-        size.box.removeView(size.stateView)
-        val steps = LinearLayout(context).apply { gravity = Gravity.CENTER }
-        for ((view, text, delta) in listOf(Triple(smaller, "−", -2), Triple(larger, "+", 2))) {
-            view.text = text
-            view.textSize = 18f
-            view.gravity = Gravity.CENTER
-            view.setOnClickListener { settings.adjustQuickHeight(landscape(), delta); refresh() }
-            steps.addView(view, LayoutParams(dp(36), dp(24)))
-        }
-        size.box.addView(steps)
+        tile(first, "Split", R.drawable.ic_settings_layout) { val l = landscape(); settings.setSplitFor(l, !settings.split(l)) }
+        tile(first, "One hand", R.drawable.ic_settings_expand) { settings.cycleQuickOneHand(landscape()) }
+        size = tile(first, "Size", R.drawable.ic_settings_size, 2f)
+        size.box.isClickable = false; size.box.isFocusable = false
+        size.box.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        size.box.addView(smaller, FrameLayout.LayoutParams(dp(48), -1, Gravity.START))
+        size.box.addView(larger, FrameLayout.LayoutParams(dp(48), -1, Gravity.END))
         val second = row()
-        tile(second, R.drawable.ic_settings_look, null, "Theme") { settings.cycleQuickTheme() }
-        tile(second, null, "", "Language") { language() }
-        tile(second, R.drawable.ic_settings_typing, null, "Swipe") { settings.set(Prefs.SWIPE_TYPING, !settings.bool(Prefs.SWIPE_TYPING)) }
-        tile(second, null, "⚙", "Settings") { allSettings() }
+        tile(second, "Theme", R.drawable.ic_settings_look) { settings.cycleQuickTheme() }
+        tile(second, "Language", null) { language() }
+        tile(second, "Swipe", R.drawable.ic_settings_typing) { settings.set(Prefs.SWIPE_TYPING, !settings.bool(Prefs.SWIPE_TYPING)) }
+        tile(second, "Settings", R.drawable.ic_settings_tune) { allSettings() }
+        confirmBox.addView(confirmTitle); confirmBox.addView(confirmText)
+        val buttons = LinearLayout(context)
+        buttons.addView(cancel, LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
+        buttons.addView(saveContinue, LayoutParams(0, dp(48), 1f))
+        confirmBox.addView(buttons)
+        val confirmScroll = ScrollView(context).apply { addView(confirmBox) }
+        confirm.addView(confirmScroll, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER).apply { setMargins(dp(16), dp(4), dp(16), dp(4)) })
+        pages.addView(confirm, FrameLayout.LayoutParams(-1, -1))
         refresh()
     }
 
-    /** Called after measuring the keyboard, including while this attached panel is invisible. */
+    private fun rounded(color: Int, radius: Float) = GradientDrawable().apply { setColor(color); cornerRadius = radius }
+
     fun updateStripHeight() {
-        val height = stripHeight()
-        if (header.layoutParams.height != height) {
-            header.layoutParams = header.layoutParams.apply { this.height = height }
+        val h = max(dp(if (measuredWidth / d >= 600) 56 else 48), stripHeight())
+        if (header.layoutParams.height != h) header.layoutParams = header.layoutParams.apply { height = h }
+    }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val w = View.MeasureSpec.getSize(widthMeasureSpec) / d
+        val h = View.MeasureSpec.getSize(heightMeasureSpec) / d
+        val tablet = w >= 600
+        val short = h < 250
+        val rowHeight = if (tablet && !short) 138 else 100
+        val nextWidth = if (tablet) 188 else if (w < 340) 108 else 124
+        val nextHeight = if (short) 80 else rowHeight
+        val nextColumns = if (tablet) 4 else if (w < 340) 2 else 3
+        val nextGridHeight = if (tablet) 162 else 112
+        val tileHeight = if (tablet) 72 else 60
+        header.layoutParams.height = max(dp(if (tablet) 56 else 48), stripHeight())
+        stripViews.values.forEach { it.sizeFor(tablet) }
+        gridViews.values.forEach { it.sizeFor(tablet) }
+        if (stripRow.layoutParams.height != dp(rowHeight)) stripRow.layoutParams.height = dp(rowHeight)
+        actions.layoutParams.width = dp(if (tablet) 96 else 58)
+        val gap = if (tablet && !short) 24 else 8
+        (tileScroll.layoutParams as LayoutParams).topMargin = dp(gap)
+        val narrow = w < 260
+        if (narrowGrid != narrow) {
+            narrowGrid = narrow
+            tileGrid.removeAllViews()
+            tiles.forEach { (it.box.parent as? android.view.ViewGroup)?.removeView(it.box) }
+            val rows = if (narrow) listOf(listOf(0, 1), listOf(2), listOf(3, 4), listOf(5, 6))
+                else listOf(listOf(0, 1, 2), listOf(3, 4, 5, 6))
+            rows.forEach { indices ->
+                val row = LinearLayout(context)
+                tileGrid.addView(row, LayoutParams(-1, -2))
+                indices.forEach { index -> row.addView(tiles[index].box, LayoutParams(0, dp(tileHeight), if (index == 2) 2f else 1f).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) }) }
+            }
         }
+        tiles.forEach { if (it.box.layoutParams.height != dp(tileHeight)) it.box.layoutParams.height = dp(tileHeight) }
+        val gridHeight = (tileHeight + 6) * if (narrow) 4 else 2
+        val extra = max(0, h.toInt() - (header.layoutParams.height / d).toInt() - rowHeight - gap - gridHeight - 10)
+        main.setPadding(0, dp(extra / 2), 0, 0)
+        if (cardWidth != nextWidth || cardHeight != nextHeight) {
+            cardWidth = nextWidth; cardHeight = nextHeight
+            stripViews.values.forEach { it.box.layoutParams = stripParams() }
+        }
+        if (columns != nextColumns || gridCardHeight != nextGridHeight) {
+            columns = nextColumns; gridCardHeight = nextGridHeight
+            rebuildGrid()
+        }
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+    }
+
+    private fun stripParams() = LayoutParams(dp(cardWidth), dp(cardHeight)).apply { marginEnd = dp(8); gravity = Gravity.CENTER_VERTICAL }
+    private fun rebuildGrid() {
+        if (columns == 0) return
+        allGrid.removeAllViews()
+        var row: LinearLayout? = null
+        val views = library.entries().mapNotNull { gridViews[it.key]?.box } + newLayout
+        views.forEachIndexed { index, view ->
+            (view.parent as? android.view.ViewGroup)?.removeView(view)
+            if (index % columns == 0) row = LinearLayout(context).also { allGrid.addView(it, LayoutParams(-1, -2)) }
+            row!!.addView(view, LayoutParams(0, dp(gridCardHeight), 1f).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) })
+        }
+        repeat((columns - views.size % columns) % columns) { row?.addView(View(context), LayoutParams(0, 1, 1f)) }
+        (paste.parent as? android.view.ViewGroup)?.removeView(paste)
+        allGrid.addView(paste, LayoutParams(-1, dp(48)))
     }
 
     fun refresh(resetScroll: Boolean = false) {
-        if (resetScroll) scroll.scrollTo(0, 0)
         updateStripHeight()
-        val l = landscape()
-        val next = QuickOptionsState(settings.theme(),
-            resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK,
-            settings.int(Prefs.CORNER_RADIUS), settings.split(l), settings.quickOneHand(l),
-            settings.int(Prefs.height(l)), settings.currentLanguage(), settings.languages().size > 1,
-            settings.bool(Prefs.SWIPE_TYPING))
-        val previous = rendered
-        if (next == previous) return
-        val paletteChanged = previous == null || previous.theme != next.theme || previous.nightMode != next.nightMode
-        val radiusChanged = previous == null || previous.radius != next.radius
-        if (paletteChanged) {
-            palette = Palette.of(context, next.theme)
-            setBackgroundColor(palette!!.background)
-            closeButton.setTextColor(palette!!.accent)
+        if (resetScroll) {
+            showAll(false, animate = false); hideConfirm(); message.visibility = View.GONE
+            tileScroll.scrollTo(0, 0)
+            // Done can have just added a draft. Reveal it after its first measure, before drawing.
+            viewTreeObserver.removeOnPreDrawListener(revealInUse)
+            viewTreeObserver.addOnPreDrawListener(revealInUse)
         }
-        val p = palette!!
+        val l = landscape()
+        val next = QuickOptionsState(settings.theme(), resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK,
+            settings.int(Prefs.CORNER_RADIUS), settings.split(l), settings.quickOneHand(l), settings.int(Prefs.height(l)),
+            settings.currentLanguage(), settings.languages().size > 1, settings.bool(Prefs.SWIPE_TYPING))
+        val entries = library.entries()
+        val geometry = "${settings.profile(l)}|${settings.int(Prefs.CURVE)}|${settings.int(Prefs.KEY_GAP)}|${settings.bool(Prefs.SAME_ORIENTATIONS)}|${resources.displayMetrics}"
+        if (rendered == next && renderedEntries == entries && renderedSelection == library.inUse && renderedGeometry == geometry) return
+        val p = Palette.of(context, next.theme); palette = p
+        val ink = p.smallAccent
+        setBackgroundColor(p.background)
+        for (b in listOf(back, trailing, paste)) b.setTextColor(ink)
+        editButton.setTextColor(p.text)
+        editButton.compoundDrawables.filterNotNull().forEach { it.setTint(p.text) }
+        for (b in listOf(editButton, newButton, cancel)) b.background = rounded(p.key, next.radius * d)
+        heading.setTextColor(p.text); message.setTextColor(p.text)
+        confirm.setBackgroundColor(0x66000000)
+        confirmBox.background = rounded(p.key, next.radius * d)
+        confirmTitle.setTextColor(p.text); confirmText.setTextColor(p.hint); cancel.setTextColor(p.text)
+        saveContinue.setTextColor(p.onAccent); saveContinue.background = rounded(p.accent, next.radius * d)
+        newLayout.setTextColor(p.text)
+        newLayout.background = GradientDrawable().apply { setColor(p.background); cornerRadius = next.radius * d; setStroke(dp(2), p.hint, dp(5).toFloat(), dp(3).toFloat()) }
+        if (renderedEntries != entries) {
+            val keys = entries.map { it.key }.toSet()
+            for (key in stripViews.keys.toList()) if (key !in keys) { stripCards.removeView(stripViews.remove(key)!!.box); gridViews.remove(key) }
+            for (entry in entries) {
+                if (entry.key !in stripViews) {
+                    val card = LayoutCard(entry, false); stripViews[entry.key] = card; stripCards.addView(card.box, stripParams())
+                    gridViews[entry.key] = LayoutCard(entry, true)
+                }
+            }
+            stripCards.removeAllViews()
+            entries.forEach { stripCards.addView(stripViews.getValue(it.key).box, stripParams()) }
+            rebuildGrid()
+        }
+        library.quickTiles().forEach { state ->
+            stripViews[state.entry.key]?.bind(state, p, next.radius * d)
+            gridViews[state.entry.key]?.bind(state, p, next.radius * d)
+        }
+        val current = entries.firstOrNull { it.key == library.inUse } ?: entries.first()
+        newButton.setTextColor(if (current.draft) ink else p.text)
+        editButton.contentDescription = "Edit ${current.name}"
+        newButton.text = if (current.draft) "Save" else "New"
+        val style = "${current.draft}|${p.accent}"
+        if (style != renderedStyles) {
+            newButton.setCompoundDrawablesWithIntrinsicBounds(0, if (current.draft) R.drawable.ic_settings_save else R.drawable.ic_settings_add, 0, 0)
+            newButton.compoundDrawables.filterNotNull().forEach { it.setTint(if (current.draft) ink else p.text) }
+            renderedStyles = style
+        }
+        newButton.contentDescription = if (current.draft) "Save Custom as ${library.nextName("Custom")}" else "New custom layout"
         val states = next.tiles()
         for ((index, t) in tiles.withIndex()) {
-            if (paletteChanged) t.tileBackground.setColor(p.key)
-            if (radiusChanged) t.tileBackground.cornerRadius = next.radius * d
             val value = states[index]
-            val old = t.rendered
-            if (value != old) {
-                if (value.label != old?.label) t.labelView.text = value.label
-                if (value.state != old?.state) t.stateView.text = value.state
-                if (value.glyph != old?.glyph) t.glyphView.text = value.glyph
-                if (value.description != old?.description) t.box.contentDescription = value.description
-                if (value.enabled != old?.enabled) {
-                    t.box.isEnabled = value.enabled
-                    t.box.alpha = if (value.enabled) 1f else 0.45f
-                }
+            if (t.rendered != value) {
+                t.labelView.text = value.label; t.stateView.text = value.state; t.glyphView.text = value.glyph
+                t.box.contentDescription = value.description ?: value.label
+                t.box.isEnabled = value.enabled; t.box.alpha = if (value.enabled) 1f else .45f
                 t.rendered = value
             }
-            if (paletteChanged || value.on != old?.on) {
-                val ink = if (value.on) p.accent else p.text
-                if (t.icon != null) t.iconView.setColorFilter(ink)
-                t.glyphView.setTextColor(ink)
-                t.labelView.setTextColor(ink)
-                t.stateView.setTextColor(if (value.on) p.accent else p.hint)
-            }
+            t.background.setColor(p.key); t.background.cornerRadius = next.radius * d
+            if (next.theme == ThemeName.HIGH_CONTRAST) t.background.setStroke(dp(1), p.text) else t.background.setStroke(0, p.key)
+            val color = if (value.on) ink else p.text
+            t.iconView.setColorFilter(color); t.glyphView.setTextColor(color); t.labelView.setTextColor(color)
+            t.stateView.setTextColor(if (value.on) ink else p.hint)
         }
-        if (previous == null || previous.height != next.height) {
-            smaller.contentDescription = "Size, decrease, ${next.height} percent"
-            larger.contentDescription = "Size, increase, ${next.height} percent"
+        smaller.contentDescription = "Size, decrease, ${next.height} percent"
+        larger.contentDescription = "Size, increase, ${next.height} percent"
+        smaller.setTextColor(p.text); larger.setTextColor(p.text)
+        smaller.isEnabled = next.height > Prefs.height(l).min; larger.isEnabled = next.height < Prefs.height(l).max
+        rendered = next; renderedEntries = entries; renderedSelection = library.inUse; renderedGeometry = geometry
+    }
+
+    private fun scrollInUse() {
+        stripViews[library.inUse]?.box?.let { strip.requestChildRectangleOnScreen(it, android.graphics.Rect(0, 0, it.width + dp(12), it.height), true) }
+    }
+
+    private fun showAll(all: Boolean, animate: Boolean = true) {
+        if (showingAll == all) return
+        showingAll = all
+        val incoming = if (all) allScroll else main
+        val outgoing = if (all) main else allScroll
+        outgoing.animate().cancel(); incoming.animate().cancel()
+        outgoing.visibility = View.INVISIBLE; outgoing.alpha = 1f; outgoing.translationX = 0f
+        incoming.visibility = View.VISIBLE
+        heading.text = if (all) "Layouts" else ""
+        trailing.text = if (all) "Edit" else "All layouts \u203a"
+        back.contentDescription = if (all) "Back to Quick options" else "Back to keyboard"
+        if (animate && android.animation.ValueAnimator.areAnimatorsEnabled()) {
+            incoming.alpha = 0f; incoming.translationX = if (reducedMotion()) 0f else dp(if (all) 16 else -16).toFloat()
+            incoming.animate().alpha(1f).translationX(0f).setDuration(if (reducedMotion()) 100 else if (all) 200 else 160)
+                .setInterpolator(android.view.animation.PathInterpolator(.2f, 0f, 0f, 1f)).start()
         }
-        fun step(view: TextView, enabled: Boolean) {
-            if (paletteChanged) view.setTextColor(p.text)
-            if (previous == null || view.isEnabled != enabled) {
-                view.isEnabled = enabled
-                view.alpha = if (enabled) 1f else 0.35f
-            }
+        if (animate) back.sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_VIEW_FOCUSED)
+    }
+
+    private fun reducedMotion(): Boolean = android.provider.Settings.Global.getFloat(context.contentResolver,
+        android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f) < 1f
+
+    fun animateOpen() {
+        animate().cancel(); alpha = 1f; translationY = 0f
+        if (!android.animation.ValueAnimator.areAnimatorsEnabled()) return
+        alpha = 0f; translationY = if (reducedMotion()) 0f else dp(8).toFloat()
+        animate().alpha(1f).translationY(0f).setStartDelay(if (reducedMotion()) 0 else 40).setDuration(if (reducedMotion()) 100 else 160)
+            .setInterpolator(android.view.animation.PathInterpolator(.2f, 0f, 0f, 1f)).start()
+    }
+
+    private fun edit(newCopy: Boolean) {
+        val current = library.entries().firstOrNull { it.key == library.inUse } ?: return
+        if ((newCopy || !current.custom) && library.requestNew() == NewLayoutFlow.SAVE_FIRST) {
+            pendingCopy = current to newCopy
+            confirm.visibility = View.VISIBLE
+            header.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            main.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            allScroll.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            cancel.requestFocus(); confirmTitle.announceForAccessibility(confirmTitle.text)
+        } else openEditor(current, newCopy)
+    }
+
+    private fun hideConfirm() {
+        confirm.visibility = View.GONE; pendingCopy = null
+        header.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+        main.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+        allScroll.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+    }
+
+    private fun continueEdit() {
+        val (source, copy) = pendingCopy ?: return
+        library.saveDraft(library.nextName("Custom"))
+        hideConfirm()
+        openEditor(source, copy)
+    }
+
+    private fun openEditor(source: LayoutEntry, copy: Boolean) {
+        val entry = library.quickEdit(source, copy)
+        val title = if (!source.custom) "${source.name} is a preset; editing a copy named Custom"
+            else if (copy) "New layout, copied from ${source.name}" else "Editing ${source.name}"
+        rearrange(entry.key, title)
+    }
+
+    private fun pasteCode() {
+        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+        val text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.text
+        val result = library.importCode(text?.takeIf { it.length <= 128 * 1024 }?.toString()
+            ?: if (text == null) null else "invalid")
+        message.text = when (result) {
+            ClipboardLayoutResult.Empty -> "No layout code on the clipboard"
+            ClipboardLayoutResult.Invalid -> "This code isn't a TailorKeys layout"
+            is ClipboardLayoutResult.Added -> "Added ${result.entry.name}"
         }
-        step(smaller, next.height > Prefs.height(l).min)
-        step(larger, next.height < Prefs.height(l).max)
-        rendered = next
+        message.visibility = View.VISIBLE
+        refresh()
     }
 }
