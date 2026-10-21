@@ -7,7 +7,7 @@ internal data class SpeedSample(val elapsed: Long, val wpm: Double, val mistake:
 internal data class TypingMetrics(val wpm: Double, val accuracy: Double, val mistakes: Int, val elapsed: Long)
 
 /** Counts edits to the committed text, including replacements and multi-character IME commits. */
-internal class TypingSession(val mode: TypingMode, val sentence: String = "") {
+internal class TypingSession(val mode: TypingMode, val sentence: String = "", val keyboard: String = app.tailorkeys.TAILORKEYS_IME) {
     var text = ""; private set
     var inserted = 0; private set
     var corrections = 0; private set
@@ -28,8 +28,11 @@ internal class TypingSession(val mode: TypingMode, val sentence: String = "") {
         val end = finishedAt ?: return null
         if (mode != TypingMode.TEST || !complete || recorded || metrics(end).elapsed <= 0) return null
         recorded = true
-        return metrics(end).let { TypingResult(it.wpm, it.accuracy, at) }
+        return metrics(end).let { TypingResult(it.wpm, it.accuracy, at, keyboard) }
     }
+
+    /** Never let an unfinished sentence span two keyboards. The target stays the same. */
+    fun forKeyboard(id: String): TypingSession = if (keyboard == id) this else TypingSession(mode, sentence, id)
 
     fun startTyping(now: Long) { if (startedAt == null) startedAt = now }
 

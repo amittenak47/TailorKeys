@@ -658,3 +658,17 @@ do {
     defaults.set("dark", forKey: Prefs.theme)
     check(settings.theme == .dark && settings.themeID == "DARK", "legacy built-in theme migration failed")
 }
+do {
+    let legacy = Data("{\"wpm\":40,\"accuracy\":0.9,\"at\":1}".utf8)
+    let old = try! JSONDecoder().decode(TypingResult.self, from: legacy)
+    check(old.keyboard == "tailorkeys", "legacy typing result not assigned to TailorKeys")
+    let rows = KeyboardAverage.aggregate([old, TypingResult(wpm: 60, accuracy: 1, at: 2), TypingResult(wpm: 30, accuracy: 0.8, at: 3, keyboard: "other")])
+    check(rows.count == 2 && rows[0].keyboard == "tailorkeys" && rows[0].wpm == 50 && rows[0].tests == 2 && rows[0].accuracy == 0.95, "per-keyboard aggregation mixed results")
+    check(rows[1].keyboard == "other" && rows[1].wpm == 30 && rows[1].tests == 1, "Other results missing")
+    var switched = TypingSession(mode: .test, sentence: "hello")
+    switched.update("x", at: 1); switched.update("he", at: 2)
+    switched = switched.forKeyboard("other")
+    check(switched.text.isEmpty && switched.startedAt == nil && switched.slippedPositions.isEmpty && switched.result(at: Date()) == nil, "keyboard switch retained partial sentence")
+    switched.update("h", at: 6); switched.update("hello", at: 10)
+    check(switched.result(at: Date())?.keyboard == "other" && switched.wpm(at: 10) == 15, "switched test retained old timing or keyboard")
+}

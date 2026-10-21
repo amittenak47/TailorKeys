@@ -267,4 +267,33 @@ class LayoutLibraryTest {
         assertTrue(store.results("draft").isEmpty())
         assertEquals(14.5, store.results(saved.key).map { it.wpm }.average(), 0.0)
     }
+    @Test fun resultsMigrateAndAggregateByKeyboardAcrossLayouts() {
+        val f = Fixture(); val store = f.store(); store.migrate()
+        f.values[LayoutKeys.RESULTS] = """{"preset:STANDARD":[{"wpm":40,"accuracy":0.9,"at":1}]}"""
+        assertEquals(TAILORKEYS_IME, store.results("preset:STANDARD").single().keyboard)
+        store.record("preset:SPLIT", TypingResult(60.0, 1.0, 2, "app.tailorkeys/app.tailorkeys.TailorKeysService"))
+        store.record("preset:STANDARD", TypingResult(30.0, .8, 3, "gboard/.Ime"))
+        store.record("preset:STANDARD", TypingResult(50.0, 1.0, 4, "gboard/.Ime"))
+        assertEquals(listOf(KeyboardAverage(TAILORKEYS_IME, 50.0, .95, 2), KeyboardAverage("gboard/.Ime", 40.0, .9, 2)), store.keyboardAverages())
+        assertTrue(f.values.getValue(LayoutKeys.RESULTS).contains("keyboard"))
+        repeat(25) { store.record("preset:STANDARD", TypingResult(it.toDouble(), 1.0, 5L + it, "gboard/.Ime")) }
+        assertEquals(1, store.results("preset:STANDARD").count { isTailorKeysIme(it.keyboard) })
+        assertEquals(20, store.results("preset:STANDARD").count { it.keyboard == "gboard/.Ime" })
+    }
+    @Test fun midSentenceKeyboardSwitchDiscardsPartialTimingAndMistakes() {
+        var session = TypingSession(TypingMode.TEST, "hello")
+        session.update("x", 1000); session.update("he", 2000)
+        session = session.forKeyboard("gboard/.Ime")
+        assertEquals("", session.text); assertNull(session.startedAt)
+        assertNull(session.takeResult(5000)); assertTrue(session.slips.isEmpty())
+        assertSame(session, session.forKeyboard("gboard/.Ime"))
+        session.update("h", 6000); session.update("hello", 10000)
+        val result = requireNotNull(session.takeResult(11000))
+        assertEquals("gboard/.Ime", result.keyboard)
+        assertEquals(15.0, result.wpm, 0.0)
+        assertNull(session.takeResult(12000))
+        session = session.forKeyboard(TAILORKEYS_IME)
+        assertEquals("", session.text)
+    }
+
 }

@@ -35,7 +35,14 @@ internal data class LayoutEntry(val key: String, val name: String, val json: Str
     } ?: split
 }
 
-internal data class TypingResult(val wpm: Double, val accuracy: Double, val at: Long)
+internal const val TAILORKEYS_IME = "app.tailorkeys/.TailorKeysService"
+internal fun isTailorKeysIme(id: String) = id.substringBefore('/') == "app.tailorkeys"
+internal fun keyboardGroup(id: String) = if (isTailorKeysIme(id)) TAILORKEYS_IME else id
+internal data class TypingResult(val wpm: Double, val accuracy: Double, val at: Long, val keyboard: String = TAILORKEYS_IME)
+internal data class KeyboardAverage(val keyboard: String, val wpm: Double, val accuracy: Double, val tests: Int)
+internal fun Iterable<TypingResult>.keyboardAverages(): List<KeyboardAverage> = groupBy { keyboardGroup(it.keyboard) }.map { (id, results) ->
+    KeyboardAverage(id, results.map { it.wpm }.average(), results.map { it.accuracy }.average(), results.size)
+}.sortedWith(compareBy({ !isTailorKeysIme(it.keyboard) }, { it.keyboard }))
 internal enum class NewLayoutFlow { EDIT, SAVE_FIRST }
 
 internal class LayoutLibrary(
@@ -256,15 +263,17 @@ internal class LayoutLibrary(
     fun results(key: String): List<TypingResult> = runCatching {
         val array = resultsObject().optJSONArray(key) ?: return emptyList()
         (0 until array.length()).map { i -> array.getJSONObject(i).let {
-            TypingResult(it.getDouble("wpm"), it.getDouble("accuracy"), it.getLong("at"))
-        } }.filter { it.wpm.isFinite() && it.wpm >= 0 && it.accuracy in 0.0..1.0 }.takeLast(20)
+            TypingResult(it.getDouble("wpm"), it.getDouble("accuracy"), it.getLong("at"), it.optString("keyboard", TAILORKEYS_IME).ifBlank { TAILORKEYS_IME })
+        } }.filter { it.wpm.isFinite() && it.wpm >= 0 && it.accuracy in 0.0..1.0 }.groupBy { keyboardGroup(it.keyboard) }.values.flatMap { it.takeLast(20) }.sortedBy { it.at }
     }.getOrDefault(emptyList())
+
+    fun keyboardAverages(): List<KeyboardAverage> = resultsObject().keys().asSequence().flatMap { results(it).asSequence() }.asIterable().keyboardAverages()
 
     fun record(key: String, result: TypingResult) {
         require(result.wpm.isFinite() && result.wpm >= 0 && result.accuracy in 0.0..1.0)
         val array = JSONArray()
-        (results(key) + result).takeLast(20).forEach {
-            array.put(JSONObject().put("wpm", it.wpm).put("accuracy", it.accuracy).put("at", it.at))
+        (results(key) + result).groupBy { keyboardGroup(it.keyboard) }.values.flatMap { it.takeLast(20) }.sortedBy { it.at }.forEach {
+            array.put(JSONObject().put("wpm", it.wpm).put("accuracy", it.accuracy).put("at", it.at).put("keyboard", it.keyboard))
         }
         prefs.write(mapOf(LayoutKeys.RESULTS to resultsObject().put(key, array).toString()))
     }

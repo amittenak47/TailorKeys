@@ -1,6 +1,13 @@
 package app.tailorkeys.settings
 
-import app.tailorkeys.LayoutEntry
+import app.tailorkeys.*
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
+import android.view.ViewTreeObserver
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 import android.provider.Settings
 import android.os.SystemClock
@@ -62,28 +69,50 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
     var mode by remember { mutableStateOf(TypingMode.FREE) }
     var sentenceIndex by remember { mutableIntStateOf(SentenceBank.sentences.indices.random()) }
     var generation by remember { mutableIntStateOf(0) }
-    val session = remember(mode, generation) { TypingSession(mode, SentenceBank.sentences[sentenceIndex]) }
+    fun currentIme() = Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD) ?: "unknown"
+    var keyboardId by remember { mutableStateOf(currentIme()) }
+    val tailorkeys = isTailorKeysIme(keyboardId)
+    var comparing by remember { mutableStateOf(false) }
+    var session by remember(mode, generation) { mutableStateOf(TypingSession(mode, SentenceBank.sentences[sentenceIndex], keyboardId)) }
     var fieldValue by remember(session) { mutableStateOf(TextFieldValue()) }
     var tick by remember(session) { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     var finished by remember(session) { mutableStateOf(false) }
     var applied by remember { mutableStateOf(entry.key == state.library.inUse) }
-    val average = remember(entry.key, generation, mode) { state.library.results(entry.key).map { it.wpm }.average().takeIf { it.isFinite() } }
+    fun keyboardLabel(id: String): String = if (isTailorKeysIme(id)) "TailorKeys" else
+        context.getSystemService(InputMethodManager::class.java).inputMethodList.firstOrNull { it.id == id }?.loadLabel(context.packageManager)?.toString() ?: id.substringBefore('/').substringAfterLast('.').ifBlank { "Keyboard" }
+    val label = keyboardLabel(keyboardId)
+    val average = remember(entry.key, generation, mode, keyboardId) { state.library.results(entry.key).filter { keyboardGroup(it.keyboard) == keyboardGroup(keyboardId) }.map { it.wpm }.average().takeIf { it.isFinite() } }
     val words by produceState<Set<String>>(emptySet(), state.settings.currentLanguage()) {
         value = withContext(Dispatchers.IO) {
             DictionaryWords.read({ context.assets.open(it) }, state.settings.currentLanguage(), unique = true).toHashSet()
         }
     }
-    var tailorkeys by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            tailorkeys = Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
-                ?.substringBefore('/') == context.packageName
-            delay(750)
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val refresh by rememberUpdatedState({ val id = currentIme(); session = session.forKeyboard(id); keyboardId = id })
+    DisposableEffect(view, lifecycle) {
+        val window = ViewTreeObserver.OnWindowFocusChangeListener { refresh() }
+        val focusChanged = ViewTreeObserver.OnGlobalFocusChangeListener { _, _ -> refresh() }
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) { override fun onChange(selfChange: Boolean) { refresh() } }
+        val events = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) refresh() }
+        view.viewTreeObserver.addOnWindowFocusChangeListener(window)
+        view.viewTreeObserver.addOnGlobalFocusChangeListener(focusChanged)
+        context.contentResolver.registerContentObserver(Settings.Secure.getUriFor(Settings.Secure.DEFAULT_INPUT_METHOD), false, observer)
+        lifecycle.addObserver(events)
+        onDispose {
+            if (view.viewTreeObserver.isAlive) {
+                view.viewTreeObserver.removeOnWindowFocusChangeListener(window)
+                view.viewTreeObserver.removeOnGlobalFocusChangeListener(focusChanged)
+            }
+            context.contentResolver.unregisterContentObserver(observer); lifecycle.removeObserver(events)
         }
     }
-    LaunchedEffect(session) {
+    DisposableEffect(tailorkeys, entry.key) {
+        if (tailorkeys) state.library.beginTrial(entry) else state.library.restoreTrial()
+        onDispose { state.library.restoreTrial() }
+    }
+    LaunchedEffect(session, comparing) {
         delay(if (reduced) 120 else 360)
-        if (!session.complete) {
+        if (!session.complete && !comparing) {
             focus.requestFocus()
             keyboard?.show()
         }
@@ -106,19 +135,19 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
         .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)).imePadding()) {
         Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onBack, Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = "Back to layouts" }) { Text("←", fontSize = 24.sp) }
-            Column { Text("Typing test", color = colors.onSurface, style = MaterialTheme.typography.titleLarge); Text(entry.name, color = colors.onSurfaceVariant, style = MaterialTheme.typography.labelMedium) }
+            Column(Modifier.weight(1f)) { Text("Typing test", color = colors.onSurface, style = MaterialTheme.typography.titleLarge); Text(if (tailorkeys) "TailorKeys · ${entry.name}" else "Typing with $label", color = colors.onSurfaceVariant, style = MaterialTheme.typography.labelMedium) }
+            TextButton({ context.getSystemService(InputMethodManager::class.java).showInputMethodPicker() }) { Text("Switch keyboard") }
         }
         Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp), contentAlignment = Alignment.Center) {
-            Surface(Modifier.widthIn(max = 600.dp).fillMaxWidth().layoutMorph(entry.key),
+            Surface(Modifier.widthIn(max = 600.dp).fillMaxWidth().then(if (tailorkeys) Modifier.layoutMorph(entry.key) else Modifier),
                 shape = RoundedCornerShape(28.dp), color = colors.surfaceContainerHigh, shadowElevation = 8.dp) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    if (!tailorkeys) Surface(shape = RoundedCornerShape(16.dp), color = colors.secondaryContainer) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text("TailorKeys isn’t the current keyboard.", style = MaterialTheme.typography.bodyMedium)
-                            TextButton({ context.getSystemService(InputMethodManager::class.java).showInputMethodPicker() }) { Text("Switch keyboard") }
-                        }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton({ comparing = !comparing; if (comparing) keyboard?.hide() }) { Text(if (comparing) "Back to test" else "Compare") }
                     }
-                    if (finished) {
+                    if (comparing) {
+                        KeyboardComparison(state.library.keyboardAverages(), ::keyboardLabel)
+                    } else if (finished) {
                         Text("✓ Test complete", color = Color(0xFF8ED5BE), fontWeight = FontWeight.Medium,
                             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
                         Row(verticalAlignment = Alignment.Bottom) {
@@ -144,9 +173,10 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
                                 }.toAnnotatedString())
                             }
                         }
+                        KeyboardComparison(state.library.keyboardAverages(), ::keyboardLabel)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(::restart, Modifier.weight(1f)) { Text("New sentence") }
-                            FilledTonalButton({ state.useLayout(entry); applied = true }, Modifier.weight(1f), enabled = !applied) { Text(if (applied) "✓ In use" else "✓ Use layout") }
+                            FilledTonalButton({ state.useLayout(entry); applied = true }, Modifier.weight(1f), enabled = tailorkeys && !applied) { Text(if (applied) "✓ In use" else "✓ Use layout") }
                         }
                         TextButton(onBack, Modifier.align(Alignment.CenterHorizontally)) { Text("← Back to layouts") }
                     } else {
@@ -178,6 +208,8 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
                             if (mode == TypingMode.FREE) Text("Type anything", style = MaterialTheme.typography.labelMedium)
                             NoPersonalizedLearning {
                                 BasicTextField(fieldValue, { next ->
+                                    val active = currentIme()
+                                    if (active != keyboardId) { session = session.forKeyboard(active); keyboardId = active; return@BasicTextField }
                                     fieldValue = next
                                     tick = SystemClock.elapsedRealtime()
                                     if (next.text.isNotEmpty()) session.startTyping(tick)
@@ -214,19 +246,50 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             TextButton(::restart) { Text(if (mode == TypingMode.FREE) "↻ Clear" else "↻ New sentence") }
                             Spacer(Modifier.weight(1f))
-                            Text(if (mode == TypingMode.FREE) "Text stays on this device" else "Type on the keys below", style = MaterialTheme.typography.labelMedium)
+                            Text(if (mode == TypingMode.FREE) "Text stays on this device" else if (tailorkeys) "Type on the keys below" else "Results save under $label", style = MaterialTheme.typography.labelMedium)
                         }
                         if (mode == TypingMode.FREE) FilledTonalButton({
                             if (!applied) { state.useLayout(entry); applied = true }
-                        }, Modifier.align(Alignment.End), enabled = !applied) { Text(if (applied) "✓ In use" else "Use layout") }
+                        }, Modifier.align(Alignment.End), enabled = tailorkeys && !applied) { Text(if (applied) "✓ In use" else "Use layout") }
                     }
                 }
             }
         }
         // Hand the moving preview over to the real system IME when focus arrives.
-        if (!imeVisible && !finished) AndroidView(factory = { KeyboardView(context, state.settings).apply { previewSplit = entry.split; grid = entry.grid() } },
+        if (tailorkeys && !imeVisible && !finished && !comparing) AndroidView(factory = { KeyboardView(context, state.settings).apply { previewSplit = entry.split; grid = entry.grid() } },
             modifier = Modifier.fillMaxWidth().layoutMorph("keyboard-preview").wrapContentHeight(unbounded = true)
                 .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)))
+        if (!tailorkeys && !imeVisible) Surface(Modifier.fillMaxWidth().height(160.dp), color = colors.surfaceContainer) {
+            Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                Text("$label keyboard area", fontWeight = FontWeight.Medium)
+                Text("Drawn by the system", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun KeyboardComparison(averages: List<KeyboardAverage>, label: (String) -> String) {
+    val colors = MaterialTheme.colorScheme
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Compare keyboards", style = MaterialTheme.typography.titleMedium)
+        Text("Saved Test sentence results", style = MaterialTheme.typography.labelSmall)
+        if (averages.isEmpty()) Text("Finish a test sentence to compare keyboards.")
+        Row { Text("Keyboard", Modifier.weight(1.4f)); Text("Avg wpm", Modifier.weight(1f)); Text("Accuracy", Modifier.weight(1f)); Text("Tests", Modifier.weight(.6f)) }
+        averages.forEach { row ->
+            Surface(color = if (isTailorKeysIme(row.keyboard)) colors.secondaryContainer else colors.surfaceContainer, shape = RoundedCornerShape(12.dp)) {
+                Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(label(row.keyboard), Modifier.weight(1.4f), fontWeight = if (isTailorKeysIme(row.keyboard)) FontWeight.Bold else FontWeight.Normal)
+                    Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text("${row.wpm.roundToInt()}")
+                        LinearProgressIndicator(progress = { (row.wpm / (averages.maxOfOrNull { it.wpm } ?: 1.0).coerceAtLeast(1.0)).toFloat() },
+                            modifier = Modifier.fillMaxWidth(), drawStopIndicator = {})
+                    }
+                    Text("${(row.accuracy * 100).roundToInt()}%", Modifier.weight(1f))
+                    Text("${row.tests}", Modifier.weight(.6f))
+                }
+            }
+        }
     }
 }
 

@@ -37,7 +37,32 @@ struct TypingResult: Codable {
     let wpm: Double
     let accuracy: Double
     let at: Double // Epoch milliseconds, shared with Android.
+    let keyboard: String
+    init(wpm: Double, accuracy: Double, at: Double, keyboard: String = "tailorkeys") {
+        self.wpm = wpm; self.accuracy = accuracy; self.at = at; self.keyboard = keyboard
+    }
+    private enum CodingKeys: String, CodingKey { case wpm, accuracy, at, keyboard }
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        wpm = try values.decode(Double.self, forKey: .wpm)
+        accuracy = try values.decode(Double.self, forKey: .accuracy)
+        at = try values.decode(Double.self, forKey: .at)
+        keyboard = try values.decodeIfPresent(String.self, forKey: .keyboard) ?? "tailorkeys"
+    }
     var isValid: Bool { wpm.isFinite && wpm >= 0 && accuracy.isFinite && (0...1).contains(accuracy) && at.isFinite && at >= 0 }
+}
+
+struct KeyboardAverage {
+    let keyboard: String
+    let wpm: Double
+    let accuracy: Double
+    let tests: Int
+    static func aggregate(_ results: [TypingResult]) -> [KeyboardAverage] {
+        Dictionary(grouping: results, by: { $0.keyboard }).map { id, results in
+            KeyboardAverage(keyboard: id, wpm: results.reduce(0) { $0 + $1.wpm } / Double(results.count),
+                            accuracy: results.reduce(0) { $0 + $1.accuracy } / Double(results.count), tests: results.count)
+        }.sorted { a, b in a.keyboard == "tailorkeys" ? b.keyboard != "tailorkeys" : (b.keyboard == "tailorkeys" ? false : a.keyboard < b.keyboard) }
+    }
 }
 
 /// The wire format deliberately contains grid OBJECTS, not escaped grid JSON strings.
@@ -168,7 +193,7 @@ final class LayoutLibrary {
         results = [:]
         if let text = defaults.string(forKey: Prefs.typingResults),
            let decoded = try? JSONDecoder().decode([String: [TypingResult]].self, from: Data(text.utf8)) {
-            results = decoded.mapValues { Array($0.filter(\.isValid).suffix(20)) }
+            results = decoded.mapValues { Self.recentResults($0.filter(\.isValid)) }
         }
         appliedKey = defaults.string(forKey: Prefs.layoutSelected) ?? ""
         if migrate { reconcileApplied() }
@@ -337,14 +362,19 @@ final class LayoutLibrary {
         }
     }
 
-    func average(_ key: String) -> Double? {
-        guard let history = results[key], !history.isEmpty else { return nil }
+    private static func recentResults(_ results: [TypingResult]) -> [TypingResult] {
+        Dictionary(grouping: results, by: { $0.keyboard }).values.flatMap { Array($0.suffix(20)) }.sorted { $0.at < $1.at }
+    }
+    func keyboardAverages() -> [KeyboardAverage] { KeyboardAverage.aggregate(results.values.flatMap { $0 }) }
+    func average(_ key: String, keyboard: String = "tailorkeys") -> Double? {
+        let history = (results[key] ?? []).filter { $0.keyboard == keyboard }
+        guard !history.isEmpty else { return nil }
         return history.reduce(0) { $0 + $1.wpm } / Double(history.count)
     }
 
     func record(_ result: TypingResult, for key: String) {
         guard result.isValid, choice(key) != nil else { return }
-        results[key] = Array(((results[key] ?? []) + [result]).suffix(20))
+        results[key] = Self.recentResults((results[key] ?? []) + [result])
         persistResults()
     }
 
