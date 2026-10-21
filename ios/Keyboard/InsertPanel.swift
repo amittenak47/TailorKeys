@@ -604,13 +604,24 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         DispatchQueue.main.asyncAfter(deadline: .now()+6) { [weak toast] in toast?.removeFromSuperview() }
     }
     private func renderDictate() {
-        let col = stack(.vertical); col.backgroundColor = palette.key; col.layer.cornerRadius = 12; col.layoutMargins = UIEdgeInsets(top: 20, left: 20, bottom: 12, right: 20); col.isLayoutMarginsRelativeArrangement = true
-        let icon = UIImageView(image: UIImage(systemName: "mic")); icon.tintColor = palette.hint; icon.contentMode = .scaleAspectFit; icon.heightAnchor.constraint(equalToConstant: 48).isActive = true; col.addArrangedSubview(icon)
-        col.addArrangedSubview(label("Dictation is built into \(tablet ? "iPad" : "iPhone")", size: 18))
-        col.addArrangedSubview(label("Apple does not let keyboards use the microphone. Tap the mic below the keyboard to talk. Your words appear in the field like any typing."))
-        col.addArrangedSubview(label("No mic? Turn on Dictation in Settings, General, Keyboard.", size: 12))
-        let arrow = label("↓", size: 32); arrow.textColor = palette.accent; arrow.textAlignment = .right; arrow.accessibilityLabel = "Use the system microphone below this keyboard"; col.addArrangedSubview(arrow); main.addArrangedSubview(col)
+        let content = UIView(), message = stack(.vertical); message.alignment = .center; message.spacing = 10
+        let circle = UIView(); circle.backgroundColor = fill; circle.layer.cornerRadius = 22
+        circle.widthAnchor.constraint(equalToConstant: 44).isActive = true; circle.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        let mic = UIImageView(image: UIImage(systemName: "mic")); mic.tintColor = palette.text; mic.contentMode = .scaleAspectFit; mic.frame = CGRect(x: 12, y: 12, width: 20, height: 20); circle.addSubview(mic); circle.accessibilityElementsHidden = true; message.addArrangedSubview(circle)
+        let title = "Use the mic below", body = "iOS keeps the microphone for its own dictation. Tap it, speak, then come back with ABC."
+        let heading = label(title, size: 17); heading.font = .systemFont(ofSize: 17, weight: .semibold); heading.textAlignment = .center
+        let explanation = label(body, size: 14); explanation.textColor = sub; explanation.textAlignment = .center
+        message.addArrangedSubview(heading); message.addArrangedSubview(explanation)
+        message.isAccessibilityElement = true; message.accessibilityLabel = title + ". " + body; message.accessibilityTraits = .staticText
+        content.addSubview(message); message.translatesAutoresizingMaskIntoConstraints = false
+        let arrow = DictateArrow(); arrow.ink = sub; arrow.isAccessibilityElement = false; arrow.isUserInteractionEnabled = false; arrow.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(arrow)
+        NSLayoutConstraint.activate([message.centerXAnchor.constraint(equalTo: content.centerXAnchor), message.centerYAnchor.constraint(equalTo: content.centerYAnchor), message.widthAnchor.constraint(lessThanOrEqualToConstant: 320), message.widthAnchor.constraint(lessThanOrEqualTo: content.widthAnchor, constant: -32), arrow.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20), arrow.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -6), arrow.widthAnchor.constraint(equalToConstant: 40), arrow.heightAnchor.constraint(equalToConstant: 40)])
+        main.addArrangedSubview(content)
+        if DictateHint.claimPulse(UserDefaults.standard, reduceMotion: UIAccessibility.isReduceMotionEnabled) {
+            let pulse = CAKeyframeAnimation(keyPath: "transform.scale"); pulse.values = [1, 1.15, 1]; pulse.keyTimes = [0, 0.5, 1]; pulse.duration = 0.6; pulse.repeatCount = 2; pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut); arrow.layer.add(pulse, forKey: "firstDictateHint")
+        }
     }
+
 }
 
 private final class SymbolCell: UICollectionViewCell {
@@ -660,4 +671,13 @@ private final class InsertHoldGesture: UILongPressGestureRecognizer {
     private let held: () -> Void
     init(_ held: @escaping () -> Void) { self.held = held; super.init(target: nil, action: nil); addTarget(self, action: #selector(invoke)) }
     @objc private func invoke() { if state == .began { held() } }
+}
+
+private final class DictateArrow: UIView {
+    var ink = UIColor.label
+    override func draw(_ rect: CGRect) {
+        ink.setStroke(); let arrow = UIBezierPath(); arrow.lineWidth = 1.75; arrow.lineCapStyle = .round; arrow.lineJoinStyle = .round
+        arrow.move(to: CGPoint(x: 5, y: 7)); arrow.addQuadCurve(to: CGPoint(x: 31, y: 31), controlPoint: CGPoint(x: 29, y: 9))
+        arrow.move(to: CGPoint(x: 24, y: 27)); arrow.addLine(to: CGPoint(x: 31, y: 31)); arrow.addLine(to: CGPoint(x: 34, y: 23)); arrow.stroke()
+    }
 }

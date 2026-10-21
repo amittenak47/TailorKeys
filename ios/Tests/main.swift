@@ -852,3 +852,15 @@ do {
     check(repository.pinned("Emoji").isEmpty, "pins leaked into emoji")
     repository.togglePin("Kaomoji", "face19"); check(repository.pinned("Kaomoji").first == "face18", "unpin failed")
 }
+
+do {
+    let suite = "tailorkeys.dictate." + UUID().uuidString
+    let prefs = UserDefaults(suiteName: suite)!
+    defer { prefs.removePersistentDomain(forName: suite) }
+    check(DictateHint.claimPulse(prefs, reduceMotion: false), "first dictate hint did not pulse")
+    check(!DictateHint.claimPulse(prefs, reduceMotion: false), "dictate hint repeated")
+    check(!DictateHint.claimPulse(prefs, reduceMotion: true), "dictate hint ignored reduced motion")
+    prefs.removeObject(forKey: InsertPrefs.dictateHintSeen)
+    check(!DictateHint.claimPulse(prefs, reduceMotion: true), "first reduced-motion visit pulsed")
+    check(!DictateHint.claimPulse(prefs, reduceMotion: false), "suppressed hint replayed later")
+}

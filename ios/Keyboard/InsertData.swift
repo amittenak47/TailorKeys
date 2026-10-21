@@ -111,6 +111,7 @@ enum InsertPrefs {
     static let kaomoji = "insert_kaomoji"
     static let history = "insert_history", keep = "insert_keep", tone = "insert_tone", recents = "insert_recents", section = "insert_section"
     static let toneNames = ["Default", "Light", "Medium-light", "Medium", "Medium-dark", "Dark"]
+    static let dictateHintSeen = "insert_dictate_hint_v1"
     static let promptSeen = "insert_key_prompt_v1"
     static let hadClips = "insert_had_clips"
     static func needsPrompt(seen: Bool, custom: Bool, grid: KeyGrid) -> Bool { !seen && custom && !grid.items.contains { $0.keys.contains(Keys.insert) } }
@@ -163,4 +164,13 @@ struct InsertPins {
 extension InsertRepository {
     func pinned(_ section: String) -> [String] { InsertPins(prefs.stringArray(forKey: "insert_pinned_" + section) ?? []).values }
     func togglePin(_ section: String, _ text: String) { var pins = InsertPins(pinned(section)); pins.toggle(text); prefs.set(pins.values, forKey: "insert_pinned_" + section) }
+}
+
+enum DictateHint {
+    /// Consume the first-open hint even under Reduce Motion, so it never surprises a later visit.
+    static func claimPulse(_ prefs: UserDefaults, reduceMotion: Bool) -> Bool {
+        let seen = prefs.bool(forKey: InsertPrefs.dictateHintSeen)
+        if !seen { prefs.set(true, forKey: InsertPrefs.dictateHintSeen) }
+        return !seen && !reduceMotion
+    }
 }
