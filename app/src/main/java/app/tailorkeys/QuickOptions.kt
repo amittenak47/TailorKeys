@@ -282,7 +282,7 @@ class QuickOptions(
         addView(header, LayoutParams(-1, dp(48)))
         addView(message, LayoutParams(-1, -2))
         addView(pages, LayoutParams(-1, 0, 1f))
-        mainScroll.addView(main, ScrollView.LayoutParams(-1, -2))
+        mainScroll.addView(main, FrameLayout.LayoutParams(-1, -2))
         pages.addView(mainScroll, FrameLayout.LayoutParams(-1, -1))
         pages.addView(allScroll, FrameLayout.LayoutParams(-1, -1))
         stripRow.setPadding(dp(8), 0, dp(8), 0)
@@ -378,7 +378,12 @@ class QuickOptions(
         val compactStrip = rowHeight < 100
         actions.orientation = if (compactStrip) HORIZONTAL else VERTICAL
         actions.layoutParams.width = dp(if (compactStrip) 104 else if (tablet) 96 else 58)
-        for (b in listOf(editButton, newButton)) b.layoutParams = if (compactStrip) LayoutParams(0, -1, 1f) else LayoutParams(-1, 0, 1f)
+        for (b in listOf(editButton, newButton)) {
+            val params = b.layoutParams as LayoutParams
+            val actionWidth = if (compactStrip) 0 else -1
+            val actionHeight = if (compactStrip) -1 else 0
+            if (params.width != actionWidth || params.height != actionHeight) b.layoutParams = LayoutParams(actionWidth, actionHeight, 1f)
+        }
         val gap = geometry.gap
         (tileScroll.layoutParams as LayoutParams).topMargin = dp(gap)
         val narrow = w < 260

@@ -2,6 +2,15 @@
 // This executable deliberately avoids UIKit, Xcode projects, signing and real preference domains.
 import Foundation
 
+import CoreGraphics
+
+// KeyboardSettings only needs this value type; the production palette imports UIKit.
+enum ThemeName: String, CaseIterable { case system, light, dark, midnight, warm, highContrast }
+
+func check(_ condition: @autoclosure () -> Bool, _ message: String) {
+    if !condition() { fatalError(message) }
+}
+
 for width in [240, 320, 390, 600, 800, 1200] {
     for height in [160, 192, 230, 307, 384, 460, 600, 845] {
         let header = width >= 600 ? 56 : 48
@@ -13,14 +22,6 @@ for width in [240, 320, 390, 600, 800, 1200] {
             check(header + g.top + g.strip + g.gap + g.viewport <= height, "quick grid exceeds panel")
         } else { check(g.viewport == content, "outer quick scroll lost rows") }
     }
-}
-import CoreGraphics
-
-// KeyboardSettings only needs this value type; the production palette imports UIKit.
-enum ThemeName: String, CaseIterable { case system, light, dark, midnight, warm, highContrast }
-
-func check(_ condition: @autoclosure () -> Bool, _ message: String) {
-    if !condition() { fatalError(message) }
 }
 
 // Insert models deliberately avoid UIKit and all device permissions.
@@ -434,7 +435,7 @@ check(free.inserted == 7 && free.deleted == 1 && free.mistakes == 1, "replacemen
 free.update("ha🌻llo", at: 104)
 check(free.characterCount == 6 && free.inserted == 8, "metrics counted UTF-16 units instead of characters")
 free.update("", at: 105)
-check(free.accuracy == 0 && free.wpm(at: 105) == 0, "cleared text has negative accuracy or speed")
+check(free.deleted == 7 && abs(free.accuracy - 1.0 / 8) < 0.0001 && free.wpm(at: 105) == 0, "clear counted a replacement as a correction")
 var commits = TypingSession(mode: .free, sentence: "")
 for (i, value) in ["teh", "the ", "teh ", "the ", "the keyboard ", "the keyboard swiping "].enumerated() { commits.update(value, at: Double(i)) }
 check(commits.mistakes == 0 && commits.accuracy == 1, "autocorrect, undo, suggestion or swipe counted as mistakes")
@@ -790,6 +791,8 @@ do {
     let blackKeys = ThemeColors(background: "#000000", key: "#000000", functionKey: "#000000", text: "#FFFFFF", accent: "#FFD400", pressed: "#000000")
     check(blackKeys.keysBlend && blackKeys.replacing(6, with: "#FF101010").keysBlend && blackKeys.replacing(6, with: "#10FFFFFF").keysBlend, "invisible outlines must warn")
     check(!blackKeys.replacing(6, with: "#FFFFFF").keysBlend, "visible outlines should prevent blend warning")
+    check(blackKeys.replacing(6, with: "#444444").keysBlend, "outline below 3:1 did not warn")
+    check(ThemeColors.opacity("00000000") == 0 && ThemeColors.opacity("#FFFFFF") == 1, "outline opacity depends on hash prefix")
     check(CustomTheme.decode("broken").isEmpty, "invalid theme JSON accepted")
     check(abs(ThemeColors.contrast("#000000", "#FFFFFF") - 21) < 0.00001, "WCAG endpoints incorrect")
     check(abs(ThemeColors.contrast("#777777", "#FFFFFF") - 4.478) < 0.001, "WCAG sRGB linearisation incorrect")

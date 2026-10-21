@@ -1415,7 +1415,7 @@ final class KeyboardView: UIView {
             drawText(line, center: CGPoint(x: hintRect.midX, y: y), size: 13,
                      color: editHint != nil || editTitle != nil ? palette.smallAccent : palette.hint, maxWidth: hintRect.width * 0.95)
         }
-        drawSymbol("gearshape", in: moreRect, color: palette.hint)
+        drawSymbol("gearshape", in: moreRect, color: palette.gear)
         drawText("Done", center: CGPoint(x: doneRect.midX, y: doneRect.midY), size: 15, color: palette.smallAccent, bold: true)
     }
 

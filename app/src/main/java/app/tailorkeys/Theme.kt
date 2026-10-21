@@ -68,7 +68,7 @@ data class ThemeColors(val background: Int, val key: Int, val functionKey: Int, 
     fun checks() = listOf("Text on keys" to contrastRatio(text, key), "Text on background" to contrastRatio(text, background),
         "Text on function keys" to contrastRatio(text, functionKey), "Accent on keys" to contrastRatio(accent, key))
     val keysBlend: Boolean get() = contrastRatio(key, background) < 1.5 &&
-        contrastRatio(compositeOn(keyOutline, background), background) < 1.5
+        contrastRatio(compositeOn(keyOutline, background), background) < 3.0
     companion object {
         val labels = listOf("Background", "Keys", "Function keys", "Text", "Accent", "Pressed", "Key outline")
         val keys = listOf("background", "key", "functionKey", "text", "accent", "pressed", "keyOutline")

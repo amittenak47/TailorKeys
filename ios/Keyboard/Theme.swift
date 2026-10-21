@@ -27,9 +27,9 @@ struct Palette {
     let keyOutline: UIColor
 
     var gear: UIColor {
-        let bg = ThemeColors(self).background
+        let bg = ThemeColors.hex(background)
         return [hint, text, .black, .white].map { $0.withAlphaComponent(1) }.first {
-            ThemeColors.contrast(ThemeColors(Palette($0, $0, $0, $0, $0, $0, $0, $0)).text, bg) >= 3
+            ThemeColors.contrast(ThemeColors.hex($0), bg) >= 3
         }!
     }
 
@@ -69,20 +69,20 @@ struct Palette {
 
 
 extension ThemeColors {
+    static func hex(_ color: UIColor) -> String {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        let rgb = String(format: "%02X%02X%02X", Int((r * 255).rounded()), Int((g * 255).rounded()), Int((b * 255).rounded()))
+        return a < 1 ? String(format: "#%02X", Int((a * 255).rounded())) + rgb : "#" + rgb
+    }
     init(_ palette: Palette) {
-        func hex(_ color: UIColor) -> String {
-            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-            color.getRed(&r, green: &g, blue: &b, alpha: &a)
-            let rgb = String(format: "%02X%02X%02X", Int((r * 255).rounded()), Int((g * 255).rounded()), Int((b * 255).rounded()))
-            return a < 1 ? String(format: "#%02X", Int((a * 255).rounded())) + rgb : "#" + rgb
-        }
-        background = hex(palette.background); key = hex(palette.key); functionKey = hex(palette.functionKey)
-        text = hex(palette.text); accent = hex(palette.accent); pressed = hex(palette.pressed)
-        keyOutline = hex(palette.keyOutline)
+        background = Self.hex(palette.background); key = Self.hex(palette.key); functionKey = Self.hex(palette.functionKey)
+        text = Self.hex(palette.text); accent = Self.hex(palette.accent); pressed = Self.hex(palette.pressed)
+        keyOutline = Self.hex(palette.keyOutline)
     }
     static func uiColor(_ value: String) -> UIColor {
         let v = parse(value, alpha: true) ?? 0
-        return Palette.hex(v).withAlphaComponent(value.count == 9 ? CGFloat(v >> 24) / 255 : 1)
+        return Palette.hex(v).withAlphaComponent(CGFloat(opacity(value)))
     }
     var palette: Palette {
         let ink = Self.uiColor(text), accentColor = Self.uiColor(accent)

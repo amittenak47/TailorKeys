@@ -44,7 +44,7 @@ final class LayoutThumbnailCache {
         let json = (try? JSONSerialization.jsonObject(with: Data(choice.gridJSON.utf8)))
             .flatMap { try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) }
         let fingerprint = json.map { String(decoding: $0, as: UTF8.self) } ?? choice.gridJSON
-        let key = "\(fingerprint)|\(p)|\(prefs.theme.rawValue)|\(dark)|\(prefs.int(Prefs.curve))|\(prefs.int(Prefs.keyGap))|\(prefs.int(Prefs.cornerRadius))|\(prefs.int(Prefs.textScale))|\(prefs.followSystemText)|\(UITraitCollection.current.preferredContentSizeCategory.rawValue)|\(UIScreen.main.bounds.size)" as NSString
+        let key = "\(fingerprint)|\(p)|\(prefs.themeID)|\(CustomTheme.encode(prefs.customThemes))|\(dark)|\(prefs.int(Prefs.curve))|\(prefs.int(Prefs.keyGap))|\(prefs.int(Prefs.cornerRadius))|\(prefs.int(Prefs.textScale))|\(prefs.followSystemText)|\(UITraitCollection.current.preferredContentSizeCategory.rawValue)|\(UIScreen.main.bounds.size)" as NSString
         return (prefs, key)
     }
 }

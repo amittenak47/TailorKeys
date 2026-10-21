@@ -33,14 +33,17 @@ struct ThemeColors: Codable, Equatable {
          ("Text on function keys", Self.contrast(text, functionKey)), ("Accent on keys", Self.contrast(accent, key))]
     }
     var keysBlend: Bool {
-        Self.contrast(key, background) < 1.5 && Self.contrast(Self.composite(keyOutline, on: background), background) < 1.5
+        Self.contrast(key, background) < 1.5 && Self.contrast(Self.composite(keyOutline, on: background), background) < 3
     }
     static func composite(_ outline: String, on background: String) -> String {
-        let hex = outline.hasPrefix("#") ? String(outline.dropFirst()) : outline
         let value = parse(outline, alpha: true) ?? 0, bg = parse(background) ?? 0
-        let alpha = hex.count == 8 ? Double(value >> 24) / 255 : 1
+        let alpha = opacity(outline)
         func channel(_ shift: UInt32) -> UInt32 { UInt32(Double((value >> shift) & 255) * alpha + Double((bg >> shift) & 255) * (1 - alpha)) << shift }
         return String(format: "#%06X", channel(16) | channel(8) | channel(0))
+    }
+    static func opacity(_ value: String) -> Double {
+        let hex = value.hasPrefix("#") ? String(value.dropFirst()) : value
+        return hex.count == 8 ? Double((parse(value, alpha: true) ?? 0) >> 24) / 255 : 1
     }
     static func parse(_ value: String, alpha: Bool = false) -> UInt32? {
         let hex = value.hasPrefix("#") ? String(value.dropFirst()) : value

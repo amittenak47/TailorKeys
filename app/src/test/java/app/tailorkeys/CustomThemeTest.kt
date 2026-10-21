@@ -29,6 +29,7 @@ class CustomThemeTest {
         assertFalse(high.keysBlend)
         assertTrue(high.copy(keyOutline = 0).keysBlend)
         assertTrue(high.copy(keyOutline = 0xFF101010.toInt()).keysBlend)
+        assertTrue(high.copy(keyOutline = 0xFF444444.toInt()).keysBlend)
         assertTrue(high.copy(keyOutline = 0x10FFFFFF).keysBlend)
         assertFalse(high.copy(key = 0xFFFFFFFF.toInt(), keyOutline = 0).keysBlend)
         ThemeName.entries.filter { it != ThemeName.HIGH_CONTRAST }.forEach {

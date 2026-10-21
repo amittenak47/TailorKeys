@@ -57,7 +57,7 @@ struct CustomThemeSection: View {
                     RoundedRectangle(cornerRadius: 3).fill(Color(palette.key)).frame(width: 14, height: 18).overlay(RoundedRectangle(cornerRadius: 3).stroke(Color(palette.keyOutline), lineWidth: 1))
                     RoundedRectangle(cornerRadius: 3).fill(Color(palette.functionKey)).frame(width: 14, height: 18).overlay(RoundedRectangle(cornerRadius: 3).stroke(Color(palette.keyOutline), lineWidth: 1))
                 }.frame(width: 46, height: 46).background(RoundedRectangle(cornerRadius: 14).fill(Color(palette.background)))
-                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color(UIColor.separator), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(LayoutStyle.outline, lineWidth: 1))
                     .overlay(RoundedRectangle(cornerRadius: 17).stroke(selected ? AppStyle.accent : Color.clear, lineWidth: 2).padding(-3))
                     .overlay(alignment: .topTrailing) { if selected { Image(systemName: "checkmark.circle.fill").font(.caption).foregroundColor(AppStyle.accent).background(Circle().fill(Color.white)) } }
                 Text(name).font(.system(size: 11, weight: selected ? .bold : .regular)).multilineTextAlignment(.center)
@@ -192,7 +192,12 @@ private struct ThemeColorPicker: View {
                 }))
             }
             TextField("#RRGGBB", text: $entry).textFieldStyle(.roundedBorder).textInputAutocapitalization(.characters).disableAutocorrection(true)
-                .accessibilityLabel("Hex colour").onChange(of: entry) { if let rgb = ThemeColors.parse($0, alpha: allowTransparent) { hex = String(format: $0.count == 9 ? "#%08X" : "#%06X", rgb) } }
+                .accessibilityLabel("Hex colour").onChange(of: entry) { value in
+                    if let rgb = ThemeColors.parse(value, alpha: allowTransparent) {
+                        let digits = value.hasPrefix("#") ? value.count - 1 : value.count
+                        hex = String(format: digits == 8 ? "#%08X" : "#%06X", rgb)
+                    }
+                }
                 .onAppear { entry = hex; syncHSV() }.onChange(of: hex) {
                     if ThemeColors.parse(entry, alpha: allowTransparent) != ThemeColors.parse($0, alpha: allowTransparent) { entry = $0 }
                     let current = ThemeColors(Palette(currentColor, currentColor, currentColor, currentColor, currentColor, currentColor, currentColor, currentColor)).text
