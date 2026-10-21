@@ -53,6 +53,12 @@ struct RootView: View {
                 model.sheet = .guide
             }
         }
+        .onOpenURL { url in
+            if url.scheme == "tailorkeys" && url.host == "settings" {
+                model.sheet = nil
+                selection = .settings
+            }
+        }
         .onChange(of: scenePhase) { phase in
             if phase == .background && model.testing { model.endTest() }
             if phase == .active {

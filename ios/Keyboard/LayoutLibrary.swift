@@ -43,10 +43,10 @@ final class LayoutLibrary {
     private(set) var appliedKey = "preset:STANDARD"
     private(set) var results: [String: [TypingResult]] = [:]
 
-    init(settings: KeyboardSettings, defaults: UserDefaults, migrate: Bool = true) {
+    init(settings: KeyboardSettings, defaults: UserDefaults, migrate: Bool = true, recoverTrial: Bool = true) {
         self.settings = settings
         self.defaults = defaults
-        restoreTrial() // Recover before migration examines the applied layout.
+        if recoverTrial { restoreTrial() } // The app recovers; the IME must preserve an active typing trial.
         reload(migrate: migrate)
     }
 
@@ -103,6 +103,35 @@ final class LayoutLibrary {
 
     func choice(_ key: String) -> LayoutChoice? { choices.first { $0.id == key } }
 
+    var quickTiles: [QuickLayoutTileState] { choices.map { QuickLayoutTileState(choice: $0, inUse: $0.id == appliedKey) } }
+    var needsSaveFirst: Bool { draft != nil }
+
+    func nextName(_ prefix: String) -> String {
+        let names = Set(saved.map { $0.name.lowercased() })
+        var number = 1
+        while names.contains("\(prefix) \(number)".lowercased()) { number += 1 }
+        return "\(prefix) \(number)"
+    }
+
+    /// Presets always fork. Callers show Save first when an existing draft prevents a copy.
+    @discardableResult func quickEdit(_ key: String, newCopy: Bool) -> String? {
+        guard let source = choice(key) else { return nil }
+        if newCopy || !source.isCustom {
+            guard startDraft(from: key) else { return nil }
+            use("draft")
+            return "draft"
+        }
+        use(key)
+        return key
+    }
+
+    func importClipboard(_ text: String?) -> ClipboardLayoutResult {
+        guard let text = text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .empty }
+        guard let decoded = KeyGrid.decodeCode(text),
+              let key = add(decoded.grid, name: decoded.name ?? nextName("Imported")) else { return .invalid }
+        return .added(key)
+    }
+
     func reload(migrate: Bool = true) {
         saved = []
         var ids = Set<String>()
@@ -129,6 +158,7 @@ final class LayoutLibrary {
     }
 
     private func reconcileApplied() {
+        if defaults.string(forKey: Prefs.layoutTrialPrevious) != nil, choice(appliedKey) != nil { return }
         let applied = settings.loadGrid()
         if let current = choice(appliedKey), Self.sameGrid(current.grid, applied, includingFaces: false) { return }
         if let preset = Self.matchingPreset(applied) {
@@ -275,3 +305,13 @@ enum LayoutCodeStatus {
         return .invalid("This code can’t be read. Copy the whole TK1- code and paste it again.")
     }
 }
+
+struct QuickLayoutTileState {
+    let choice: LayoutChoice
+    let inUse: Bool
+    var label: String { choice.name + (inUse ? ", in use" : "") + (choice.isDraft ? ", unsaved" : "") }
+    var bold: Bool { inUse }
+    var outlineWidth: Double { inUse ? 2 : 1 }
+}
+
+enum ClipboardLayoutResult { case empty, invalid, added(String) }

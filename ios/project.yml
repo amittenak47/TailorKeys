@@ -24,6 +24,7 @@ targets:
       - Keyboard/Theme.swift
       - Keyboard/KeyboardSettings.swift
       - Keyboard/LayoutLibrary.swift
+      - Keyboard/LayoutThumbnails.swift
       - Keyboard/TypingMetrics.swift
       - Keyboard/KeyboardView.swift
       - Keyboard/SwipeTrace.swift
@@ -38,6 +39,9 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: TailorKeys
+        CFBundleURLTypes:
+          - CFBundleURLName: app.tailorkeys.settings
+            CFBundleURLSchemes: [tailorkeys]
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]

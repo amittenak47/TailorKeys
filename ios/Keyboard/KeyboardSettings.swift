@@ -105,6 +105,8 @@ final class KeyboardSettings {
     private static let migrationKey = "keyboard_settings_migrated"
 
     private var d: UserDefaults
+    func makeLayoutLibrary() -> LayoutLibrary { LayoutLibrary(settings: self, defaults: d, recoverTrial: false) }
+    func thumbnailSettings() -> KeyboardSettings { KeyboardSettings(tablet: tablet, store: d) }
     private let tablet: Bool
     /// Only the app preview overrides the orientation being displayed.
     var previewOrientation: Bool?

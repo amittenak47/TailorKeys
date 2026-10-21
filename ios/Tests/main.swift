@@ -368,3 +368,73 @@ check(TypingSentences.all.count == 40 && Set(TypingSentences.all).count == 40, "
 check(TypingSentences.all.allSatisfy { (8...14).contains($0.split(separator: " ").count) }, "sentence length outside 8–14 words")
 check(TypingSentences.next(after: TypingSentences.all[0]) != TypingSentences.all[0], "New sentence repeated the same sentence")
 print("Layout storage, recovery, import and typing metrics checks passed.")
+
+
+// Quick options shares ordering, identities and draft rules with the app's layout library.
+withLayoutStore { prefs, defaults in
+    let library = LayoutLibrary(settings: prefs, defaults: defaults)
+    let saved = library.add(KeyGrid.makeDefault(), name: "Desk")!
+    check(library.startDraft(from: "preset:THUMBS"), "quick draft failed")
+    library.use(saved)
+    let tiles = library.quickTiles
+    check(tiles.map { $0.choice.id } == ["preset:STANDARD", "preset:SPLIT", "preset:THUMBS", saved, "draft"], "quick strip order differs from app")
+    check(tiles.filter { $0.inUse }.count == 1, "quick panel marked multiple applied tiles")
+    let applied = tiles.first { $0.inUse }!
+    check(applied.choice.id == saved && applied.bold && applied.outlineWidth == 2, "quick applied marking missing outline/bold")
+    check(applied.label == "Desk, in use", "VoiceOver applied label missing")
+    library.use("draft")
+    check(library.quickTiles.last?.label == "Custom, in use, unsaved", "draft VoiceOver label missing")
+    let original = defaults.dictionaryRepresentation() as NSDictionary
+    check(library.needsSaveFirst, "existing draft did not require Save first")
+    check(library.quickEdit("preset:STANDARD", newCopy: false) == nil, "preset edit overwrote draft")
+    check(library.quickEdit("draft", newCopy: true) == nil, "New overwrote draft")
+    check(original.isEqual(defaults.dictionaryRepresentation() as NSDictionary), "cancel/save-first changed preferences")
+    check(library.quickEdit("draft", newCopy: false) == "draft", "editing draft forked it")
+    _ = library.saveDraft(name: library.nextName("Custom"))
+    check(library.saved.last?.name == "Custom 1", "draft auto-name wrong")
+    let preset = library.choice("preset:STANDARD")!.gridJSON
+    check(library.quickEdit("preset:STANDARD", newCopy: false) == "draft", "preset edit did not fork")
+    check(library.choice("draft")?.gridJSON == preset, "preset fork changed the source grid")
+    check(library.choice("preset:STANDARD")?.gridJSON == preset, "preset was mutated")
+    let changed = library.choice("draft")!.grid
+    changed.items[0].keys[0] = "!"
+    library.update("draft", grid: changed)
+    check(prefs.loadGrid().items[0].keys[0] == "!", "draft edit did not update applied grid")
+    let savedDraft = library.saveDraft(name: library.nextName("Custom"))!
+    check(library.quickEdit(savedDraft, newCopy: false) == savedDraft, "saved edit changed identity")
+    let savedChange = library.choice(savedDraft)!.grid
+    savedChange.items[0].keys[0] = "?"
+    library.update(savedDraft, grid: savedChange)
+    check(library.choice(savedDraft)!.grid.items[0].keys[0] == "?" && library.draft == nil, "saved edit did not stay in place")
+}
+
+withLayoutStore { prefs, defaults in
+    let library = LayoutLibrary(settings: prefs, defaults: defaults)
+    for name in ["Custom 1", "Custom 3", "Imported 1", "Imported 3"] { _ = library.add(KeyGrid.makeDefault(), name: name) }
+    check(library.nextName("Custom") == "Custom 2" && library.nextName("Imported") == "Imported 2", "auto-names did not fill the next free number")
+    let emptyTexts: [String?] = [nil, "  "]
+    for text in emptyTexts {
+        if case .empty = library.importClipboard(text) {} else { fatalError("empty clipboard was not reported") }
+    }
+    for text in ["not a layout", "TK1-cutoff", "TK2-abc", "TK1-" + String(repeating: "A", count: 140_000)] {
+        if case .invalid = library.importClipboard(text) {} else { fatalError("invalid clipboard accepted") }
+    }
+    let source = KeyGrid.template(.thumbs)
+    if case .added(let key) = library.importClipboard("Shared layout: " + source.toCode()) {
+        check(library.choice(key)?.name == "Imported 2", "clipboard auto-name wrong")
+        check(LayoutLibrary.sameGrid(library.choice(key)!.grid, source), "clipboard layout changed")
+    } else { fatalError("valid clipboard rejected") }
+    var object = try! JSONSerialization.jsonObject(with: Data(source.toJSON().utf8)) as! [String: Any]
+    object["name"] = "Travel"
+    let named = shareCode(try! JSONSerialization.data(withJSONObject: object))
+    if case .added(let key) = library.importClipboard(named) {
+        check(library.choice(key)?.name == "Travel", "clipboard code name lost")
+    } else { fatalError("named clipboard rejected") }
+    check(library.appliedKey == "preset:STANDARD" && library.draft == nil, "clipboard import applied or created draft")
+    _ = library.beginTrial("preset:SPLIT")
+    let duringTrial = prefs.loadGrid().toJSON()
+    let keyboardLibrary = prefs.makeLayoutLibrary()
+    check(prefs.loadGrid().toJSON() == duringTrial && defaults.string(forKey: Prefs.layoutTrialPrevious) != nil, "keyboard panel cancelled an active typing trial")
+    check(keyboardLibrary.draft == nil, "keyboard panel adopted the trial as a draft")
+}
+print("Quick options checks passed")

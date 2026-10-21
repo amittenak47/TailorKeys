@@ -72,6 +72,7 @@ protocol KeyboardViewDelegate: AnyObject {
     func openSettings()
     func moveCursor(_ steps: Int)
     func gridEdited()
+    func editDone()
     func glideStarted()
     func glideProgress(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat, _ raw: String, _ hints: [DoubleLetterHint])
     func glideCancelled()
@@ -79,6 +80,7 @@ protocol KeyboardViewDelegate: AnyObject {
 }
 
 extension KeyboardViewDelegate {
+    func editDone() {}
     func keyTapped(_ code: String, distances: [Float]) { keyTapped(code) }
     func openQuickOptions() {}
     func wheelChosen() {}
@@ -211,6 +213,9 @@ final class KeyboardView: UIView {
     private var slideStarted: TimeInterval = 0
     private var slideDisplayLink: CADisplayLink?
     private var optionsCovered = false
+    private(set) var quickOptionsBounds = CGRect.zero
+    var editTitle: String?
+    private func finishEditing() { editMode = false; delegate?.editDone() }
 
     /// Keep Quick options changes at their starting position until the keys are visible again.
     func setOptionsCovered(_ covered: Bool) {
@@ -782,6 +787,7 @@ final class KeyboardView: UIView {
         slideAlign = p.align
         slideViewWidth = width
         layoutHeight = ceil(reserve ? total(s) : Swift.max(target, total(s)))
+        quickOptionsBounds = CGRect(x: areaLeft, y: 0, width: areaW, height: layoutHeight)
         builtWidth = width
         handlePath = UIBezierPath(roundedRect: CGRect(x: handleRect.midX - 22, y: handleRect.midY - 2, width: 44, height: 4), cornerRadius: 2).cgPath
         prepareFaces()
@@ -900,7 +906,7 @@ final class KeyboardView: UIView {
             let done = element("done", doneRect, "Done", .button)
             done.activate = { [weak self] in
                 guard let self = self else { return false }
-                self.editMode = false
+                self.finishEditing()
                 return true
             }
         } else {
@@ -1367,10 +1373,15 @@ final class KeyboardView: UIView {
         ctx.saveGState(); ctx.setAlpha(history.isEmpty ? 0.3 : 1)
         drawSymbol("arrow.uturn.backward", in: undoRect, color: palette.text)
         ctx.restoreGState()
-        drawText(editHint ?? "Drag keys to rearrange", center: CGPoint(x: hintRect.midX, y: hintRect.midY), size: 13,
-                 color: editHint != nil ? palette.accent : palette.hint, maxWidth: hintRect.width * 0.95)
+        let title = editHint ?? editTitle ?? "Drag keys to rearrange"
+        let lines = editHint == nil ? title.components(separatedBy: "; ") : [title]
+        for (index, line) in lines.enumerated() {
+            let y = lines.count == 1 ? hintRect.midY : hintRect.midY + (index == 0 ? -8 : 8)
+            drawText(line, center: CGPoint(x: hintRect.midX, y: y), size: 13,
+                     color: editHint != nil || editTitle != nil ? palette.smallAccent : palette.hint, maxWidth: hintRect.width * 0.95)
+        }
         drawSymbol("gearshape", in: moreRect, color: palette.hint)
-        drawText("Done", center: CGPoint(x: doneRect.midX, y: doneRect.midY), size: 15, color: palette.accent, bold: true)
+        drawText("Done", center: CGPoint(x: doneRect.midX, y: doneRect.midY), size: 15, color: palette.smallAccent, bold: true)
     }
 
     private static let cellDash: [CGFloat] = [4, 4]
@@ -2246,7 +2257,7 @@ final class KeyboardView: UIView {
         if p.y < stripH {
             if undoRect.contains(p) { undo() }
             else if moreRect.contains(p) { delegate?.openSettings() }
-            else if doneRect.contains(p) { editMode = false }
+            else if doneRect.contains(p) { finishEditing() }
             return
         }
         guard let pk = findKey(p, strict: true) else { return }

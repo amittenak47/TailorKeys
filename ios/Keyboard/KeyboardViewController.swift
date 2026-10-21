@@ -172,6 +172,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private var heightConstraint: NSLayoutConstraint?
     private var panel: SettingsPanel?
     private var quickOptions: QuickOptions?
+    private var editingLayoutKey: String?
     private var lastSpace: CFTimeInterval = 0
     private var lastAbcTap: CFTimeInterval = 0
     private var chosenBefore: String?
@@ -285,6 +286,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func loadKeyboardIfNeeded() {
         if settings != nil {
             settings.reloadStore(hasFullAccess: hasFullAccess)
+            quickOptions?.reloadStore()
             if state.language == settings.currentLanguage { keyboard.grid = settings.loadGrid() }
             activateLanguage()
             return
@@ -307,6 +309,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         }
         keyboard = kb
         activateLanguage()
+        attachQuickOptions()
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -342,6 +345,8 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         guard let keyboard = keyboard else { return }
         let h = keyboard.height(forWidth: view.bounds.width)
         if heightConstraint?.constant != h { heightConstraint?.constant = h }
+        let area = keyboard.quickOptionsBounds
+        quickOptions?.frame = CGRect(x: area.minX, y: 0, width: area.width, height: view.bounds.height)
     }
 
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
@@ -361,6 +366,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         choiceInterrupted()
         closeQuickOptions()
         keyboard?.endTypingSession()
+        editingLayoutKey = nil; keyboard?.editTitle = nil
         predictor?.flushLearning(wait: true)
         super.viewWillDisappear(animated)
     }
@@ -691,38 +697,61 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     func openQuickOptions() {
-        guard quickOptions == nil else { return }
+        attachQuickOptions()
+        guard let p = quickOptions, p.isHidden else { return }
         choiceInterrupted()
         keyboard.cancelTouches()
         keyboard.setOptionsCovered(true)
+        keyboard.layer.removeAllAnimations(); keyboard.alpha = 1
+        UIView.animate(withDuration: UIAccessibility.isReduceMotionEnabled ? 0.1 : 0.08) { self.keyboard.alpha = 0 }
         keyboard.accessibilityElementsHidden = true
+        p.refresh(resetScroll: true)
+        let area = keyboard.quickOptionsBounds
+        p.frame = CGRect(x: area.minX, y: 0, width: area.width, height: view.bounds.height)
+        p.isHidden = false; p.accessibilityElementsHidden = false
+        p.layoutIfNeeded(); p.animateOpen()
+        UIAccessibility.post(notification: .screenChanged, argument: p)
+    }
+
+    private func attachQuickOptions() {
+        guard quickOptions == nil, settings != nil, keyboard != nil else { return }
         let p = QuickOptions(settings: settings, stripHeight: { [weak self] in self?.keyboard.suggestionStripHeight ?? 40 })
         p.onClose = { [weak self] in self?.closeQuickOptions() }
-        p.onRearrange = { [weak self] in self?.closeQuickOptions(); self?.keyboard.editMode = true }
-        p.onSettings = { [weak self] in self?.closeQuickOptions(); self?.openSettings() }
+        p.onEdit = { [weak self] key, title in
+            guard let self = self else { return }
+            self.closeQuickOptions()
+            self.editingLayoutKey = key
+            self.keyboard.editTitle = title
+            self.keyboard.grid = self.settings.loadGrid()
+            self.predictor?.setLayout(self.keyboard.grid)
+            self.keyboard.editMode = true
+            UIAccessibility.post(notification: .announcement, argument: title)
+        }
         p.onLanguage = { [weak self] in self?.switchLanguage(1) }
         p.onChange = { [weak self] in
             guard let self = self else { return }
             if self.state.language != self.settings.currentLanguage { self.activateLanguage() }
+            let grid = self.settings.loadGrid()
+            if !LayoutLibrary.sameGrid(grid, self.keyboard.grid) {
+                self.clearTaps(); self.keyboard.grid = grid; self.predictor?.setLayout(grid)
+            }
             self.keyboard.reloadSettings()
+            let area = self.keyboard.quickOptionsBounds
+            self.quickOptions?.frame = CGRect(x: area.minX, y: 0, width: area.width, height: self.view.bounds.height)
             self.updateSuggestions()
         }
-        p.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(p)
-        NSLayoutConstraint.activate([
-            p.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            p.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            p.topAnchor.constraint(equalTo: view.topAnchor),
-            p.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
+        if let link = p.settingsLinkController { addChild(link); link.didMove(toParent: self) }
+        p.isHidden = true; p.accessibilityElementsHidden = true
         quickOptions = p
-        UIAccessibility.post(notification: .screenChanged, argument: p)
     }
 
     private func closeQuickOptions() {
-        quickOptions?.removeFromSuperview()
-        quickOptions = nil
+        quickOptions?.layer.removeAllAnimations()
+        quickOptions?.alpha = 1; quickOptions?.transform = .identity
+        quickOptions?.isHidden = true; quickOptions?.accessibilityElementsHidden = true
         keyboard?.setOptionsCovered(false)
+        keyboard?.layer.removeAllAnimations(); keyboard?.alpha = 1
         keyboard?.accessibilityElementsHidden = false
         UIAccessibility.post(notification: .layoutChanged, argument: keyboard)
     }
@@ -816,7 +845,16 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     func gridEdited() {
         clearTaps()
         predictor?.setLayout(keyboard.grid)
-        settings.saveGrid(keyboard.grid)
+        let library = settings.makeLayoutLibrary()
+        if let key = editingLayoutKey, key == library.appliedKey { library.update(key, grid: keyboard.grid) }
+        else { settings.saveGrid(keyboard.grid) }
+    }
+
+    func editDone() {
+        guard editingLayoutKey != nil else { return }
+        gridEdited()
+        editingLayoutKey = nil; keyboard.editTitle = nil
+        openQuickOptions()
     }
 
     // MARK: - Typing

@@ -25,6 +25,12 @@ struct Palette {
     let accent: UIColor
     let onAccent: UIColor
 
+    var smallAccent: UIColor {
+        if accent.isEqual(Self.hex(0xC2562B)) { return Self.hex(0x9C4A28) }
+        if accent.isEqual(Self.hex(0x5B8DEF)) { return Self.hex(0x8DB1FF) }
+        return accent
+    }
+
     static func of(_ name: ThemeName, dark: Bool) -> Palette {
         let resolved: ThemeName = name == .system ? (dark ? .dark : .light) : name
         switch resolved {

@@ -235,6 +235,12 @@ final class KeyGrid {
 
     /// Finds a layout code anywhere in `text`, so a whole pasted message works. Nil if there's none or it's broken.
     static func fromCode(_ text: String) -> KeyGrid? {
+        decodeCode(text)?.grid
+    }
+
+    /// Optional names travel in the bounded layout object; decoding happens only once.
+    static func decodeCode(_ text: String) -> (grid: KeyGrid, name: String?)? {
+        guard text.utf8.count <= maxLayoutBytes * 2 else { return nil }
         guard let start = text.range(of: codePrefix) else { return nil }
         let encoded = text[start.upperBound...].utf8.prefix(maxLayoutBytes * 2 + 1).prefix(while: {
             (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95
@@ -246,7 +252,9 @@ final class KeyGrid {
         guard let packed = Data(base64Encoded: b64),
               packed.count <= maxLayoutBytes, let raw = inflate(packed),
               let json = String(data: raw, encoding: .utf8), let g = fromJSON(json) else { return nil }
-        return g
+        let object = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any]
+        let name = (object?["name"] as? String).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        return (g, name.flatMap { $0.isEmpty ? nil : String($0.prefix(24)) })
     }
 
     /// Raw DEFLATE, like Android. END is required; exhausted input alone is not success.
