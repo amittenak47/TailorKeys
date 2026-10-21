@@ -214,7 +214,7 @@ private fun ThemeSwatch(theme: ThemeName, modifier: Modifier) {
     }
 }
 
-internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Unit, onReset: () -> Unit) {
+internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Unit, onReset: () -> Unit, onPanel: (String) -> Unit) {
     item("languages") {
         var open by remember { mutableStateOf(false) }
         val enabled = state.languages()
@@ -253,6 +253,9 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
             val time = state.int(Prefs.LONG_PRESS_MS)
             SettingSlider("Long-press time", time, Prefs.LONG_PRESS_MS, "$time ms") { state.set(Prefs.LONG_PRESS_MS, it) }
         }
+    }
+    item("panels") {
+        Column { GroupTitle("Panels"); InsertSettingsLinks(onPanel) }
     }
     item("cursorControl") {
         Column {

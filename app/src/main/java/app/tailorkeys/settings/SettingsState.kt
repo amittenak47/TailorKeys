@@ -35,6 +35,7 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
     var selectedKey by mutableStateOf(library.inUse)
         private set
     var importing by mutableStateOf(false)
+    var insertSettingsPage by mutableStateOf<String?>(null)
     var importPreviewValid by mutableStateOf(false)
     private var previewingSelected = true
     val thumbnails = LayoutThumbnails(context, settings, revisions)

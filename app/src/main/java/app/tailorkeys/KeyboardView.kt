@@ -200,6 +200,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private var leftSpace: RectF? = null
     private var rightSpace: RectF? = null
     val suggestionStripHeight get() = stripH.toInt()
+    var insertStripHeight = 0
+        set(value) { if (field != value) { field = value; builtWidth = -1; requestLayout(); invalidate() } }
     private var stripH = 0f
     private var unit = 0f
     private var letterCentres = emptyMap<Char, GestureDecoder.Point>()
@@ -369,6 +371,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val n = grid.rows
         val gap = settings.int(Prefs.KEY_GAP) * d
         stripH = max((if (screenH / d < 500) 34 else 40) * d, 22 * d * labelScale + 8 * d)
+        if (insertStripHeight > 0) stripH = insertStripHeight.toFloat()
         val handleH = 14 * d
         val pad = 4 * d
         val bottomPad = p.bottomPaddingDp * d
@@ -1032,7 +1035,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             highContrast -> palette.key
             pressed -> palette.pressed
             accentBg -> palette.accent
-            KeyText.isLayerKey(code) || code == Keys.BACKSPACE -> palette.functionKey
+            KeyText.isLayerKey(code) || code == Keys.BACKSPACE || code == Keys.INSERT -> palette.functionKey
             else -> palette.key
         }
         fill.alpha = (255 * keyAlpha).toInt()
@@ -1115,6 +1118,15 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val icon = min(r.width(), r.height()) * 0.42f * iconScale
         val a = (255 * alpha).toInt()
         when (code) {
+            Keys.INSERT -> {
+                val cx = r.centerX(); val cy = r.centerY(); val radius = icon * .65f
+                stroke.color = color; stroke.alpha = a; stroke.strokeWidth = 1.75f * density
+                canvas.drawCircle(cx, cy, radius, stroke)
+                canvas.drawPoint(cx - radius * .32f, cy - radius * .22f, stroke)
+                canvas.drawPoint(cx + radius * .32f, cy - radius * .22f, stroke)
+                canvas.drawArc(cx - radius * .42f, cy - radius * .25f, cx + radius * .42f, cy + radius * .55f, 20f, 140f, false, stroke)
+                if (insertStripHeight > 0) { stroke.color = palette.accent; canvas.drawCircle(cx, cy, radius + 4 * density, stroke) }
+            }
             Keys.BACKSPACE -> drawDelete(canvas, r, icon, color, a)
             Keys.ENTER -> enterLabel?.let { drawLabel(canvas, r, it, r.height() * 0.3f * scale, color, a) } ?: drawReturn(canvas, r, icon, color, a)
             Keys.SPACE -> if (multipleLanguages && !editMode) {
@@ -2264,7 +2276,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             val path = Path().apply { addRoundRect(key.rect, radius, radius, Path.Direction.CW); transform(key.matrix) }
             val bounds = RectF().also { path.computeBounds(it, true) }
             val face = key.item.keys.firstOrNull()
-            ThumbnailKey(path, bounds, when (face) { Keys.ENTER -> 2; Keys.ABC, Keys.NUM, Keys.SYM, Keys.BACKSPACE -> 1; else -> 0 })
+            ThumbnailKey(path, bounds, when (face) { Keys.ENTER -> 2; Keys.ABC, Keys.NUM, Keys.SYM, Keys.BACKSPACE, Keys.INSERT -> 1; else -> 0 })
         }
     }
 

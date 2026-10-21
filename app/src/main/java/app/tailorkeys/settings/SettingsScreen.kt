@@ -66,7 +66,7 @@ private val TabIcons = listOf(R.drawable.ic_settings_layout, R.drawable.ic_setti
     R.drawable.ic_settings_look, R.drawable.ic_settings_tune)
 
 @Composable
-fun SettingsScreen(settings: KeyboardSettings, setupStatus: SetupStatus, onSetup: () -> Unit) {
+fun SettingsScreen(settings: KeyboardSettings, setupStatus: SetupStatus, onSetup: () -> Unit, panelRequest: Pair<Long, String>? = null) {
     val context = LocalContext.current
     val state = remember(settings) { SettingsState(context, settings) }
     DisposableEffect(state) {
@@ -90,6 +90,9 @@ fun SettingsScreen(settings: KeyboardSettings, setupStatus: SetupStatus, onSetup
     BackHandler(testEntry != null) { closeTest() }
     val reduced = !ValueAnimator.areAnimatorsEnabled()
     val tab = rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(panelRequest) {
+        panelRequest?.let { closeTest(); state.insertSettingsPage = it.second; tab.intValue = 3 }
+    }
     val listStates = List(Tabs.size) { rememberLazyListState() }
     SharedTransitionLayout {
         CompositionLocalProvider(LocalLayoutSharedScope provides this, LocalLayoutReducedMotion provides reduced,
@@ -166,7 +169,7 @@ private fun SettingsContent(state: SettingsState, setupStatus: SetupStatus, onSe
                     Layout(content = {
                         Tabs.indices.forEach { index ->
                             key(index) {
-                                SettingsTab(index, listStates[index], state, editing,
+                                SettingsTab(index, listStates[index], state, editing, tab.intValue == index,
                                     { editing = !editing }, page, { page = it },
                                     onAbout = { dialog = "about" }, onReset = { dialog = "reset" }, onTry = onTry)
                             }
@@ -236,23 +239,27 @@ private fun BringOptionsIntoView(compact: Boolean, previewHeight: androidx.compo
 }
 
 @Composable
-private fun SettingsTab(index: Int, listState: LazyListState, state: SettingsState, editing: Boolean,
+private fun SettingsTab(index: Int, listState: LazyListState, state: SettingsState, editing: Boolean, active: Boolean,
     onEdit: () -> Unit, page: Boolean, onPage: (Boolean) -> Unit,
     onAbout: () -> Unit, onReset: () -> Unit, onTry: (LayoutEntry) -> Unit) {
     if (index == 0) {
-        LayoutLibraryPage(state, listState, editing, onEdit, onTry)
+        LayoutLibraryPage(state, listState, editing, onEdit, onTry, active)
         return
     }
     val background = MaterialTheme.colorScheme.background
+    val panel = state.insertSettingsPage
+    LaunchedEffect(panel) { if (index == 3) listState.scrollToItem(0) }
+    BackHandler(active && index == 3 && panel != null) { state.insertSettingsPage = null }
     Box(Modifier.fillMaxSize()) {
         LazyColumn(state = listState, modifier = Modifier.fillMaxSize().clipToBounds(),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = if (index == 0) 20.dp else 16.dp,
                 bottom = if (index == 0) 8.dp else 44.dp),
             verticalArrangement = Arrangement.spacedBy(if (index == 0) 16.dp else 12.dp)) {
-            when (index) {
-                1 -> sizeOptions(state, page, onPage)
-                2 -> lookOptions(state)
-                3 -> typingOptions(state, onAbout, onReset)
+            when {
+                index == 1 -> sizeOptions(state, page, onPage)
+                index == 2 -> lookOptions(state)
+                panel != null -> insertPanelOptions(state.settings, panel) { state.insertSettingsPage = null }
+                index == 3 -> typingOptions(state, onAbout, onReset) { state.insertSettingsPage = it }
             }
         }
         if (listState.canScrollBackward) Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(16.dp)

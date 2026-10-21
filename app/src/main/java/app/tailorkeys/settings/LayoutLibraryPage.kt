@@ -43,8 +43,23 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun LayoutLibraryPage(state: SettingsState, listState: LazyListState, editing: Boolean,
-    onEdit: () -> Unit, onTry: (LayoutEntry) -> Unit) {
+    onEdit: () -> Unit, onTry: (LayoutEntry) -> Unit, active: Boolean = true) {
     val entries = state.layoutEntries()
+    val context = LocalContext.current
+    var insertPrompt by remember { mutableStateOf<LayoutEntry?>(null) }
+    LaunchedEffect(active) {
+        if (active && !state.settings.prefs.getBoolean(app.tailorkeys.insert.InsertKeyPrompt.SEEN, false)) {
+            insertPrompt = (listOf(state.selectedLayout()) + entries).firstOrNull { app.tailorkeys.insert.InsertKeyPrompt.shouldShow(false, it.custom, it.grid()) }
+            state.settings.prefs.edit().putBoolean(app.tailorkeys.insert.InsertKeyPrompt.SEEN, true).apply()
+        }
+    }
+    insertPrompt?.let { entry -> AlertDialog(onDismissRequest = { insertPrompt = null },
+        title = { Text("Add the Insert key to ${entry.name}?") },
+        text = { Text("Open emoji, kaomoji, clipboard, notes and voice from a key next to 123. You can move or remove it later.") },
+        confirmButton = { TextButton({ val grid = entry.grid(); if (grid.addInsert()) { state.library.edit(entry.key, grid); if (state.selectedKey == entry.key) state.showSelected() }
+            else android.widget.Toast.makeText(context, "No room for Insert. Remove a key in the editor, then add it.", android.widget.Toast.LENGTH_LONG).show()
+            insertPrompt = null }) { Text("Add") } },
+        dismissButton = { TextButton({ insertPrompt = null }) { Text("Not now") } }) }
     var sheet by remember { mutableStateOf(false) }
     var naming by rememberSaveable { mutableStateOf<String?>(null) }
     var name by rememberSaveable { mutableStateOf("Custom") }
@@ -58,7 +73,6 @@ internal fun LayoutLibraryPage(state: SettingsState, listState: LazyListState, e
     val decoded = remember(code) { if (code.length <= 100_000) KeyGrid.decodeCode(code) else null }
     val imported = decoded?.grid
     val newer = remember(code) { Regex("TK([0-9]+)-").find(code)?.groupValues?.get(1)?.toIntOrNull()?.let { it > 1 } == true }
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     var actionBarHeight by remember { mutableStateOf(88.dp) }
@@ -89,6 +103,11 @@ internal fun LayoutLibraryPage(state: SettingsState, listState: LazyListState, e
         }
     }
     Column(Modifier.fillMaxSize()) {
+        if (editing && state.preview.grid.items.none { app.tailorkeys.layout.Keys.INSERT in it.keys }) TextButton({
+            val grid = KeyGrid.fromJson(state.preview.grid.toJson())!!
+            if (grid.addInsert()) state.preview.replaceGrid(grid)
+            else android.widget.Toast.makeText(context, "No room for Insert. Remove a key first.", android.widget.Toast.LENGTH_LONG).show()
+        }, Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("Add Insert key") }
         LazyColumn(state = listState, modifier = Modifier.weight(1f),
             contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp,
                 bottom = if (importPanel) 16.dp else actionBarHeight + 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

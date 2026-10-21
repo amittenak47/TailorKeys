@@ -10,6 +10,7 @@ import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -24,10 +25,33 @@ class SettingsActivity : ComponentActivity() {
     private var readyUntil = 0L
     private val handler = Handler(Looper.getMainLooper())
     private val hideReady = Runnable { refreshStatus() }
+    private var panelRequest by mutableStateOf<Pair<Long, String>?>(null)
+    private fun routePanel(intent: Intent?) {
+        val page = intent?.getStringExtra("insert_settings_page") ?: return
+        if (page in listOf("Emoji", "Clipboard and notes", "Voice typing")) panelRequest = SystemClock.elapsedRealtimeNanos() to page
+        intent.removeExtra("insert_settings_page")
+    }
+    private val microphone = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private fun requestMicrophone(intent: Intent?) {
+        if (intent?.getBooleanExtra("request_microphone", false) == true) {
+            intent.removeExtra("request_microphone")
+            val permission = android.Manifest.permission.RECORD_AUDIO
+            if (checkSelfPermission(permission) == android.content.pm.PackageManager.PERMISSION_GRANTED) return
+            if (settings.prefs.getBoolean("insert_microphone_requested", false) && !shouldShowRequestPermissionRationale(permission)) {
+                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName")))
+            } else {
+                settings.prefs.edit().putBoolean("insert_microphone_requested", true).apply()
+                microphone.launch(permission)
+            }
+        }
+    }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); routePanel(intent); requestMicrophone(intent) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = KeyboardSettings(this)
+        routePanel(intent)
+        requestMicrophone(intent)
         LayoutLibrary(settings).restoreTrial()
         if (!settings.bool(Prefs.ONBOARDED)) {
             startActivity(Intent(this, OnboardingActivity::class.java))
@@ -42,7 +66,7 @@ class SettingsActivity : ComponentActivity() {
         refreshStatus()
         setContent {
             SettingsTheme {
-                SettingsScreen(settings, setupStatus, ::openSetup)
+                SettingsScreen(settings, setupStatus, ::openSetup, panelRequest)
             }
         }
     }
