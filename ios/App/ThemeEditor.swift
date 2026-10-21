@@ -161,7 +161,8 @@ private struct ThemeEditor: View {
     private var pickerSuggestion: (String, Double)? {
         guard let check = colors.checks.first(where: { !$0.passes && $0.channels.contains(channel) }) else { return nil }
         let against = channel == check.fixChannel || channel == 6 ? check.background : colors.values[check.fixChannel]
-        let suggestion = ThemeColors.closestReadable(colors.values[channel], against, channel == 6 ? 3 : check.target)
+        let foreground = channel == 6 ? String(format: "#%06X", (ThemeColors.parse(colors.keyOutline, alpha: true) ?? 0) & 0xFFFFFF) : colors.values[channel]
+        let suggestion = ThemeColors.closestReadable(foreground, against, channel == 6 ? 3 : check.target)
         return (suggestion, ThemeColors.contrast(suggestion, against))
     }
 }

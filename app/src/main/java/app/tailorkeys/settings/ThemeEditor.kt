@@ -276,7 +276,8 @@ private fun ThemeColorPicker(label: String, color: Int, resetColor: Int, suggest
 private fun ThemeColors.pickerSuggestion(channel: Int): Pair<Int, Double>? = remember(this, channel) {
     checks().firstOrNull { !it.passes && channel in it.channels }?.let { check ->
         val against = if (channel == check.fixChannel || channel == 6) check.background else values()[check.fixChannel]
-        val suggestion = closestReadable(values()[channel], against, if (channel == 6) 3.0 else check.target)
+        val foreground = if (channel == 6) values()[channel] or 0xFF000000.toInt() else values()[channel]
+        val suggestion = closestReadable(foreground, against, if (channel == 6) 3.0 else check.target)
         suggestion to contrastRatio(suggestion, against)
     }
 }

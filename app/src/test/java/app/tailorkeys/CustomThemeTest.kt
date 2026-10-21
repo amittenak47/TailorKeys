@@ -53,7 +53,8 @@ class CustomThemeTest {
         assertEquals(1.0, contrastRatio(gray, gray), .00001)
         assertEquals(4.478, contrastRatio(gray, white), .001)
         assertEquals(contrastRatio(gray, white), contrastRatio(white, gray), .00001)
-        assertTrue(ThemeColors.from(Palette.of(ThemeName.WARM)).checks().any { !it.passes })
+        val warm = ThemeColors.from(Palette.of(ThemeName.WARM))
+        assertFalse(warm.copy(text = warm.key).checks().first().passes)
     }
     @Test fun fiveChecksUseTheirOwnTargetsAndCompositeTheOutline() {
         val colors = ThemeColors.from(Palette.of(ThemeName.WARM))

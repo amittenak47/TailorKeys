@@ -112,7 +112,7 @@ private fun themeRgb(hue: Double, saturation: Double, light: Double): Int {
     val chroma = (1 - kotlin.math.abs(2 * light - 1)) * saturation
     val x = chroma * (1 - kotlin.math.abs((hue / 60) % 2 - 1)); val m = light - chroma / 2
     val rgb = when ((hue / 60).toInt()) { 0 -> doubleArrayOf(chroma, x, 0.0); 1 -> doubleArrayOf(x, chroma, 0.0); 2 -> doubleArrayOf(0.0, chroma, x); 3 -> doubleArrayOf(0.0, x, chroma); 4 -> doubleArrayOf(x, 0.0, chroma); else -> doubleArrayOf(chroma, 0.0, x) }
-    fun channel(i: Int) = kotlin.math.round((rgb[i] + m) * 255).toInt().coerceIn(0, 255)
+    fun channel(i: Int) = kotlin.math.floor((rgb[i] + m) * 255 + .5).toInt().coerceIn(0, 255)
     return 0xFF000000.toInt() or (channel(0) shl 16) or (channel(1) shl 8) or channel(2)
 }
 
