@@ -53,8 +53,8 @@ internal class CursorPointer(
             for (p in zone.right) if (p.y > y - r && p.y < y + r) right = min(right, p.x)
             zone.excluded?.let {
                 if (y + r > it.top && y - r < it.bottom) {
-                    if (pressX < (it.left + it.right) / 2) right = min(right, it.left)
-                    else left = max(left, it.right)
+                    if (pressX < (it.left + it.right) / 2) right = min(right, it.left - .001f)
+                    else left = max(left, it.right + .001f)
                 }
             }
             minX = left + r

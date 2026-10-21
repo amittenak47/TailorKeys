@@ -91,8 +91,8 @@ final class CursorPointer {
             for p in zone.left where p.y > y - r && p.y < y + r { left = max(left, p.x) }
             for p in zone.right where p.y > y - r && p.y < y + r { right = min(right, p.x) }
             if let excluded = zone.excluded, y + r > excluded.minY, y - r < excluded.maxY {
-                if pressX < excluded.midX { right = min(right, excluded.minX) }
-                else { left = max(left, excluded.maxX) }
+                if pressX < excluded.midX { right = min(right, excluded.minX - 0.001) }
+                else { left = max(left, excluded.maxX + 0.001) }
             }
             minX = left + r; maxX = right - r
             return minX <= maxX
