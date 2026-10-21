@@ -16,7 +16,11 @@ data class Palette(
     val hint: Int,
     val accent: Int,
     val onAccent: Int,
+    val keyOutline: Int = 0,
 ) {
+    /** The strip uses background. Even an unreadable custom text colour must leave the gear visible. */
+    val gear: Int get() = listOf(hint, text, 0xFF000000.toInt(), 0xFFFFFFFF.toInt())
+        .map { it or 0xFF000000.toInt() }.first { contrastRatio(it, background) >= 3.0 }
     /** Text uses a contrast-safe variant; fills and selection outlines retain the real accent. */
     val smallAccent: Int get() = when (accent) {
         0xFFC2562B.toInt() -> 0xFF9C4A28.toInt()
@@ -39,7 +43,7 @@ data class Palette(
 
         fun of(name: ThemeName, night: Boolean = false): Palette {
             return when (if (name == ThemeName.SYSTEM) (if (night) ThemeName.DARK else ThemeName.LIGHT) else name) {
-                ThemeName.HIGH_CONTRAST -> Palette(c(0xFF000000), c(0xFF000000), c(0xFF000000), c(0xFF000000), c(0xFFFFFFFF), c(0xFFFFFFFF), c(0xFFFFD400), c(0xFF000000))
+                ThemeName.HIGH_CONTRAST -> Palette(c(0xFF000000), c(0xFF000000), c(0xFF000000), c(0xFF000000), c(0xFFFFFFFF), c(0xFFFFFFFF), c(0xFFFFD400), c(0xFF000000), c(0xFFFFFFFF))
                 ThemeName.DARK -> Palette(c(0xFF1B1C1F), c(0xFF3A3B40), c(0xFF2A2B30), c(0xFF5A5C63), c(0xFFF1F1F3), c(0xFF9A9BA2), c(0xFF5B8DEF), c(0xFFFFFFFF))
                 ThemeName.MIDNIGHT -> Palette(c(0xFF000000), c(0xFF17181B), c(0xFF0E0F11), c(0xFF34363C), c(0xFFEDEDEF), c(0xFF7C7E86), c(0xFF7AA2FF), c(0xFF000000))
                 ThemeName.WARM -> Palette(c(0xFFE9E2D6), c(0xFFFBF8F2), c(0xFFD3C9B8), c(0xFFC7BBA6), c(0xFF2B2620), c(0xFF7A6F5F), c(0xFFC2562B), c(0xFFFFFFFF))
@@ -52,23 +56,30 @@ data class Palette(
 }
 
 
-/** Six opaque sRGB colours. Hex strings keep the JSON identical on Android and iOS. */
-data class ThemeColors(val background: Int, val key: Int, val functionKey: Int, val text: Int, val accent: Int, val pressed: Int) {
+/** Opaque sRGB fills plus an optional ARGB key outline, shared with iOS. */
+data class ThemeColors(val background: Int, val key: Int, val functionKey: Int, val text: Int, val accent: Int, val pressed: Int, val keyOutline: Int = 0) {
     fun palette() = Palette(background, key, functionKey, pressed, text, text, accent,
-        if (contrastRatio(0xFF000000.toInt(), accent) >= contrastRatio(0xFFFFFFFF.toInt(), accent)) 0xFF000000.toInt() else 0xFFFFFFFF.toInt())
-    fun values() = listOf(background, key, functionKey, text, accent, pressed)
+        if (contrastRatio(0xFF000000.toInt(), accent) >= contrastRatio(0xFFFFFFFF.toInt(), accent)) 0xFF000000.toInt() else 0xFFFFFFFF.toInt(), keyOutline)
+    fun values() = listOf(background, key, functionKey, text, accent, pressed, keyOutline)
     fun replacing(index: Int, value: Int): ThemeColors {
         val v = values().toMutableList().apply { this[index] = value }
-        return ThemeColors(v[0], v[1], v[2], v[3], v[4], v[5])
+        return ThemeColors(v[0], v[1], v[2], v[3], v[4], v[5], v[6])
     }
     fun checks() = listOf("Text on keys" to contrastRatio(text, key), "Text on background" to contrastRatio(text, background),
         "Text on function keys" to contrastRatio(text, functionKey), "Accent on keys" to contrastRatio(accent, key))
+    val keysBlend: Boolean get() = contrastRatio(key, background) < 1.5 &&
+        contrastRatio(compositeOn(keyOutline, background), background) < 1.5
     companion object {
-        val labels = listOf("Background", "Keys", "Function keys", "Text", "Accent", "Pressed")
-        val keys = listOf("background", "key", "functionKey", "text", "accent", "pressed")
-        fun from(p: Palette) = ThemeColors(p.background, p.key, p.functionKey, p.text, p.accent, p.pressed)
-        fun parseHex(value: String): Int? = value.removePrefix("#").takeIf { it.matches(Regex("[0-9a-fA-F]{6}")) }?.toLongOrNull(16)?.toInt()?.or(0xFF000000.toInt())
-        fun hex(value: Int) = "#%06X".format(java.util.Locale.ROOT, value and 0xFFFFFF)
+        val labels = listOf("Background", "Keys", "Function keys", "Text", "Accent", "Pressed", "Key outline")
+        val keys = listOf("background", "key", "functionKey", "text", "accent", "pressed", "keyOutline")
+        fun from(p: Palette) = ThemeColors(p.background, p.key, p.functionKey, p.text, p.accent, p.pressed, p.keyOutline)
+        fun parseHex(value: String, alpha: Boolean = false): Int? {
+            val hex = value.removePrefix("#")
+            if (!hex.matches(Regex(if (alpha) "(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})" else "[0-9a-fA-F]{6}"))) return null
+            return hex.toLong(16).toInt().let { if (hex.length == 6) it or 0xFF000000.toInt() else it }
+        }
+        fun hex(value: Int) = if (value ushr 24 == 255) "#%06X".format(java.util.Locale.ROOT, value and 0xFFFFFF)
+            else "#%08X".format(java.util.Locale.ROOT, value)
     }
 }
 
@@ -83,12 +94,20 @@ data class CustomTheme(val id: String, val name: String, val colors: ThemeColors
             val array = org.json.JSONArray(json ?: "[]")
             (0 until array.length()).mapNotNull { i -> runCatching {
                 val item = array.getJSONObject(i); val colors = item.getJSONObject("colors")
-                val v = ThemeColors.keys.map { requireNotNull(ThemeColors.parseHex(colors.getString(it))) }
+                val v = ThemeColors.keys.map { key -> if (key == "keyOutline" && !colors.has(key)) 0
+                    else requireNotNull(ThemeColors.parseHex(colors.getString(key), alpha = key == "keyOutline")) }
                 val id = item.getString("id").also { require(it.isNotBlank()) }
-                CustomTheme(id, item.getString("name").trim().take(24).ifEmpty { "Custom" }, ThemeColors(v[0], v[1], v[2], v[3], v[4], v[5]))
+                CustomTheme(id, item.getString("name").trim().take(24).ifEmpty { "Custom" }, ThemeColors(v[0], v[1], v[2], v[3], v[4], v[5], v[6]))
             }.getOrNull() }.distinctBy { it.id }
         }.getOrDefault(emptyList())
     }
+}
+
+/** Composite a possibly transparent outline before measuring its visible contrast. */
+fun compositeOn(color: Int, background: Int): Int {
+    val alpha = (color ushr 24) / 255.0
+    fun channel(shift: Int) = ((((color ushr shift) and 255) * alpha + ((background ushr shift) and 255) * (1 - alpha)).toInt()) shl shift
+    return 0xFF000000.toInt() or channel(16) or channel(8) or channel(0)
 }
 
 /** WCAG 2 relative luminance after sRGB linearisation; opaque colours only. */

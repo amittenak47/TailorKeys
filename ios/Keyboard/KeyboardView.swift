@@ -428,8 +428,8 @@ final class KeyboardView: UIView {
                 (code == Keys.enter ? palette.accent : ((KeyText.isLayerKey(code) || code == Keys.backspace || code == Keys.insert) ? palette.functionKey : palette.key)).setFill()
                 ctx.addPath(key.shape.body)
                 ctx.fillPath()
-                if highContrast {
-                    palette.text.setStroke()
+                if palette.keyOutline.cgColor.alpha > 0 {
+                    palette.keyOutline.setStroke()
                     ctx.addPath(key.shape.outline)
                     ctx.setLineWidth(2)
                     ctx.strokePath()
@@ -1139,8 +1139,8 @@ final class KeyboardView: UIView {
             palette.accent.setFill(); ctx.addPath(shape.body); ctx.fillPath()
         }
         ctx.setAlpha(keyAlpha)
-        if highContrast {
-            palette.text.setStroke(); ctx.addPath(shape.outline); ctx.setLineWidth(2); ctx.strokePath()
+        if palette.keyOutline.cgColor.alpha > 0 {
+            palette.keyOutline.setStroke(); ctx.addPath(shape.outline); ctx.setLineWidth(2); ctx.strokePath()
         }
         let highlighted = accentBg || oneShot || pressed || chord || (viewPrefs.keyTint && !editMode && weight > 0.1)
         if (editMode && reducedMotion) || (highContrast && highlighted) {
@@ -1394,7 +1394,7 @@ final class KeyboardView: UIView {
         ctx.restoreGState()
     }
 
-    private func drawGear() { drawSymbol("gearshape", in: gearRect, color: palette.hint) }
+    private func drawGear() { drawSymbol("gearshape", in: gearRect, color: palette.gear) }
 
     private func drawToolbar() {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }

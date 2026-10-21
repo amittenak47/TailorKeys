@@ -240,7 +240,7 @@ class QuickOptions(
             box.contentDescription = state.label
             box.isSelected = state.inUse
             bg.setColor(p.key); bg.cornerRadius = radius
-            bg.setStroke(dp(state.outlineDp), if (state.inUse) p.accent else if (settings.theme() == ThemeName.HIGH_CONTRAST) p.text else android.graphics.Color.TRANSPARENT)
+            bg.setStroke(dp(state.outlineDp), if (state.inUse) p.accent else p.keyOutline)
             check.visibility = if (state.inUse) View.VISIBLE else View.INVISIBLE
             check.setTextColor(p.onAccent)
             check.background = rounded(p.accent, dp(12).toFloat())
@@ -338,7 +338,10 @@ class QuickOptions(
         pages.addView(review, FrameLayout.LayoutParams(-1, -1))
     }
 
-    private fun rounded(color: Int, radius: Float) = GradientDrawable().apply { setColor(color); cornerRadius = radius }
+    private fun rounded(color: Int, radius: Float) = GradientDrawable().apply {
+        setColor(color); cornerRadius = radius
+        setStroke(dp(1), palette?.keyOutline ?: 0)
+    }
 
     fun updateStripHeight() {
         val h = max(dp(if (measuredWidth / d >= 600) 56 else 48), stripHeight())
@@ -476,7 +479,7 @@ class QuickOptions(
                 t.rendered = value
             }
             t.background.setColor(p.key); t.background.cornerRadius = next.radius * d
-            if (next.theme == ThemeName.HIGH_CONTRAST) t.background.setStroke(dp(1), p.text) else t.background.setStroke(0, p.key)
+            t.background.setStroke(dp(1), p.keyOutline)
             val color = if (value.on) ink else p.text
             t.iconView.setColorFilter(color); t.glyphView.setTextColor(color); t.labelView.setTextColor(color)
             t.stateView.setTextColor(if (value.on) ink else p.hint)

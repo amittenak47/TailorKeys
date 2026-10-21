@@ -54,8 +54,8 @@ internal class ThumbnailArtwork(private val keys: List<KeyboardView.ThumbnailKey
             paint.style = Paint.Style.FILL
             paint.color = when (key.kind) { 2 -> palette.accent; 1 -> palette.functionKey; else -> palette.key }
             canvas.drawPath(key.path, paint)
-            if (palette.key == palette.background) {
-                paint.color = palette.text
+            if (palette.keyOutline ushr 24 != 0) {
+                paint.color = palette.keyOutline
                 paint.style = Paint.Style.STROKE
                 paint.strokeWidth = 1.5f / scale
                 canvas.drawPath(key.path, paint)

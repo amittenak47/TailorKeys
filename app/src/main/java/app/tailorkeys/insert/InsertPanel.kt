@@ -13,6 +13,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.*
 import app.tailorkeys.KeyboardSettings
+import app.tailorkeys.CustomTheme
 import app.tailorkeys.Palette
 import app.tailorkeys.Prefs
 import app.tailorkeys.SettingsActivity
@@ -28,7 +29,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
     private val d = resources.displayMetrics.density
     private fun dp(n: Int) = (n * d).toInt()
     private val tablet get() = resources.configuration.smallestScreenWidthDp >= 600 && (width == 0 || width / d >= 600)
-    private var palette = Palette.of(context, settings.theme())
+    private var palette = Palette.of(context, settings)
     private val body = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val top = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
     private val categories = LinearLayout(context)
@@ -122,7 +123,10 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         return if (supported(toned.text)) toned else entry
     }
     private fun label(text: String, size: Float = 14f) = TextView(context).apply { this.text = text; textSize = size; setTextColor(palette.text); gravity = Gravity.CENTER_VERTICAL; minimumHeight = dp(48) }
-    private fun shape(color: Int, stroke: Boolean = false) = GradientDrawable().apply { setColor(color); cornerRadius = dp(settings.int(Prefs.CORNER_RADIUS)).toFloat(); if (stroke) setStroke(dp(2), palette.accent) }
+    private fun shape(color: Int, stroke: Boolean = false) = GradientDrawable().apply {
+        setColor(color); cornerRadius = dp(settings.int(Prefs.CORNER_RADIUS)).toFloat()
+        setStroke(dp(if (stroke) 2 else 1), if (stroke) palette.accent else palette.keyOutline)
+    }
     private fun button(text: String, description: String = text, selected: Boolean = false, action: () -> Unit) = label(text).apply {
         contentDescription = description; gravity = Gravity.CENTER; setPadding(dp(8), 0, dp(8), 0)
         minimumWidth = dp(48)
@@ -155,10 +159,10 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
     fun hide() { voice.cancel(); listening = false; session++; toneLayer.visibility = GONE; if (editor == "Note") retainDraft(); restoreKeys(); editor = null; field = null; typing(false, 0); visibility = INVISIBLE; importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
     fun refresh(force: Boolean = false) {
         if (visibility != VISIBLE) return
-        val style = "${settings.theme()}:${resources.configuration.uiMode}:${settings.int(Prefs.CORNER_RADIUS)}:" +
+        val style = "${settings.themeId()}:${CustomTheme.encode(settings.customThemes())}:${resources.configuration.uiMode}:${settings.int(Prefs.CORNER_RADIUS)}:" +
             listOf(InsertPrefs.TONE, InsertPrefs.HISTORY, InsertPrefs.RECENTS, InsertPrefs.KEEP, InsertPrefs.VOICE, InsertPrefs.DEVICE_ONLY).joinToString { repository.prefs.all[it].toString() }
         if (!force && lastStyle == style) return
-        lastStyle = style; palette = Palette.of(context, settings.theme())
+        lastStyle = style; palette = Palette.of(context, settings)
         if (editor != null) renderEditor() else renderPanel()
     }
     private fun clearBody() { body.removeAllViews(); top.removeAllViews(); categories.removeAllViews(); pages.removeAllViews(); footer.removeAllViews(); sectionButtons.clear(); categoryButtons.clear(); toneLayer.visibility = GONE }

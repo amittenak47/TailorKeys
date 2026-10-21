@@ -67,7 +67,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
     private var toneChoice = -1
     private var expiry: Timer?
     private var footer: UIStackView?
-    private var palette: Palette { Palette.of(settings.theme, dark: traitCollection.userInterfaceStyle == .dark) }
+    private var palette: Palette { Palette.of(settings, dark: traitCollection.userInterfaceStyle == .dark) }
     private var tablet: Bool { UIDevice.current.userInterfaceIdiom == .pad && (bounds.width == 0 || bounds.width >= 600) }
     var acceptsText: Bool { mode != nil && !isHidden }
     var session = 0
@@ -112,7 +112,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
     func hide() { retainDraft(); restoreKeys(); expiry?.invalidate(); expiry = nil; mode = nil; session += 1; onTyping?(false, 0); isHidden = true; accessibilityElementsHidden = true; tonePopover?.removeFromSuperview() }
     func refresh() { if !isHidden { if mode == nil { if builtStyle != signature { render() } } else { renderEditor() } } }
     private var signature: String {
-        "\(settings.theme.rawValue):\(traitCollection.userInterfaceStyle.rawValue):\(settings.int(Prefs.cornerRadius)):\(repository.prefs.integer(forKey: InsertPrefs.tone)):\(repository.prefs.bool(forKey: InsertPrefs.history)):\(repository.keep.rawValue):\(repository.recent("Emoji")):\(repository.recent("Kaomoji")):\(repository.prefs.data(forKey: "insert_clips")?.hashValue ?? 0):\(fullAccess())"
+        "\(settings.themeID):\(CustomTheme.encode(settings.customThemes)):\(traitCollection.userInterfaceStyle.rawValue):\(settings.int(Prefs.cornerRadius)):\(repository.prefs.integer(forKey: InsertPrefs.tone)):\(repository.prefs.bool(forKey: InsertPrefs.history)):\(repository.keep.rawValue):\(repository.prefs.boolDefault(InsertPrefs.recents, true)):\(repository.recent("Emoji")):\(repository.recent("Kaomoji")):\(repository.prefs.data(forKey: "insert_clips")?.hashValue ?? 0):\(fullAccess())"
     }
     private func reset() { main.arrangedSubviews.forEach { main.removeArrangedSubview($0); $0.removeFromSuperview() }; tonePopover?.removeFromSuperview(); tonePopover = nil; categoryButtons = [:]; setNeedsLayout() }
     private func stack(_ axis: NSLayoutConstraint.Axis = .horizontal) -> UIStackView { let s = UIStackView(); s.axis = axis; s.spacing = 4; return s }
@@ -122,7 +122,8 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         b.setTitleColor(selected ? palette.smallAccent : palette.text, for: .normal)
         b.tintColor = selected ? palette.smallAccent : palette.text
         b.backgroundColor = selected ? palette.key : palette.functionKey
-        b.layer.cornerRadius = CGFloat(settings.int(Prefs.cornerRadius)); b.layer.borderWidth = selected ? 2 : 0; b.layer.borderColor = palette.accent.cgColor
+        b.layer.cornerRadius = CGFloat(settings.int(Prefs.cornerRadius)); b.layer.borderWidth = selected ? 2 : 1
+        b.layer.borderColor = (selected ? palette.accent : palette.keyOutline).cgColor
         if selected { b.accessibilityTraits.insert(.selected) }
         b.contentEdgeInsets = UIEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
         b.heightAnchor.constraint(greaterThanOrEqualToConstant: 48).isActive = true
@@ -224,6 +225,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         let entry = section == "Emoji" ? shown(symbols[indexPath.item]) : symbols[indexPath.item]
         cell.text.text = entry.text.isEmpty ? entry.name : entry.text; cell.text.font = .systemFont(ofSize: entry.text.isEmpty ? 12 : section == "Emoji" ? 28 : 16); cell.text.textColor = palette.text
         cell.backgroundColor = section == "Emoji" ? .clear : palette.key; cell.layer.cornerRadius = CGFloat(settings.int(Prefs.cornerRadius))
+        cell.layer.borderWidth = section == "Emoji" || entry.text.isEmpty ? 0 : 1; cell.layer.borderColor = palette.keyOutline.cgColor
         cell.isAccessibilityElement = !entry.text.isEmpty || !entry.name.isEmpty; cell.accessibilityLabel = entry.name; cell.accessibilityTraits = entry.text.isEmpty ? .header : .button
         cell.accessibilityCustomActions = entry.text.isEmpty || section != "Emoji" ? nil : InsertAssets.emoji.variants(entry.text).filter { InsertAssets.hasGlyph($0.text) }.map { e in UIAccessibilityCustomAction(name: e.name) { [weak self] _ in self?.use(e); return true } }
         return cell

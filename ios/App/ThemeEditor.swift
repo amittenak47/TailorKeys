@@ -7,7 +7,7 @@ struct CustomThemeSection: View {
     @State private var deleting = false
     private var prefs: KeyboardSettings { model.settings }
     private var selected: CustomTheme? { prefs.customThemes.first { $0.selection == prefs.themeID } }
-    private let columns = [GridItem(.adaptive(minimum: 64), spacing: 8)]
+    private let columns = [GridItem(.adaptive(minimum: 104), spacing: 8)]
 
     var body: some View {
         Section {
@@ -28,7 +28,7 @@ struct CustomThemeSection: View {
                     }
                 }
                 Button { editing = CustomTheme(id: UUID().uuidString, name: "", colors: ThemeColors(Palette.of(prefs, dark: scheme == .dark))) } label: {
-                    VStack { Image(systemName: "plus").frame(width: 44, height: 44).overlay(RoundedRectangle(cornerRadius: 14).stroke(style: StrokeStyle(lineWidth: 1, dash: [3]))); Text("Create theme").font(.caption) }
+                    VStack { Image(systemName: "plus").frame(width: 44, height: 44).overlay(RoundedRectangle(cornerRadius: 14).stroke(style: StrokeStyle(lineWidth: 1, dash: [3]))); Text("Create theme").font(.caption).lineLimit(1).fixedSize(horizontal: true, vertical: false) }
                 }.buttonStyle(.plain).foregroundColor(AppStyle.accent).frame(minHeight: 76)
             }.listRowSeparator(.hidden)
             if let selected = selected {
@@ -54,10 +54,11 @@ struct CustomThemeSection: View {
         Button(action: action) {
             VStack(spacing: 5) {
                 HStack(spacing: 4) {
-                    RoundedRectangle(cornerRadius: 3).fill(Color(palette.key)).frame(width: 14, height: 18).overlay(RoundedRectangle(cornerRadius: 3).stroke(palette.key.isEqual(palette.background) ? Color(palette.text) : Color.clear, lineWidth: 1))
-                    RoundedRectangle(cornerRadius: 3).fill(Color(palette.functionKey)).frame(width: 14, height: 18).overlay(RoundedRectangle(cornerRadius: 3).stroke(palette.key.isEqual(palette.background) ? Color(palette.text) : Color.clear, lineWidth: 1))
+                    RoundedRectangle(cornerRadius: 3).fill(Color(palette.key)).frame(width: 14, height: 18).overlay(RoundedRectangle(cornerRadius: 3).stroke(Color(palette.keyOutline), lineWidth: 1))
+                    RoundedRectangle(cornerRadius: 3).fill(Color(palette.functionKey)).frame(width: 14, height: 18).overlay(RoundedRectangle(cornerRadius: 3).stroke(Color(palette.keyOutline), lineWidth: 1))
                 }.frame(width: 46, height: 46).background(RoundedRectangle(cornerRadius: 14).fill(Color(palette.background)))
-                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(selected ? AppStyle.accent : Color.clear, lineWidth: 2))
+                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color(UIColor.separator), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: 17).stroke(selected ? AppStyle.accent : Color.clear, lineWidth: 2).padding(-3))
                     .overlay(alignment: .topTrailing) { if selected { Image(systemName: "checkmark.circle.fill").font(.caption).foregroundColor(AppStyle.accent).background(Circle().fill(Color.white)) } }
                 Text(name).font(.system(size: 11, weight: selected ? .bold : .regular)).multilineTextAlignment(.center)
             }.frame(maxWidth: .infinity, minHeight: 76)
@@ -139,7 +140,7 @@ private struct ThemeEditor: View {
         }
     }
     private var colorPicker: some View {
-        ThemeColorPicker(label: ThemeColors.labels[channel], hex: Binding(get: { colors.values[channel] }, set: { colors = colors.replacing(channel, with: $0) })).id(channel)
+        ThemeColorPicker(label: ThemeColors.labels[channel], hex: Binding(get: { colors.values[channel] }, set: { colors = colors.replacing(channel, with: $0) }), allowTransparent: channel == 6).id(channel)
     }
 }
 
@@ -148,6 +149,7 @@ private struct Readability: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Readability").font(.headline)
+            if colors.keysBlend { Text("Keys blend into the background").font(.caption.bold()).foregroundColor(.red) }
             ForEach(colors.checks.indices, id: \.self) { i in
                 let check = colors.checks[i]
                 HStack(alignment: .top) {
@@ -164,6 +166,7 @@ private struct Readability: View {
 private struct ThemeColorPicker: View {
     let label: String
     @Binding var hex: String
+    var allowTransparent = false
     @State private var entry = ""
     @State private var hue = 0.0
     @State private var saturation = 0.0
@@ -183,14 +186,19 @@ private struct ThemeColorPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(label + " colour").font(.headline)
+            if allowTransparent {
+                Toggle("Show key outline", isOn: Binding(get: { ThemeColors.uiColor(hex).cgColor.alpha > 0 }, set: { enabled in
+                    if enabled { update(hue, saturation, brightness) } else { hex = "#00000000" }
+                }))
+            }
             TextField("#RRGGBB", text: $entry).textFieldStyle(.roundedBorder).textInputAutocapitalization(.characters).disableAutocorrection(true)
-                .accessibilityLabel("Hex colour").onChange(of: entry) { if let rgb = ThemeColors.parse($0) { hex = String(format: "#%06X", rgb) } }
+                .accessibilityLabel("Hex colour").onChange(of: entry) { if let rgb = ThemeColors.parse($0, alpha: allowTransparent) { hex = String(format: $0.count == 9 ? "#%08X" : "#%06X", rgb) } }
                 .onAppear { entry = hex; syncHSV() }.onChange(of: hex) {
-                    if ThemeColors.parse(entry) != ThemeColors.parse($0) { entry = $0 }
+                    if ThemeColors.parse(entry, alpha: allowTransparent) != ThemeColors.parse($0, alpha: allowTransparent) { entry = $0 }
                     let current = ThemeColors(Palette(currentColor, currentColor, currentColor, currentColor, currentColor, currentColor, currentColor, currentColor)).text
-                    if ThemeColors.parse(current) != ThemeColors.parse($0) { syncHSV() }
+                    if ThemeColors.parse(current, alpha: allowTransparent) != ThemeColors.parse($0, alpha: allowTransparent) { syncHSV() }
                 }
-            if ThemeColors.parse(entry) == nil { Text("Enter six hexadecimal digits.").font(.caption).foregroundColor(.red) }
+            if ThemeColors.parse(entry, alpha: allowTransparent) == nil { Text(allowTransparent ? "Enter six RGB or eight ARGB hexadecimal digits." : "Enter six hexadecimal digits.").font(.caption).foregroundColor(.red) }
             GeometryReader { geometry in
                 ZStack {
                     LinearGradient(colors: [.white, Color(hue: hsv.0, saturation: 1, brightness: 1)], startPoint: .leading, endPoint: .trailing)

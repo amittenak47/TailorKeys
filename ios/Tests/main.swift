@@ -713,11 +713,20 @@ check(zip(branchOutput, independentOutput).allSatisfy { abs($0.0 - $0.1) < 0.000
 check(liveBeforeBranch == liveAfterBranch, "phrase scoring advanced live state")
 
 
-// Custom themes share Android's opaque hex JSON and retain identity through saved layouts.
+// Custom themes share Android's RGB/ARGB JSON and retain identity through saved layouts.
 do {
     let colors = ThemeColors(background: "#E9E2D6", key: "#FBF8F2", functionKey: "#D3C9B8", text: "#2B2620", accent: "#C2562B", pressed: "#C7BBA6")
     let theme = CustomTheme(id: "sand", name: "Sand", colors: colors)
     check(CustomTheme.decode(CustomTheme.encode([theme])) == [theme], "custom theme JSON did not round trip")
+    let outlined = CustomTheme(id: "outlined", name: "Outlined", colors: colors.replacing(6, with: "#40FFFFFF"))
+    check(CustomTheme.decode(CustomTheme.encode([outlined])) == [outlined], "outline alpha did not round trip")
+    var legacyObject = try! JSONSerialization.jsonObject(with: Data(CustomTheme.encode([theme]).utf8)) as! [[String: Any]]
+    var legacyColors = legacyObject[0]["colors"] as! [String: Any]; legacyColors.removeValue(forKey: "keyOutline"); legacyObject[0]["colors"] = legacyColors
+    let legacy = String(decoding: try! JSONSerialization.data(withJSONObject: legacyObject), as: UTF8.self)
+    check(CustomTheme.decode(legacy).first?.colors.keyOutline == "#00000000", "legacy theme outline must be transparent")
+    let blackKeys = ThemeColors(background: "#000000", key: "#000000", functionKey: "#000000", text: "#FFFFFF", accent: "#FFD400", pressed: "#000000")
+    check(blackKeys.keysBlend && blackKeys.replacing(6, with: "#FF101010").keysBlend && blackKeys.replacing(6, with: "#10FFFFFF").keysBlend, "invisible outlines must warn")
+    check(!blackKeys.replacing(6, with: "#FFFFFF").keysBlend, "visible outlines should prevent blend warning")
     check(CustomTheme.decode("broken").isEmpty, "invalid theme JSON accepted")
     check(abs(ThemeColors.contrast("#000000", "#FFFFFF") - 21) < 0.00001, "WCAG endpoints incorrect")
     check(abs(ThemeColors.contrast("#777777", "#FFFFFF") - 4.478) < 0.001, "WCAG sRGB linearisation incorrect")
@@ -727,6 +736,10 @@ do {
     let settings = KeyboardSettings(tablet: true, store: defaults)
     settings.saveTheme(theme)
     check(settings.themeID == "custom:sand" && settings.customThemes == [theme], "custom selection not stored")
+    settings.theme = .highContrast; settings.cycleQuickTheme()
+    check(settings.themeID == theme.selection, "quick theme cycle skipped custom themes")
+    settings.cycleQuickTheme(); check(settings.theme == .system, "quick theme cycle did not wrap")
+    settings.themeID = theme.selection
     let snapshot = settings.layoutSettings()
     check(snapshot[Prefs.theme] as? String == "custom:sand", "saved layout lost custom theme id")
     settings.deleteTheme(theme.id)

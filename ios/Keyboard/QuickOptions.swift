@@ -282,7 +282,10 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
         editButton.tintColor = p.text
         heading.textColor = p.text; message.textColor = p.text
         let radius = CGFloat(settings.int(Prefs.cornerRadius))
-        for b in [editButton, newButton, cancel] { b.backgroundColor = p.key; b.layer.cornerRadius = radius }
+        for b in [editButton, newButton, cancel] {
+            b.backgroundColor = p.key; b.layer.cornerRadius = radius
+            b.layer.borderWidth = 1; b.layer.borderColor = p.keyOutline.cgColor
+        }
         confirmBox.backgroundColor = p.key; confirmBox.layer.cornerRadius = radius
         confirmTitle.textColor = p.text; confirmText.textColor = p.hint; cancel.tintColor = p.text
         saveContinue.backgroundColor = p.accent; saveContinue.tintColor = p.onAccent; saveContinue.layer.cornerRadius = radius
@@ -310,7 +313,7 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
                 card.backgroundColor = p.key
                 card.layer.cornerRadius = radius
                 card.layer.borderWidth = CGFloat(state.outlineWidth)
-                card.layer.borderColor = (state.inUse ? p.accent : settings.theme == .highContrast ? p.text : .clear).cgColor
+                card.layer.borderColor = (state.inUse ? p.accent : p.keyOutline).cgColor
                 card.check.isHidden = !state.inUse
                 card.check.backgroundColor = p.accent; card.check.textColor = p.onAccent
                 card.unsaved.isHidden = !choice.isDraft
@@ -347,7 +350,7 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
             tile.icon.tintColor = ink; tile.title.textColor = ink; tile.glyph.textColor = ink
             tile.state.textColor = on ? p.smallAccent : p.hint
             tile.backgroundColor = p.key; tile.layer.cornerRadius = radius
-            tile.layer.borderWidth = settings.theme == .highContrast ? 1 : 0; tile.layer.borderColor = p.text.cgColor
+            tile.layer.borderWidth = 1; tile.layer.borderColor = p.keyOutline.cgColor
             tile.isEnabled = index != 4 || settings.languages.count > 1
             tile.alpha = tile.isEnabled ? 1 : 0.45
             tile.accessibilityLabel = tile.title.text

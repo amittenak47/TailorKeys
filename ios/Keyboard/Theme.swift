@@ -24,6 +24,14 @@ struct Palette {
     let hint: UIColor
     let accent: UIColor
     let onAccent: UIColor
+    let keyOutline: UIColor
+
+    var gear: UIColor {
+        let bg = ThemeColors(self).background
+        return [hint, text, .black, .white].map { $0.withAlphaComponent(1) }.first {
+            ThemeColors.contrast(ThemeColors(Palette($0, $0, $0, $0, $0, $0, $0, $0)).text, bg) >= 3
+        }!
+    }
 
     var smallAccent: UIColor {
         if accent.isEqual(Self.hex(0xC2562B)) { return Self.hex(0x9C4A28) }
@@ -41,7 +49,7 @@ struct Palette {
     static func of(_ name: ThemeName, dark: Bool) -> Palette {
         let resolved: ThemeName = name == .system ? (dark ? .dark : .light) : name
         switch resolved {
-        case .highContrast: return Palette(hex(0x000000), hex(0x000000), hex(0x000000), hex(0x000000), hex(0xFFFFFF), hex(0xFFFFFF), hex(0xFFD400), hex(0x000000))
+        case .highContrast: return Palette(hex(0x000000), hex(0x000000), hex(0x000000), hex(0x000000), hex(0xFFFFFF), hex(0xFFFFFF), hex(0xFFD400), hex(0x000000), outline: .white)
         case .dark: return Palette(hex(0x1B1C1F), hex(0x3A3B40), hex(0x2A2B30), hex(0x5A5C63), hex(0xF1F1F3), hex(0x9A9BA2), hex(0x5B8DEF), hex(0xFFFFFF))
         case .midnight: return Palette(hex(0x000000), hex(0x17181B), hex(0x0E0F11), hex(0x34363C), hex(0xEDEDEF), hex(0x7C7E86), hex(0x7AA2FF), hex(0x000000))
         case .warm: return Palette(hex(0xE9E2D6), hex(0xFBF8F2), hex(0xD3C9B8), hex(0xC7BBA6), hex(0x2B2620), hex(0x7A6F5F), hex(0xC2562B), hex(0xFFFFFF))
@@ -49,8 +57,9 @@ struct Palette {
         }
     }
 
-    init(_ bg: UIColor, _ key: UIColor, _ fn: UIColor, _ pressed: UIColor, _ text: UIColor, _ hint: UIColor, _ accent: UIColor, _ on: UIColor) {
+    init(_ bg: UIColor, _ key: UIColor, _ fn: UIColor, _ pressed: UIColor, _ text: UIColor, _ hint: UIColor, _ accent: UIColor, _ on: UIColor, outline: UIColor = .clear) {
         background = bg; self.key = key; functionKey = fn; self.pressed = pressed; self.text = text; self.hint = hint; self.accent = accent; onAccent = on
+        keyOutline = outline
     }
 
     static func hex(_ v: UInt32) -> UIColor {
@@ -64,15 +73,20 @@ extension ThemeColors {
         func hex(_ color: UIColor) -> String {
             var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
             color.getRed(&r, green: &g, blue: &b, alpha: &a)
-            return String(format: "#%02X%02X%02X", Int((r * 255).rounded()), Int((g * 255).rounded()), Int((b * 255).rounded()))
+            let rgb = String(format: "%02X%02X%02X", Int((r * 255).rounded()), Int((g * 255).rounded()), Int((b * 255).rounded()))
+            return a < 1 ? String(format: "#%02X", Int((a * 255).rounded())) + rgb : "#" + rgb
         }
         background = hex(palette.background); key = hex(palette.key); functionKey = hex(palette.functionKey)
         text = hex(palette.text); accent = hex(palette.accent); pressed = hex(palette.pressed)
+        keyOutline = hex(palette.keyOutline)
     }
-    static func uiColor(_ value: String) -> UIColor { Palette.hex(parse(value) ?? 0) }
+    static func uiColor(_ value: String) -> UIColor {
+        let v = parse(value, alpha: true) ?? 0
+        return Palette.hex(v).withAlphaComponent(value.count == 9 ? CGFloat(v >> 24) / 255 : 1)
+    }
     var palette: Palette {
         let ink = Self.uiColor(text), accentColor = Self.uiColor(accent)
         let onAccent = Self.contrast("#000000", accent) >= Self.contrast("#FFFFFF", accent) ? UIColor.black : UIColor.white
-        return Palette(Self.uiColor(background), Self.uiColor(key), Self.uiColor(functionKey), Self.uiColor(pressed), ink, ink, accentColor, onAccent)
+        return Palette(Self.uiColor(background), Self.uiColor(key), Self.uiColor(functionKey), Self.uiColor(pressed), ink, ink, accentColor, onAccent, outline: Self.uiColor(keyOutline))
     }
 }
