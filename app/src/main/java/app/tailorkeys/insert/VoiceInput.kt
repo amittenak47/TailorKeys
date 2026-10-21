@@ -42,7 +42,7 @@ class VoiceInput(private val context: Context, private val repository: InsertRep
                 override fun onRmsChanged(rmsdB: Float) { if (live()) state("", mode, rmsdB.coerceIn(0f, 10f), true) }
                 override fun onBufferReceived(buffer: ByteArray?) = Unit
                 override fun onEndOfSpeech() { if (live()) state("", mode, 0f, true) }
-                override fun onError(error: Int) { if (live()) { draft.cancel(); state(when (error) { SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech heard. Tap Start to try again."; SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Allow microphone in TailorKeys"; else -> "Voice recognition stopped ($error). Tap Start to try again." }, mode, 0f, false); release() } }
+                override fun onError(error: Int) { if (live()) { draft.finish(); state(when (error) { SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech heard. Tap Start to try again."; SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Allow microphone in TailorKeys"; else -> "Voice recognition stopped ($error). Tap Start to try again." }, mode, 0f, false); release() } }
                 override fun onResults(results: Bundle?) {
                     if (!live()) return
                     val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
