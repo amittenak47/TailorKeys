@@ -345,11 +345,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val layoutSolver = LayoutSolver()
 
     /** Places every key for this width and returns the keyboard height. */
-    private fun layoutFor(width: Int): Int {
+    private fun layoutFor(width: Int, profile: SizeProfile? = null): Int {
         if (builtWidth != width && trackers.values.any { it.glideEligible }) cancelTouches()
         val d = density
         val landscape = isLandscape
-        val p = settings.profile(landscape)
+        val p = profile ?: settings.profile(landscape)
         val screenH = resources.displayMetrics.heightPixels.toFloat()
         val split = p.split
         val curve = if (editMode || !split) 0f else settings.int(Prefs.CURVE) / 100f
@@ -2215,6 +2215,20 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         if (g.toJson() != before) {
             history += before
             listener?.onEdited()
+        }
+    }
+
+    /** Offscreen settings thumbnails use the exact same rectangles, fan and split transforms. */
+    internal data class ThumbnailKey(val path: Path, val bounds: RectF, val kind: Int)
+
+    internal fun thumbnailKeys(width: Int, profile: SizeProfile): List<ThumbnailKey> {
+        layoutFor(width, profile)
+        return placed.map { key ->
+            val radius = settings.int(Prefs.CORNER_RADIUS) * density
+            val path = Path().apply { addRoundRect(key.rect, radius, radius, Path.Direction.CW); transform(key.matrix) }
+            val bounds = RectF().also { path.computeBounds(it, true) }
+            val face = key.item.keys.firstOrNull()
+            ThumbnailKey(path, bounds, when (face) { Keys.ENTER -> 2; Keys.ABC, Keys.NUM, Keys.SYM, Keys.BACKSPACE -> 1; else -> 0 })
         }
     }
 

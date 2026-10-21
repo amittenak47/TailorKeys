@@ -16,6 +16,7 @@ import androidx.compose.runtime.setValue
 import app.tailorkeys.settings.SettingsScreen
 import app.tailorkeys.settings.SettingsTheme
 import app.tailorkeys.settings.SetupStatus
+import app.tailorkeys.settings.LayoutLibrary
 
 class SettingsActivity : ComponentActivity() {
     private lateinit var settings: KeyboardSettings
@@ -28,6 +29,7 @@ class SettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         settings = KeyboardSettings(this)
+        LayoutLibrary(settings).restoreTrial()
         if (!settings.bool(Prefs.ONBOARDED)) {
             startActivity(Intent(this, OnboardingActivity::class.java))
             finish()
@@ -65,6 +67,11 @@ class SettingsActivity : ComponentActivity() {
     override fun onDestroy() {
         handler.removeCallbacks(hideReady)
         super.onDestroy()
+    }
+
+    override fun onStop() {
+        if (::settings.isInitialized) LayoutLibrary(settings).restoreTrial()
+        super.onStop()
     }
 
     private fun refreshStatus() {

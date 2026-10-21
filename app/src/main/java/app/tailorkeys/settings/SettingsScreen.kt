@@ -1,13 +1,21 @@
 package app.tailorkeys.settings
 
-import android.content.ClipboardManager
-import android.content.Intent
 import android.content.res.Configuration
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.tween
+import android.animation.ValueAnimator
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -48,13 +56,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import app.tailorkeys.KeyboardSettings
 import app.tailorkeys.R
-import app.tailorkeys.layout.KeyGrid
 
 /** HIDDEN includes an already configured keyboard; READY is only a transition observed by the activity. */
 enum class SetupStatus { TURN_ON, MAKE_DEFAULT, READY, HIDDEN }
-private val Tabs = listOf("Layout", "Size", "Look", "Typing")
+private val Tabs = listOf("Layout", "Size", "Look", "Settings")
 private val TabIcons = listOf(R.drawable.ic_settings_layout, R.drawable.ic_settings_size,
-    R.drawable.ic_settings_look, R.drawable.ic_settings_typing)
+    R.drawable.ic_settings_look, R.drawable.ic_settings_tune)
 
 @Composable
 fun SettingsScreen(settings: KeyboardSettings, setupStatus: SetupStatus, onSetup: () -> Unit) {
@@ -64,22 +71,65 @@ fun SettingsScreen(settings: KeyboardSettings, setupStatus: SetupStatus, onSetup
         state.observe()
         onDispose { state.dispose() }
     }
+    var testEntry by remember { mutableStateOf<LayoutEntry?>(null) }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val closeTest = {
+        state.library.restoreTrial()
+        keyboard?.hide()
+        testEntry = null
+        state.showSelected()
+    }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle, state) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) closeTest() }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer); state.library.restoreTrial() }
+    }
+    BackHandler(testEntry != null) { closeTest() }
+    val reduced = !ValueAnimator.areAnimatorsEnabled()
     val tab = rememberSaveable { mutableIntStateOf(0) }
     val listStates = List(Tabs.size) { rememberLazyListState() }
+    SharedTransitionLayout {
+        CompositionLocalProvider(LocalLayoutSharedScope provides this, LocalLayoutReducedMotion provides reduced,
+            LocalLayoutEntering provides (testEntry != null)) {
+            if (reduced) ReducedLayoutCrossfade(testEntry) { entry ->
+                if (entry == null) SettingsContent(state, setupStatus, onSetup, tab, listStates) {
+                    if (testEntry == null) { state.library.beginTrial(it); testEntry = it }
+                } else TypingTestPage(state, entry, closeTest)
+            } else AnimatedContent(testEntry, contentKey = { it != null }, modifier = Modifier.fillMaxSize(),
+                transitionSpec = {
+                    if (targetState != null) fadeIn(tween(190, 150)) togetherWith fadeOut(tween(140))
+                    else fadeIn(tween(180, 120)) togetherWith fadeOut(tween(90))
+                }, label = "Layout typing test") { entry ->
+                CompositionLocalProvider(LocalLayoutVisibility provides this) {
+                    if (entry == null) SettingsContent(state, setupStatus, onSetup, tab, listStates) {
+                        if (testEntry == null) { state.library.beginTrial(it); testEntry = it }
+                    } else TypingTestPage(state, entry, closeTest)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsContent(state: SettingsState, setupStatus: SetupStatus, onSetup: () -> Unit,
+    tab: MutableIntState, listStates: List<LazyListState>, onTry: (LayoutEntry) -> Unit) {
+    var editing by rememberSaveable { mutableStateOf(false) }
     val selectTab: (Int) -> Unit = remember(tab, listStates) {
         { index ->
             if (tab.intValue != index) {
                 // Tabs have always reopened at the top. Reset while leaving, keeping their composed controls.
                 listStates[tab.intValue].requestScrollToItem(0)
                 tab.intValue = index
+                editing = false
+                state.preview.editMode = false
+                if (index == 0) state.showSelected() else state.showApplied()
             }
         }
     }
-    var editing by rememberSaveable { mutableStateOf(false) }
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     var page by remember(landscape) { mutableStateOf(landscape) }
     var dialog by rememberSaveable { mutableStateOf<String?>(null) }
-    var importCode by rememberSaveable { mutableStateOf("") }
     SettingsBackHandler(tab, editing, { editing = false }, selectTab)
     Scaffold(containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
@@ -97,28 +147,26 @@ fun SettingsScreen(settings: KeyboardSettings, setupStatus: SetupStatus, onSetup
             Column(if (compact) Modifier.fillMaxWidth().verticalScroll(overflowScroll) else Modifier.fillMaxSize()) {
                 SettingsHeader(setupStatus, onSetup)
                 Spacer(Modifier.height(16.dp))
-                AndroidView(factory = { state.preview }, update = { it.editMode = editing },
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp).wrapContentHeight(unbounded = true)
-                        .onSizeChanged { previewHeight = with(density) { it.height.toDp() } }.clip(RoundedCornerShape(24.dp)))
+                Box(Modifier.fillMaxWidth().padding(horizontal = 4.dp).layoutMorph("keyboard-preview").clip(RoundedCornerShape(24.dp))) {
+                    AndroidView(factory = { state.preview }, update = { it.editMode = editing },
+                        modifier = Modifier.fillMaxWidth().wrapContentHeight(unbounded = true)
+                            .onSizeChanged { previewHeight = with(density) { it.height.toDp() } })
+                    if (state.importing && !state.importPreviewValid) Box(Modifier.matchParentSize()
+                        .background(MaterialTheme.colorScheme.background.copy(alpha = .94f)), contentAlignment = Alignment.Center) {
+                        Text("No preview for this code", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
                 BoxWithConstraints((if (compact) Modifier.fillMaxWidth().height(200.dp) else Modifier.fillMaxWidth().weight(1f))
                     .bringIntoViewRequester(optionsRequester)) {
-                    val layoutSpacer = (maxHeight - 232.dp).coerceAtLeast(0.dp)
                     // Retain the four lazy lists. Only the selected list is measured/placed, so hidden
                     // controls neither draw nor receive input/accessibility focus. Read tab in measure
                     // to keep navigation changes out of the preview/header composition.
                     Layout(content = {
                         Tabs.indices.forEach { index ->
                             key(index) {
-                                SettingsTab(index, listStates[index], state, editing, layoutSpacer,
-                                    { editing = !editing }, page, { page = it }, onShare = {
-                                        context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                                            .putExtra(Intent.EXTRA_TEXT, "My TailorKeys layout: ${state.preview.grid.toCode()}"), "Share layout"))
-                                    }, onImport = {
-                                        val clip = context.getSystemService(ClipboardManager::class.java).primaryClip
-                                        importCode = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
-                                            ?.takeIf { KeyGrid.fromCode(it) != null }.orEmpty()
-                                        dialog = "import"
-                                    }, onAbout = { dialog = "about" }, onReset = { dialog = "reset" })
+                                SettingsTab(index, listStates[index], state, editing,
+                                    { editing = !editing }, page, { page = it },
+                                    onAbout = { dialog = "about" }, onReset = { dialog = "reset" }, onTry = onTry)
                             }
                         }
                     }, modifier = Modifier.fillMaxSize()) { measurables, constraints ->
@@ -130,14 +178,6 @@ fun SettingsScreen(settings: KeyboardSettings, setupStatus: SetupStatus, onSetup
         }
     }
     when (dialog) {
-        "import" -> AlertDialog(onDismissRequest = { dialog = null }, title = { Text("Import layout") }, text = {
-            OutlinedTextField(importCode, { importCode = it }, label = { Text("Layout code") },
-                placeholder = { Text("Paste a layout code (starts with TK1-)") }, minLines = 2, maxLines = 5, modifier = Modifier.fillMaxWidth())
-        }, confirmButton = { TextButton({
-            val grid = KeyGrid.fromCode(importCode)
-            if (grid == null) Toast.makeText(context, "That isn't a TailorKeys layout code", Toast.LENGTH_SHORT).show()
-            else { state.preview.replaceGrid(grid); dialog = null }
-        }) { Text("Import") } }, dismissButton = { TextButton({ dialog = null }) { Text("Cancel") } })
         "reset" -> AlertDialog(onDismissRequest = { dialog = null }, title = { Text("Reset settings?") },
             text = { Text("Restore the default layout and all keyboard settings?") },
             confirmButton = { TextButton({
@@ -159,7 +199,13 @@ private fun SettingsBackHandler(tab: IntState, editing: Boolean, stopEditing: ()
 
 @Composable
 private fun SettingsNavigation(tab: IntState, selectTab: (Int) -> Unit) {
-    NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer, tonalElevation = 0.dp) {
+    val visibility = LocalLayoutVisibility.current
+    val reduced = LocalLayoutReducedMotion.current
+    val motion = if (visibility != null && !reduced) with(visibility) {
+        Modifier.animateEnterExit(enter = fadeIn(tween(180, 120)) + slideInVertically(tween(300, easing = LayoutEmphasis)) { it },
+            exit = fadeOut(tween(140)) + slideOutVertically(tween(220, easing = LayoutEmphasis)) { it })
+    } else Modifier
+    NavigationBar(modifier = motion, containerColor = MaterialTheme.colorScheme.surfaceContainer, tonalElevation = 0.dp) {
         Tabs.forEachIndexed { index, label ->
             NavigationBarItem(selected = tab.intValue == index, onClick = { selectTab(index) },
                 icon = { SettingsIcon(TabIcons[index]) }, label = {
@@ -189,8 +235,12 @@ private fun BringOptionsIntoView(compact: Boolean, previewHeight: androidx.compo
 
 @Composable
 private fun SettingsTab(index: Int, listState: LazyListState, state: SettingsState, editing: Boolean,
-    layoutSpacer: androidx.compose.ui.unit.Dp, onEdit: () -> Unit, page: Boolean, onPage: (Boolean) -> Unit,
-    onShare: () -> Unit, onImport: () -> Unit, onAbout: () -> Unit, onReset: () -> Unit) {
+    onEdit: () -> Unit, page: Boolean, onPage: (Boolean) -> Unit,
+    onAbout: () -> Unit, onReset: () -> Unit, onTry: (LayoutEntry) -> Unit) {
+    if (index == 0) {
+        LayoutLibraryPage(state, listState, editing, onEdit, onTry)
+        return
+    }
     val background = MaterialTheme.colorScheme.background
     Box(Modifier.fillMaxSize()) {
         LazyColumn(state = listState, modifier = Modifier.fillMaxSize().clipToBounds(),
@@ -198,7 +248,6 @@ private fun SettingsTab(index: Int, listState: LazyListState, state: SettingsSta
                 bottom = if (index == 0) 8.dp else 44.dp),
             verticalArrangement = Arrangement.spacedBy(if (index == 0) 16.dp else 12.dp)) {
             when (index) {
-                0 -> layoutOptions(state, editing, layoutSpacer, onEdit, onShare, onImport)
                 1 -> sizeOptions(state, page, onPage)
                 2 -> lookOptions(state)
                 3 -> typingOptions(state, onAbout, onReset)

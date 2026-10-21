@@ -2,7 +2,11 @@ package app.tailorkeys.settings
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.res.Configuration
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import app.tailorkeys.Chords
 import app.tailorkeys.DictionaryWords
 import app.tailorkeys.Align
@@ -22,6 +26,34 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
     private val chordLibraries = HashMap<String, Chords>()
     private val templateMatcher = TemplateMatcher()
     private val revisions = PreferenceRevisions()
+    val library = LayoutLibrary(settings).also { it.migrate() }
+    var selectedKey by mutableStateOf(library.inUse)
+        private set
+    var importing by mutableStateOf(false)
+    var importPreviewValid by mutableStateOf(false)
+    private var previewingSelected = true
+    val thumbnails = LayoutThumbnails(context, settings, revisions)
+
+    fun layoutEntries(): List<LayoutEntry> {
+        revisions.read(LayoutKeys.SAVED, LayoutKeys.DRAFT, Prefs.CURRENT_LANGUAGE, Prefs.NUMBER_ROW.key)
+        return library.entries()
+    }
+    fun inUseKey(): String { revisions.read(LayoutKeys.SELECTED); return library.inUse }
+    fun selectedLayout(): LayoutEntry = layoutEntries().firstOrNull { it.key == selectedKey } ?: library.entries().first()
+    fun selectLayout(entry: LayoutEntry) {
+        selectedKey = entry.key
+        previewingSelected = true
+        importing = false
+        preview.grid = entry.grid()
+    }
+    fun useLayout(entry: LayoutEntry) {
+        library.use(entry)
+        // Keep the existing preset behavior; trials only swap the grid and leave Size preferences alone.
+        if (entry.preset?.split == true) settings.setSplitFor(appContext.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE, true)
+        selectLayout(entry)
+    }
+    fun showSelected() { previewingSelected = true; preview.grid = selectedLayout().grid() }
+    fun showApplied() { previewingSelected = false; preview.grid = settings.loadGrid() }
     fun chordLanguage(): String { revisions.read(Prefs.CURRENT_LANGUAGE, Prefs.LANGUAGES); return settings.currentLanguage() }
     fun chordLetters(): Set<Char> {
         revisions.read(Prefs.LAYOUT, Prefs.CURRENT_LANGUAGE, Prefs.LANGUAGES)
@@ -43,13 +75,18 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
             override fun onStackFace(code: String) = Unit
             override fun onSuggestion(text: String) = Unit
             override fun onPickIme() = Unit
-            override fun onEdited() = settings.saveGrid(grid)
+            override fun onEdited() {
+                val entry = library.entries().firstOrNull { it.key == if (previewingSelected) selectedKey else library.inUse }
+                if (entry?.custom == true) library.edit(entry.key, grid) else settings.saveGrid(grid)
+            }
         }
     }
     private val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == null || key == Prefs.LAYOUT || key == Prefs.CURRENT_LANGUAGE || key == Prefs.LANGUAGES) {
-            val saved = settings.loadGrid()
-            if (saved.toJson() != preview.grid.toJson()) preview.grid = saved
+        if (key == null || key == Prefs.CURRENT_LANGUAGE || key == Prefs.LANGUAGES || key == Prefs.NUMBER_ROW.key) {
+            if (!importing && !preview.editMode) {
+                val selected = if (previewingSelected) library.entries().firstOrNull { it.key == selectedKey }?.grid() ?: settings.loadGrid() else settings.loadGrid()
+                if (selected.toJson() != preview.grid.toJson()) preview.grid = selected
+            }
         }
         preview.state.language = settings.currentLanguage()
         preview.reloadSettings()
@@ -98,6 +135,8 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
     fun reset() {
         preview.editMode = false
         settings.resetAll()
+        library.migrate()
+        selectedKey = library.inUse
         preview.grid = settings.loadGrid()
         preview.state.language = settings.currentLanguage()
         preview.reloadSettings()

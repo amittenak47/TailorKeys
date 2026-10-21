@@ -35,41 +35,10 @@ import app.tailorkeys.OnboardingActivity
 import app.tailorkeys.Prefs
 import app.tailorkeys.R
 import app.tailorkeys.ThemeName
-import app.tailorkeys.layout.Template
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import app.tailorkeys.Chords
-
-internal fun LazyListScope.layoutOptions(state: SettingsState, editing: Boolean, spacerHeight: androidx.compose.ui.unit.Dp,
-    onEdit: () -> Unit, onShare: () -> Unit, onImport: () -> Unit) {
-    item("preset") {
-        val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-        SettingsDropdown("Preset", state.templateName(), Template.entries.map { it.title } + "Custom") { index ->
-            Template.entries.getOrNull(index)?.let { state.applyTemplate(it, landscape) }
-        }
-    }
-    item("edit") {
-        Button(onEdit, Modifier.fillMaxWidth().height(52.dp), contentPadding = PaddingValues(horizontal = 24.dp)) {
-            SettingsIcon(if (editing) R.drawable.ic_settings_check else R.drawable.ic_settings_edit, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(if (editing) "Done" else "Edit layout", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-        }
-    }
-    item("space") { Spacer(Modifier.height(spacerHeight)) }
-    item("sharing") {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-            TextButton(onShare, contentPadding = PaddingValues(horizontal = 16.dp)) {
-                SettingsIcon(R.drawable.ic_settings_share, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp)); Text("Share")
-            }
-            TextButton(onImport, contentPadding = PaddingValues(horizontal = 16.dp)) {
-                SettingsIcon(R.drawable.ic_settings_import, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp)); Text("Import")
-            }
-        }
-    }
-}
 
 internal fun LazyListScope.sizeOptions(state: SettingsState, page: Boolean, onPage: (Boolean) -> Unit) {
     item("orientations") {
