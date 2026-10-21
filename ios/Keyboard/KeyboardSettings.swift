@@ -61,6 +61,8 @@ enum Prefs {
     static let layoutsSaved = "layouts_saved"
     static let layoutDraft = "layout_draft"
     static let layoutSelected = "layout_selected"
+    static let layoutDraftSplit = "layout_draft_split"
+    static let layoutTrialSplit = "layout_trial_split"
     static let layoutTrialPrevious = "layout_trial_previous"
     static let typingResults = "typing_results"
     static let languages = "languages"
@@ -78,7 +80,7 @@ enum Prefs {
     /// Registry for reset; device-dependent defaults are still resolved by their getters.
     static var settingKeys: [String] {
         var keys = Array(booleanDefaults.keys) + [cursorControl, theme, layout, languages, currentLanguage,
-                                                 layoutsSaved, layoutDraft, layoutSelected, layoutTrialPrevious, typingResults]
+                                                 layoutsSaved, layoutDraft, layoutDraftSplit, layoutSelected, layoutTrialPrevious, layoutTrialSplit, typingResults]
         keys += [curve, keyGap, cornerRadius, keyRepeatGuard, touchSlack, textScale, longPressMs].map { $0.key }
         for l in [false, true] {
             keys += [height(l), width(l), bottomPadding(l), splitGap(l), tilt(l), spaceTilt(l)].map { $0.key }
@@ -237,7 +239,7 @@ final class KeyboardSettings {
             if trialSplitCache?.json != json {
                 trialSplitCache = (json, KeyGrid.fromJSON(json).flatMap { LayoutLibrary.matchingPreset($0)?.split })
             }
-            trialSplit = trialSplitCache?.split
+            trialSplit = d.string(forKey: Prefs.layoutTrialSplit).flatMap { Bool($0) } ?? trialSplitCache?.split
         }
         return SizeProfile(heightPercent: int(Prefs.height(l)), widthPercent: int(Prefs.width(l)), align: align(l),
                     bottomPadding: int(Prefs.bottomPadding(l)), split: previewSplit ?? trialSplit ?? split(l),

@@ -41,8 +41,7 @@ final class AppSettingsModel: ObservableObject {
     var choices: [LayoutChoice] { library.choices }
 
     func splitPreview(for choice: LayoutChoice) -> Bool? {
-        if choice.id == library.appliedKey { return nil }
-        return choice.template?.split
+        return choice.split
     }
 
     var previewSplit: Bool? {
@@ -169,11 +168,8 @@ final class AppSettingsModel: ObservableObject {
     func useSelectedLayout() { useLayout(selectedLayoutKey) }
 
     private func useLayout(_ key: String) {
-        guard fullAccessConfirmed, let choice = library.choice(key) else { return }
-        library.use(key)
-        if let template = choice.template {
-            settings.setSplitFor(UIScreen.main.bounds.width > UIScreen.main.bounds.height, template.split)
-        }
+        guard fullAccessConfirmed, library.choice(key) != nil else { return }
+        library.use(key, landscape: UIScreen.main.bounds.width > UIScreen.main.bounds.height)
         changed()
     }
 
@@ -216,7 +212,7 @@ final class AppSettingsModel: ObservableObject {
     }
 
     func beginTest() {
-        guard fullAccessConfirmed, let choice = selectedLayout, library.beginTrial(choice.id) else { return }
+        guard fullAccessConfirmed, let choice = selectedLayout, library.beginTrial(choice.id, landscape: UIScreen.main.bounds.width > UIScreen.main.bounds.height) else { return }
         editing = false
         trialChoice = choice
         grid = choice.grid
@@ -277,7 +273,7 @@ final class AppSettingsModel: ObservableObject {
 
     func addImportedLayout() {
         guard fullAccessConfirmed, let grid = importedGrid else { return }
-        guard let key = library.add(grid.copy(), name: importName) else { return }
+        guard let key = library.add(grid.copy(), name: importName, split: settings.split(UIScreen.main.bounds.width > UIScreen.main.bounds.height)) else { return }
         importOpen = false
         selectedLayoutKey = key
         updatePreview()

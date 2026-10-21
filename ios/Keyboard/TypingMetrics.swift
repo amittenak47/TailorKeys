@@ -24,6 +24,7 @@ struct TypingSession {
 
     var isComplete: Bool { finishedAt != nil }
     var characterCount: Int { text.count }
+    var progress: Double { mode == .test && !sentence.isEmpty ? min(1, Double(characterCount) / Double(sentence.count)) : 0 }
 
     func elapsed(at now: TimeInterval) -> TimeInterval {
         guard let start = startedAt else { return 0 }
@@ -82,7 +83,7 @@ struct TypingSession {
     }
 
     func result(at date: Date) -> TypingResult? {
-        guard let end = finishedAt, elapsed(at: end) > 0 else { return nil }
+        guard mode == .test, let end = finishedAt, elapsed(at: end) > 0 else { return nil }
         return TypingResult(wpm: wpm(at: end), accuracy: accuracy, at: date.timeIntervalSince1970 * 1000)
     }
 

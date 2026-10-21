@@ -1,6 +1,10 @@
 import Foundation
 
 struct TextInputRules {
+    static func canLearn(secure: Bool, autocorrectionDisabled: Bool) -> Bool {
+        !secure && !autocorrectionDisabled
+    }
+
     static func wordChar(_ ch: Character) -> Bool { ch.isLetter || ch.isNumber || ch == "'" || ch == "\u{2019}" }
     static func suffixLength(_ after: String) -> Int { after.prefix(while: wordChar).count }
     static func addSpace(_ enabled: Bool, _ after: String?, password: Bool = false) -> Bool {

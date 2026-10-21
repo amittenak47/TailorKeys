@@ -13,18 +13,22 @@ internal class LayoutThumbnailCache(private val context: Context, private val se
     private val cache = object : LinkedHashMap<String, List<KeyboardView.ThumbnailKey>>(32, .75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<KeyboardView.ThumbnailKey>>) = size > 48
     }
-    fun keys(entry: LayoutEntry): List<KeyboardView.ThumbnailKey> {
+    fun signature(entry: LayoutEntry): String {
         val landscape = context.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        val split = if (entry.key == settings.prefs.getString(LayoutKeys.SELECTED, null)) settings.split(landscape)
-            else entry.preset?.split ?: settings.split(landscape)
-        val profile = settings.profile(landscape).copy(split = split)
+        val profile = settings.profile(landscape).copy(split = entry.split)
         val display = context.resources.displayMetrics
         val width = (display.widthPixels - 8 * display.density).roundToInt().coerceAtLeast(1)
-        val key = "${entry.json}|$profile|$landscape|$width|${display.heightPixels}|${display.density}|${settings.bool(Prefs.SAME_ORIENTATIONS)}|${settings.int(Prefs.CURVE)}|${settings.int(Prefs.KEY_GAP)}|${settings.int(Prefs.CORNER_RADIUS)}"
+        return "${entry.json}|$profile|$landscape|$width|${display.heightPixels}|${display.density}|${settings.bool(Prefs.SAME_ORIENTATIONS)}|${settings.int(Prefs.CURVE)}|${settings.int(Prefs.KEY_GAP)}|${settings.int(Prefs.CORNER_RADIUS)}"
+    }
+    fun cached(entry: LayoutEntry) = cache[signature(entry)]
+    fun keys(entry: LayoutEntry): List<KeyboardView.ThumbnailKey> {
+        val key = signature(entry)
         return cache.getOrPut(key) {
+            val landscape = context.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+            val width = (context.resources.displayMetrics.widthPixels - 8 * context.resources.displayMetrics.density).roundToInt().coerceAtLeast(1)
             view.grid = entry.grid()
             view.reloadSettings()
-            view.thumbnailKeys(width, profile)
+            view.thumbnailKeys(width, settings.profile(landscape).copy(split = entry.split))
         }
     }
 }

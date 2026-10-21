@@ -167,6 +167,12 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             !(document.selected ?? "").isEmpty) { clearTaps() }
     }
     private var suggestAllowed: Bool { textDocumentProxy.isSecureTextEntry != true }
+    // iOS exposes no no-personalized-learning flag to extensions. Hosts such as our
+    // typing test opt out via autocorrectionType = .no; never learn from those fields.
+    private var learningAllowed: Bool {
+        TextInputRules.canLearn(secure: textDocumentProxy.isSecureTextEntry == true,
+                               autocorrectionDisabled: textDocumentProxy.autocorrectionType == .no)
+    }
     private let state = InputState()
     private var keyboard: KeyboardView!
     private var heightConstraint: NSLayoutConstraint?
@@ -205,7 +211,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private func finishArmedLearning() {
         let undo = armedUndo
         armedUndo = nil
-        undo?.learn()
+        if learningAllowed { undo?.learn() }
     }
 
     func choiceInterrupted() { clearChoice(); finishArmedLearning() }
@@ -243,7 +249,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         let suffix = spaced || !(read.selected ?? "").isEmpty ? 0 : TextInputRules.suffixLength(read.after ?? "")
         let originalSuffix = String((read.after ?? "").prefix(suffix))
         let model = predictor
-        let shouldLearn = suggestAllowed && modelReady
+        let shouldLearn = learningAllowed && modelReady
         let prev = previousWord(spaced ? String(before.dropLast()) : before)
         let prev2 = previousWord2(spaced ? String(before.dropLast()) : before)
         clearChoice(); clearGlide(); clearAutomaticSpace(); clearTaps()
@@ -549,7 +555,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         }
         insertRaw(text)
         if plan.space { automaticSpace(text) }
-        if suggestAllowed && modelReady { predictor.learn(text, prev, prev2) }
+        if learningAllowed && modelReady { predictor.learn(text, prev, prev2) }
         updateAutoCap(); updateSuggestions()
     }
 
@@ -678,7 +684,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     private func finishGlideLearning() {
-        guard currentGlide(), suggestAllowed, modelReady else { return }
+        guard currentGlide(), learningAllowed, modelReady else { return }
         let before = document.before ?? ""
         let context = hasAutomaticSpace() ? String(before.dropLast()) : before
         predictor.learn(glideWord!, previousWord(context), previousWord2(context))
@@ -910,7 +916,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         let before = document.before ?? ""
         let word = currentWord(before)
         if learnWord && currentGlide() { finishGlideLearning() }
-        else if learnWord && suggestAllowed && modelReady && word.count > 1 { predictor.learn(word, previousWord(before), previousWord2(before)) }
+        else if learnWord && learningAllowed && modelReady && word.count > 1 { predictor.learn(word, previousWord(before), previousWord2(before)) }
         clearTaps()
         clearGlide()
         let now = CACurrentMediaTime()

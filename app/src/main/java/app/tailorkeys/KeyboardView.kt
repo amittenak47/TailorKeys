@@ -252,12 +252,17 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private var showHints = settings.bool(Prefs.SHOW_HINTS)
     private val chordsAllowed get() = settings.bool(Prefs.CHORDING) && !settings.bool(Prefs.TYPE_ON_PRESS)
 
+    /** A selected layout previews its own split without changing the Size preferences. */
+    var previewSplit: Boolean? = null
+        set(value) { if (field != value) { field = value; relayout() } }
+    private fun displayProfile() = settings.profile(isLandscape).let { p -> previewSplit?.let { p.copy(split = it) } ?: p }
+
     private data class GeometrySettings(
         val profile: SizeProfile, val curve: Int, val gap: Int, val labelScale: Float,
         val sameOrientations: Boolean, val cursor: CursorControl,
         val landscape: Boolean, val screenWidth: Int, val screenHeight: Int,
     )
-    private fun geometrySettings() = GeometrySettings(settings.profile(isLandscape),
+    private fun geometrySettings() = GeometrySettings(displayProfile(),
         settings.int(Prefs.CURVE), settings.int(Prefs.KEY_GAP), labelScale,
         settings.bool(Prefs.SAME_ORIENTATIONS), settings.cursorControl(),
         isLandscape, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
@@ -356,7 +361,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         if (builtWidth != width && trackers.values.any { it.glideEligible }) cancelTouches()
         val d = density
         val landscape = isLandscape
-        val p = profile ?: settings.profile(landscape)
+        val p = profile ?: displayProfile()
         val screenH = resources.displayMetrics.heightPixels.toFloat()
         val split = p.split
         val curve = if (editMode || !split) 0f else settings.int(Prefs.CURVE) / 100f

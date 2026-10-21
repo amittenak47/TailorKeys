@@ -1,11 +1,15 @@
 package app.tailorkeys.settings
 
 import app.tailorkeys.LayoutEntry
-import app.tailorkeys.TypingResult
 
 import android.provider.Settings
 import android.os.SystemClock
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.platform.InterceptPlatformTextInput
+import androidx.compose.ui.platform.PlatformTextInputMethodRequest
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -64,14 +68,6 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
     var finished by remember(session) { mutableStateOf(false) }
     var applied by remember { mutableStateOf(entry.key == state.library.inUse) }
     val average = remember(entry.key, generation, mode) { state.library.results(entry.key).map { it.wpm }.average().takeIf { it.isFinite() } }
-    val recorded = remember(session) { booleanArrayOf(false) }
-    fun recordFreeResult() {
-        val result = session.metrics(SystemClock.elapsedRealtime())
-        if (!recorded[0] && session.mode == TypingMode.FREE && session.text.isNotBlank() && result.elapsed > 0) {
-            state.library.record(entry.key, TypingResult(result.wpm, result.accuracy, System.currentTimeMillis()))
-            recorded[0] = true
-        }
-    }
     val words by produceState<Set<String>>(emptySet(), state.settings.currentLanguage()) {
         value = withContext(Dispatchers.IO) {
             DictionaryWords.read({ context.assets.open(it) }, state.settings.currentLanguage(), unique = true).toHashSet()
@@ -99,13 +95,10 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
         }
     }
     val metrics = session.metrics(tick)
+    val progress = session.progress
     val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-    DisposableEffect(session) {
-        onDispose { recordFreeResult() }
-    }
     val colors = MaterialTheme.colorScheme
     fun restart() {
-        recordFreeResult()
         sentenceIndex = (sentenceIndex + 1) % SentenceBank.sentences.size
         generation++
     }
@@ -113,7 +106,7 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
         .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)).imePadding()) {
         Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onBack, Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = "Back to layouts" }) { Text("←", fontSize = 24.sp) }
-            Column { Text("Typing test", style = MaterialTheme.typography.titleLarge); Text(entry.name, style = MaterialTheme.typography.labelMedium) }
+            Column { Text("Typing test", color = colors.onSurface, style = MaterialTheme.typography.titleLarge); Text(entry.name, color = colors.onSurfaceVariant, style = MaterialTheme.typography.labelMedium) }
         }
         Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp), contentAlignment = Alignment.Center) {
             Surface(Modifier.widthIn(max = 600.dp).fillMaxWidth().layoutMorph(entry.key),
@@ -159,7 +152,7 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
                     } else {
                         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                             TypingMode.entries.forEachIndexed { i, option ->
-                                SegmentedButton(mode == option, { if (mode != option) { recordFreeResult(); mode = option } }, shape = SegmentedButtonDefaults.itemShape(i, 2)) {
+                                SegmentedButton(mode == option, { if (mode != option) { mode = option } }, shape = SegmentedButtonDefaults.itemShape(i, 2)) {
                                     Text(if (option == TypingMode.FREE) "Free typing" else "Test sentence")
                                 }
                             }
@@ -183,27 +176,30 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
                         } }
                         Column {
                             if (mode == TypingMode.FREE) Text("Type anything", style = MaterialTheme.typography.labelMedium)
-                            BasicTextField(fieldValue, { next ->
-                                fieldValue = next
-                                tick = SystemClock.elapsedRealtime()
-                                if (next.text.isNotEmpty()) session.startTyping(tick)
-                                if (next.composition == null) {
-                                    session.update(next.text, tick)
-                                    if (session.complete) {
-                                        finished = true
-                                        val result = session.metrics(tick)
-                                        state.library.record(entry.key, TypingResult(result.wpm, result.accuracy, System.currentTimeMillis()))
+                            NoPersonalizedLearning {
+                                BasicTextField(fieldValue, { next ->
+                                    fieldValue = next
+                                    tick = SystemClock.elapsedRealtime()
+                                    if (next.text.isNotEmpty()) session.startTyping(tick)
+                                    if (next.composition == null) {
+                                        session.update(next.text, tick)
+                                        if (session.complete) {
+                                            finished = true
+                                            session.takeResult(System.currentTimeMillis())?.let { state.library.record(entry.key, it) }
+                                        }
                                     }
-                                }
-                            }, Modifier.fillMaxWidth().heightIn(min = 96.dp).focusRequester(focus)
-                                .clip(RoundedCornerShape(16.dp)).background(colors.background).padding(16.dp)
-                                .semantics { contentDescription = if (mode == TypingMode.FREE) "Type anything" else "Copy this sentence: ${session.sentence}" },
-                                textStyle = TextStyle(color = colors.onSurface, fontSize = 20.sp, lineHeight = 28.sp),
-                                cursorBrush = SolidColor(colors.primary), visualTransformation = transformation,
-                                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, autoCorrectEnabled = false,
-                                    keyboardType = KeyboardType.Text, imeAction = ImeAction.None))
+                                }, Modifier.fillMaxWidth().heightIn(min = 96.dp).focusRequester(focus)
+                                    .clip(RoundedCornerShape(16.dp)).background(colors.background).padding(16.dp)
+                                    .semantics { contentDescription = if (mode == TypingMode.FREE) "Type anything" else "Copy this sentence: ${session.sentence}" },
+                                    textStyle = TextStyle(color = colors.onSurface, fontSize = 20.sp, lineHeight = 28.sp),
+                                    cursorBrush = SolidColor(colors.primary), visualTransformation = transformation,
+                                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, autoCorrectEnabled = false,
+                                        keyboardType = KeyboardType.Text, imeAction = ImeAction.None))
+                            }
                         }
-                        if (mode == TypingMode.TEST) LinearProgressIndicator(progress = { (session.text.length.toFloat() / session.sentence.length).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                        if (mode == TypingMode.TEST) LinearProgressIndicator(progress = { progress },
+                            color = colors.primary, trackColor = colors.onSurface.copy(alpha = .12f),
+                            drawStopIndicator = {}, modifier = Modifier.fillMaxWidth())
                         BoxWithConstraints {
                             val wide = maxWidth >= 480.dp
                             if (wide) Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -228,7 +224,7 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
             }
         }
         // Hand the moving preview over to the real system IME when focus arrives.
-        if (!imeVisible && !finished) AndroidView(factory = { KeyboardView(context, state.settings).apply { grid = entry.grid() } },
+        if (!imeVisible && !finished) AndroidView(factory = { KeyboardView(context, state.settings).apply { previewSplit = entry.split; grid = entry.grid() } },
             modifier = Modifier.fillMaxWidth().layoutMorph("keyboard-preview").wrapContentHeight(unbounded = true)
                 .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)))
     }
@@ -294,3 +290,19 @@ private fun SpeedChart(samples: List<SpeedSample>, average: Double?, modifier: M
 }
 
 private fun formatTime(ms: Long): String = "${ms / 60_000}:${((ms / 1_000) % 60).toString().padStart(2, '0')}"
+
+/** Compose's PlatformImeOptions only carries private options, so add the public flag after
+ * Compose populates EditorInfo. TailorKeysService checks it for direct and deferred learning. */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun NoPersonalizedLearning(content: @Composable () -> Unit) {
+    InterceptPlatformTextInput(interceptor = { request, next ->
+        next.startInputMethod(object : PlatformTextInputMethodRequest {
+            override fun createInputConnection(outAttributes: EditorInfo): InputConnection {
+                val connection = request.createInputConnection(outAttributes)
+                outAttributes.imeOptions = outAttributes.imeOptions or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+                return connection
+            }
+        })
+    }, content = content)
+}

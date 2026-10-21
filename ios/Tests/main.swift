@@ -438,3 +438,48 @@ withLayoutStore { prefs, defaults in
     check(keyboardLibrary.draft == nil, "keyboard panel adopted the trial as a draft")
 }
 print("Quick options checks passed")
+
+// Tablet findings: field privacy, sentence progress, and layout-owned split flags.
+check(TextInputRules.canLearn(secure: false, autocorrectionDisabled: false), "ordinary fields should learn")
+check(!TextInputRules.canLearn(secure: false, autocorrectionDisabled: true), "typing-test fields learned words")
+check(!TextInputRules.canLearn(secure: true, autocorrectionDisabled: false), "secure fields learned words")
+var progressSession = TypingSession(mode: .test, sentence: "hello")
+check(progressSession.progress == 0, "new sentence progress is not empty")
+progressSession.update("he", at: 0)
+check(progressSession.progress == 0.4, "partial sentence progress differs")
+check(progressSession.result(at: Date()) == nil, "abandoned sentence saved a result")
+progressSession.update("hello extra", at: 2)
+check(progressSession.progress == 1, "sentence progress exceeded its track")
+
+withLayoutStore { prefs, defaults in
+    let library = LayoutLibrary(settings: prefs, defaults: defaults)
+    prefs.setSplitFor(false, true)
+    prefs.setSplitFor(true, false)
+    check(!library.choice("preset:STANDARD")!.split, "Standard inherited user's split")
+    check(library.beginTrial("preset:STANDARD"), "applied Standard trial failed")
+    check(!prefs.profile(false).split && !prefs.profile(true).split, "Standard trial kept user's split")
+    check(prefs.split(false) && !prefs.split(true), "trial mutated orientation preferences")
+    library.restoreTrial()
+    check(prefs.profile(false).split && !prefs.profile(true).split, "trial did not restore both orientations")
+    library.use("preset:STANDARD")
+    check(!prefs.split(false), "using Standard kept split enabled")
+    library.use("preset:SPLIT")
+    check(prefs.split(false), "using Split failed to apply split")
+    check(library.startDraft(from: "preset:SPLIT"), "cannot fork split preset")
+    let saved = library.saveDraft(name: "Split custom")!
+    library.use("preset:STANDARD")
+    let reloaded = LayoutLibrary(settings: prefs, defaults: defaults)
+    check(reloaded.choice(saved)!.split, "saved layout lost its stored split")
+    check(reloaded.beginTrial(saved), "custom trial failed")
+    check(prefs.profile(false).split && prefs.profile(true).split, "custom split not visible to extension")
+    _ = LayoutLibrary(settings: prefs, defaults: defaults) // process-death recovery
+    check(!prefs.profile(false).split && !prefs.profile(true).split, "recovery retained trial split")
+    check(reloaded.beginTrial(saved), "second custom trial failed")
+    reloaded.use(saved)
+    reloaded.restoreTrial()
+    check(prefs.split(false), "accepting trial restored away the chosen split")
+    check(defaults.string(forKey: Prefs.layoutTrialSplit) == nil, "trial split marker leaked")
+    check(defaults.object(forKey: Prefs.layoutDraftSplit) == nil, "draft split marker leaked")
+}
+
+print("Tablet layout and typing checks passed")

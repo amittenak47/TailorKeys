@@ -82,12 +82,28 @@ struct SettingsNavigation: View {
 
 struct LayoutThumbnail: View {
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.sizeCategory) private var sizeCategory
     @ObservedObject var model: AppSettingsModel
     let choice: LayoutChoice
+    @State private var thumbnail: UIImage?
+
+    private var requestID: String {
+        "\(choice.gridJSON)|\(choice.split)|\(scheme)|\(sizeCategory)|\(model.revision)|\(UIScreen.main.bounds.size)"
+    }
 
     var body: some View {
-        Image(uiImage: LayoutThumbnailCache.shared.image(for: choice, settings: model.settings, dark: scheme == .dark, split: model.splitPreview(for: choice)))
-            .resizable().scaledToFit().clipShape(RoundedRectangle(cornerRadius: 12))
-            .accessibilityHidden(true)
+        ZStack {
+            RoundedRectangle(cornerRadius: 12).fill(LayoutStyle.surface)
+            if let thumbnail = thumbnail {
+                Image(uiImage: thumbnail).resizable().scaledToFit()
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12)).accessibilityHidden(true)
+        .task(id: requestID) {
+            thumbnail = nil
+            let image = await LayoutThumbnailCache.shared.deferredImage(for: choice, settings: model.settings, dark: scheme == .dark)
+            guard !Task.isCancelled else { return }
+            thumbnail = image
+        }
     }
 }

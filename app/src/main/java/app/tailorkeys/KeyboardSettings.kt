@@ -139,7 +139,7 @@ class KeyboardSettings internal constructor(
         widthPercent = int(Prefs.width(landscape)),
         align = align(landscape),
         bottomPaddingDp = int(Prefs.bottomPadding(landscape)),
-        split = split(landscape),
+        split = if (prefs.contains(LayoutKeys.TRIAL)) prefs.getString(LayoutKeys.TRIAL_SPLIT, null)?.toBooleanStrictOrNull() ?: split(landscape) else split(landscape),
         gap = int(Prefs.splitGap(landscape)),
         tilt = int(Prefs.tilt(landscape)),
         spaceTilt = int(Prefs.spaceTilt(landscape)),

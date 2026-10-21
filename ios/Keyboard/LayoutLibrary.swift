@@ -4,6 +4,7 @@ struct SavedLayout: Identifiable {
     let id: String
     var name: String
     var gridJSON: String
+    var split = false
     var key: String { "saved:" + id }
 }
 
@@ -12,6 +13,8 @@ struct LayoutChoice: Identifiable {
     let name: String
     let gridJSON: String
     let template: Template?
+    var storedSplit = false
+    var split: Bool { template?.split ?? storedSplit }
     var isCustom: Bool { template == nil }
     var isDraft: Bool { id == "draft" }
     // Every choice is constructed from a validated grid, never an unchecked stored string.
@@ -40,6 +43,7 @@ final class LayoutLibrary {
     private let settings: KeyboardSettings
     private(set) var saved: [SavedLayout] = []
     private(set) var draft: String?
+    private(set) var draftSplit = false
     private(set) var appliedKey = "preset:STANDARD"
     private(set) var results: [String: [TypingResult]] = [:]
 
@@ -96,8 +100,8 @@ final class LayoutLibrary {
             if rows.map({ $0 == 5 }) ?? settings.numberRow { grid.setNumberRow(true) }
             return LayoutChoice(id: Self.presetKey(template), name: template.title, gridJSON: grid.toJSON(), template: template)
         }
-        values += saved.map { LayoutChoice(id: $0.key, name: $0.name, gridJSON: $0.gridJSON, template: nil) }
-        if let draft = draft { values.append(LayoutChoice(id: "draft", name: "Custom", gridJSON: draft, template: nil)) }
+        values += saved.map { LayoutChoice(id: $0.key, name: $0.name, gridJSON: $0.gridJSON, template: nil, storedSplit: $0.split) }
+        if let draft = draft { values.append(LayoutChoice(id: "draft", name: "Custom", gridJSON: draft, template: nil, storedSplit: draftSplit)) }
         return values
     }
 
@@ -114,14 +118,14 @@ final class LayoutLibrary {
     }
 
     /// Presets always fork. Callers show Save first when an existing draft prevents a copy.
-    @discardableResult func quickEdit(_ key: String, newCopy: Bool) -> String? {
+    @discardableResult func quickEdit(_ key: String, newCopy: Bool, landscape: Bool = false) -> String? {
         guard let source = choice(key) else { return nil }
         if newCopy || !source.isCustom {
             guard startDraft(from: key) else { return nil }
-            use("draft")
+            use("draft", landscape: landscape)
             return "draft"
         }
-        use(key)
+        use(key, landscape: landscape)
         return key
     }
 
@@ -143,10 +147,18 @@ final class LayoutLibrary {
                       let data = try? JSONSerialization.data(withJSONObject: object),
                       let grid = KeyGrid.fromJSON(String(decoding: data, as: UTF8.self)),
                       let json = Self.storedJSON(grid) else { continue }
-                saved.append(SavedLayout(id: id, name: Self.name(name), gridJSON: json))
+                saved.append(SavedLayout(id: id, name: Self.name(name), gridJSON: json, split: item["split"] as? Bool ?? settings.split(false)))
             }
         }
+        // Older saved layouts acquire a stable split value before another layout is applied.
+        if migrate, let text = defaults.string(forKey: Prefs.layoutsSaved),
+           let array = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [[String: Any]],
+           array.contains(where: { $0["split"] == nil }) { persistSaved() }
+        draftSplit = defaults.string(forKey: Prefs.layoutDraftSplit).flatMap { Bool($0) } ?? settings.split(false)
         draft = KeyGrid.fromJSON(defaults.string(forKey: Prefs.layoutDraft)).flatMap { Self.storedJSON($0) }
+        if migrate, draft != nil, defaults.object(forKey: Prefs.layoutDraftSplit) == nil {
+            defaults.set(String(draftSplit), forKey: Prefs.layoutDraftSplit)
+        }
         results = [:]
         if let text = defaults.string(forKey: Prefs.typingResults),
            let decoded = try? JSONDecoder().decode([String: [TypingResult]].self, from: Data(text.utf8)) {
@@ -187,16 +199,16 @@ final class LayoutLibrary {
     private func persistSaved() {
         let array: [[String: Any]] = saved.compactMap { item in
             guard let grid = try? JSONSerialization.jsonObject(with: Data(item.gridJSON.utf8)) else { return nil }
-            return ["id": item.id, "name": item.name, "grid": grid]
+            return ["id": item.id, "name": item.name, "grid": grid, "split": item.split]
         }
         if let data = try? JSONSerialization.data(withJSONObject: array, options: [.sortedKeys]) {
             defaults.set(String(decoding: data, as: UTF8.self), forKey: Prefs.layoutsSaved)
         }
     }
 
-    @discardableResult func add(_ grid: KeyGrid, name: String) -> String? {
+    @discardableResult func add(_ grid: KeyGrid, name: String, split: Bool? = nil) -> String? {
         guard let json = Self.storedJSON(grid) else { return nil }
-        let entry = SavedLayout(id: UUID().uuidString.lowercased(), name: Self.name(name, fallback: "Imported layout"), gridJSON: json)
+        let entry = SavedLayout(id: UUID().uuidString.lowercased(), name: Self.name(name, fallback: "Imported layout"), gridJSON: json, split: split ?? settings.split(false))
         saved.append(entry)
         persistSaved()
         return entry.key
@@ -205,18 +217,21 @@ final class LayoutLibrary {
     @discardableResult func startDraft(from key: String) -> Bool {
         guard draft == nil, let source = choice(key) else { return false }
         draft = source.gridJSON
+        draftSplit = source.split
+        defaults.set(String(draftSplit), forKey: Prefs.layoutDraftSplit)
         defaults.set(draft, forKey: Prefs.layoutDraft)
         return true
     }
 
     @discardableResult func saveDraft(name: String) -> String? {
         guard let draft = draft, let grid = KeyGrid.fromJSON(draft) else { return nil }
-        guard let key = add(grid, name: name) else { return nil }
+        guard let key = add(grid, name: name, split: draftSplit) else { return nil }
         if appliedKey == "draft" { setAppliedKey(key) }
         let history = results.removeValue(forKey: "draft") ?? []
         if !history.isEmpty { results[key] = history; persistResults() }
         self.draft = nil
         defaults.removeObject(forKey: Prefs.layoutDraft)
+        defaults.removeObject(forKey: Prefs.layoutDraftSplit)
         return key
     }
 
@@ -238,28 +253,32 @@ final class LayoutLibrary {
         if appliedKey == key { settings.saveGrid(grid) }
     }
 
-    func use(_ key: String) {
+    func use(_ key: String, landscape: Bool = false) {
         guard let layout = choice(key) else { return }
+        settings.setSplitFor(landscape, layout.split)
         settings.saveGrid(layout.grid)
         setAppliedKey(key)
         defaults.removeObject(forKey: Prefs.layoutTrialPrevious)
+        defaults.removeObject(forKey: Prefs.layoutTrialSplit)
         defaults.synchronize()
     }
 
     func delete(_ key: String) {
         guard let layout = choice(key), layout.isCustom else { return }
         if appliedKey == key { use(Self.presetKey(.standard)) }
-        if key == "draft" { draft = nil; defaults.removeObject(forKey: Prefs.layoutDraft) }
+        if key == "draft" { draft = nil; defaults.removeObject(forKey: Prefs.layoutDraft); defaults.removeObject(forKey: Prefs.layoutDraftSplit) }
         else { saved.removeAll { $0.key == key }; persistSaved() }
         results.removeValue(forKey: key)
         persistResults()
     }
 
-    @discardableResult func beginTrial(_ key: String) -> Bool {
+    @discardableResult func beginTrial(_ key: String, landscape: Bool = false) -> Bool {
         guard let layout = choice(key) else { return false }
         restoreTrial()
-        if key != appliedKey {
+        if key != appliedKey || layout.split != settings.split(landscape) {
             defaults.set(settings.loadGrid().toJSON(), forKey: Prefs.layoutTrialPrevious)
+            // An explicit override covers custom layouts too; Size preferences remain untouched.
+            defaults.set(String(layout.split), forKey: Prefs.layoutTrialSplit)
             // Flush the recovery record before the extension can observe the trial grid.
             defaults.synchronize()
             settings.saveGrid(layout.grid)
@@ -271,6 +290,7 @@ final class LayoutLibrary {
         guard let previous = defaults.string(forKey: Prefs.layoutTrialPrevious) else { return }
         if let grid = KeyGrid.fromJSON(previous) { settings.saveGrid(grid) }
         defaults.removeObject(forKey: Prefs.layoutTrialPrevious)
+        defaults.removeObject(forKey: Prefs.layoutTrialSplit)
         defaults.synchronize()
     }
 

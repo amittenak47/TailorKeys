@@ -264,8 +264,7 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
                     if full { gridViews[choice.id] = card; all.addSubview(card) } else { stripViews[choice.id] = card; strip.addSubview(card) }
                     card.action = { [weak self] in
                         guard let self = self else { return }
-                        self.library.use(choice.id)
-                        if choice.template?.split == true { self.settings.setSplitFor(self.landscape, true) }
+                        self.library.use(choice.id, landscape: self.landscape)
                         self.onChange?(); self.refresh()
                     }
                 }
@@ -283,7 +282,7 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
                 card.accessibilityLabel = state.label
                 card.accessibilityTraits = state.inUse ? [.button, .selected] : .button
                 card.thumbnail.image = LayoutThumbnailCache.shared.image(for: choice, settings: settings,
-                    dark: traitCollection.userInterfaceStyle == .dark, split: state.inUse ? nil : choice.template?.split)
+                    dark: traitCollection.userInterfaceStyle == .dark, split: choice.split)
             }
         }
         strip.accessibilityElements = orderedKeys.compactMap { stripViews[$0] }
@@ -461,7 +460,7 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
         openEditor(source == "draft" ? saved : source, newCopy: copy)
     }
     private func openEditor(_ key: String, newCopy: Bool) {
-        guard let source = library.choice(key), let editKey = library.quickEdit(key, newCopy: newCopy) else { return }
+        guard let source = library.choice(key), let editKey = library.quickEdit(key, newCopy: newCopy, landscape: landscape) else { return }
         let title = !source.isCustom ? "\(source.name) is a preset; editing a copy named Custom"
             : newCopy ? "New layout, copied from \(source.name)" : "Editing \(source.name)"
         onEdit?(editKey, title)

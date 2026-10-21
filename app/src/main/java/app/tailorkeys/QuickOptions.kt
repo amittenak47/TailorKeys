@@ -114,7 +114,7 @@ class QuickOptions(
 ) : LinearLayout(context) {
     private val d = resources.displayMetrics.density
     private fun dp(n: Int) = (n * d).toInt()
-    private val library = LayoutLibrary(settings).also { it.migrate(recoverTrial = false) }
+    private val library = LayoutLibrary(settings, landscape).also { it.migrate(recoverTrial = false) }
     private val thumbnails = LayoutThumbnailCache(context, settings)
     private val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
     private val back = button("\u2039  Back") { if (confirm.visibility == View.VISIBLE) hideConfirm() else if (showingAll) showAll(false) else close() }
@@ -227,7 +227,6 @@ class QuickOptions(
             box.addView(name, LayoutParams(-1, if (fullName) dp(34) else dp(22)))
             box.setOnClickListener {
                 library.use(entry)
-                if (entry.preset?.split == true) settings.setSplitFor(landscape(), true)
                 refresh()
             }
         }

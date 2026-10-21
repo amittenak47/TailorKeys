@@ -30,7 +30,7 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
     private val chordLibraries = HashMap<String, Chords>()
     private val templateMatcher = TemplateMatcher()
     private val revisions = PreferenceRevisions()
-    val library = LayoutLibrary(settings).also { it.migrate() }
+    val library = LayoutLibrary(settings) { appContext.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE }.also { it.migrate() }
     var selectedKey by mutableStateOf(library.inUse)
         private set
     var importing by mutableStateOf(false)
@@ -39,7 +39,7 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
     val thumbnails = LayoutThumbnails(context, settings, revisions)
 
     fun layoutEntries(): List<LayoutEntry> {
-        revisions.read(LayoutKeys.SAVED, LayoutKeys.DRAFT, Prefs.CURRENT_LANGUAGE, Prefs.NUMBER_ROW.key)
+        revisions.read(LayoutKeys.SAVED, LayoutKeys.DRAFT, LayoutKeys.DRAFT_SPLIT, Prefs.CURRENT_LANGUAGE, Prefs.NUMBER_ROW.key)
         return library.entries()
     }
     fun inUseKey(): String { revisions.read(LayoutKeys.SELECTED); return library.inUse }
@@ -48,16 +48,15 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         selectedKey = entry.key
         previewingSelected = true
         importing = false
+        preview.previewSplit = entry.split
         preview.grid = entry.grid()
     }
     fun useLayout(entry: LayoutEntry) {
         library.use(entry)
-        // Keep the existing preset behavior; trials only swap the grid and leave Size preferences alone.
-        if (entry.preset?.split == true) settings.setSplitFor(appContext.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE, true)
         selectLayout(entry)
     }
-    fun showSelected() { previewingSelected = true; preview.grid = selectedLayout().grid() }
-    fun showApplied() { previewingSelected = false; preview.grid = settings.loadGrid() }
+    fun showSelected() { previewingSelected = true; preview.previewSplit = selectedLayout().split; preview.grid = selectedLayout().grid() }
+    fun showApplied() { previewingSelected = false; preview.previewSplit = null; preview.grid = settings.loadGrid() }
     fun chordLanguage(): String { revisions.read(Prefs.CURRENT_LANGUAGE, Prefs.LANGUAGES); return settings.currentLanguage() }
     fun chordLetters(): Set<Char> {
         revisions.read(Prefs.LAYOUT, Prefs.CURRENT_LANGUAGE, Prefs.LANGUAGES)
@@ -70,7 +69,8 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         }.forLetters(letters)
 
     val preview = KeyboardView(context, settings).apply {
-        grid = settings.loadGrid()
+        previewSplit = selectedLayout().split
+        grid = selectedLayout().grid()
         state.language = settings.currentLanguage()
         setSuggestions(listOf("helpful", "helicopter", "helmet"), listOf("hello", "help", "held"), "hel")
         listener = object : KeyboardView.Listener {
@@ -125,7 +125,7 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         val grid = KeyGrid.template(template, settings.currentLanguage())
         if (settings.bool(Prefs.NUMBER_ROW)) grid.setNumberRow(true)
         preview.replaceGrid(grid)
-        if (template.split) settings.setSplitFor(landscape, true)
+        settings.setSplitFor(landscape, template.split)
     }
 
     fun setNumberRow(on: Boolean): Boolean {
@@ -141,6 +141,7 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         settings.resetAll()
         library.migrate()
         selectedKey = library.inUse
+        preview.previewSplit = selectedLayout().split
         preview.grid = settings.loadGrid()
         preview.state.language = settings.currentLanguage()
         preview.reloadSettings()

@@ -865,7 +865,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         clearTaps()
         grid = keyboardView?.grid ?: return
         if (modelReady) predictor.setLayout(grid)
-        val library = LayoutLibrary(settings)
+        val library = LayoutLibrary(settings) { resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE }
         val key = editingLayoutKey?.takeIf { it == library.inUse }
         if (key != null) library.edit(key, grid) else settings.saveGrid(grid)
     }

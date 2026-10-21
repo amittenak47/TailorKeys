@@ -49,6 +49,7 @@ struct TypingTestScreen: View {
                     .layoutMorph("keyboard", in: namespace, enabled: !reduceMotion)
             }
         }
+        .foregroundColor(LayoutStyle.text)
         .background(LayoutStyle.background.ignoresSafeArea())
         .onReceive(clock) { _ in
             guard !session.isComplete else { return }
@@ -90,7 +91,7 @@ struct TypingTestScreen: View {
             Button(action: leave) { Image(systemName: "arrow.left").font(.title3).frame(width: 44, height: 44) }
                 .buttonStyle(.plain).accessibilityLabel("Back to layouts")
             VStack(alignment: .leading, spacing: 2) {
-                Text("Typing test").font(.title3.weight(.medium))
+                Text("Typing test").font(.title3.weight(.medium)).foregroundColor(LayoutStyle.text)
                 Text(choice.name).font(.caption).foregroundColor(LayoutStyle.secondary)
             }
             Spacer()
@@ -126,8 +127,13 @@ struct TypingTestScreen: View {
                     annotatedSentence(historical: false).font(wide ? .title2 : .body).lineSpacing(5)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .accessibilityLabel("Sentence: " + sentence)
-                    ProgressView(value: min(1, Double(session.characterCount) / Double(max(1, sentence.count))))
-                        .tint(LayoutStyle.accent)
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(LayoutStyle.text.opacity(0.12))
+                            Capsule().fill(LayoutStyle.accent).frame(width: geometry.size.width * CGFloat(session.progress))
+                        }
+                    }.frame(height: 4)
+                        .accessibilityValue("\(Int(session.progress * 100)) percent")
                         .accessibilityLabel("Sentence progress")
                 } else if !input.isEmpty {
                     freeTranscript.font(wide ? .title2 : .body).lineSpacing(5)
@@ -136,6 +142,8 @@ struct TypingTestScreen: View {
                 }
                 TextField(mode == .free ? "Type anything" : "Type the sentence here", text: $input)
                     .focused($focused).font(.body).frame(minHeight: 44)
+                    // The extension treats autocorrectionType .no as an opt-out from learning.
+                    .textContentType(.none)
                     .textInputAutocapitalization(.sentences).disableAutocorrection(true)
                     .submitLabel(.done).onSubmit { focused = false }
                     .accessibilityLabel(mode == .free ? "Free typing area" : "Type the sample sentence")

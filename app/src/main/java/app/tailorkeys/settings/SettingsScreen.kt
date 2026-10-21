@@ -133,7 +133,7 @@ private fun SettingsContent(state: SettingsState, setupStatus: SetupStatus, onSe
     var page by remember(landscape) { mutableStateOf(landscape) }
     var dialog by rememberSaveable { mutableStateOf<String?>(null) }
     SettingsBackHandler(tab, editing, { editing = false }, selectTab)
-    Scaffold(containerColor = MaterialTheme.colorScheme.background,
+    Scaffold(modifier = Modifier.imePadding(), containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
         bottomBar = {
             SettingsNavigation(tab, selectTab)

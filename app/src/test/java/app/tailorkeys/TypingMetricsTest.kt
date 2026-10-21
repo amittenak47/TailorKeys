@@ -57,6 +57,30 @@ class TypingMetricsTest {
         assertEquals(2_000L, s.metrics(3_000).elapsed)
         assertEquals(30.0, s.metrics(3_000).wpm, 0.0)
     }
+    @Test fun onlyCompletedTimedSentencesProduceOneResult() {
+        val free = TypingSession(TypingMode.FREE, "hello world")
+        free.update("deliberate typo", 1_000)
+        assertNull(free.takeResult(10_000)) // switching mode, clearing or leaving
+        val test = TypingSession(TypingMode.TEST, "hello world")
+        test.update("hello", 1_000)
+        assertNull(test.takeResult(2_000))
+        test.update("hello world", 5_000)
+        assertEquals(33.0, test.takeResult(9_000)!!.wpm, 0.0)
+        assertNull(test.takeResult(10_000))
+        val paste = TypingSession(TypingMode.TEST, "hello")
+        paste.update("hello", 1_000)
+        assertNull(paste.takeResult(2_000))
+    }
+    @Test fun sentenceProgressStartsEmptyAndIsBounded() {
+        val s = TypingSession(TypingMode.TEST, "hello")
+        assertEquals(0f, s.progress, 0f)
+        s.update("he", 0)
+        assertEquals(.4f, s.progress, .0001f)
+        s.update("hello extra", 1_000)
+        assertEquals(1f, s.progress, 0f)
+        assertEquals(0f, TypingSession(TypingMode.TEST).progress, 0f)
+        assertEquals(0f, TypingSession(TypingMode.FREE).progress, 0f)
+    }
     @Test fun sentenceBankHasFortyUniqueOriginalShortSentences() {
         assertEquals(40, SentenceBank.sentences.size)
         assertEquals(40, SentenceBank.sentences.map { it.lowercase() }.toSet().size)

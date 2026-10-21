@@ -1,5 +1,7 @@
 package app.tailorkeys.settings
 
+import app.tailorkeys.TypingResult
+
 internal enum class TypingMode { FREE, TEST }
 internal data class SpeedSample(val elapsed: Long, val wpm: Double, val mistake: Boolean)
 internal data class TypingMetrics(val wpm: Double, val accuracy: Double, val mistakes: Int, val elapsed: Long)
@@ -17,6 +19,17 @@ internal class TypingSession(val mode: TypingMode, val sentence: String = "") {
     val samples: List<SpeedSample> get() = history
     val complete get() = mode == TypingMode.TEST && text.length >= sentence.length && sentence.isNotEmpty()
     val slips: Set<Int> get() = wrongPositions
+    val progress: Float get() = if (mode == TypingMode.TEST && sentence.isNotEmpty())
+        (text.length.toFloat() / sentence.length).coerceIn(0f, 1f) else 0f
+    private var recorded = false
+
+    /** Free typing and abandoned sentences never contribute to a layout's average. */
+    fun takeResult(at: Long): TypingResult? {
+        val end = finishedAt ?: return null
+        if (mode != TypingMode.TEST || !complete || recorded || metrics(end).elapsed <= 0) return null
+        recorded = true
+        return metrics(end).let { TypingResult(it.wpm, it.accuracy, at) }
+    }
 
     fun startTyping(now: Long) { if (startedAt == null) startedAt = now }
 

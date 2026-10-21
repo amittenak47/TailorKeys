@@ -27,6 +27,8 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.*
@@ -46,6 +48,7 @@ internal fun LayoutLibraryPage(state: SettingsState, listState: LazyListState, e
     var sheet by remember { mutableStateOf(false) }
     var naming by rememberSaveable { mutableStateOf<String?>(null) }
     var name by rememberSaveable { mutableStateOf("Custom") }
+    var pendingSplit by rememberSaveable { mutableStateOf(false) }
     var pendingSource by rememberSaveable { mutableStateOf<String?>(null) }
     var delete by rememberSaveable { mutableStateOf<String?>(null) }
     var importPanel by rememberSaveable { mutableStateOf(false) }
@@ -55,6 +58,8 @@ internal fun LayoutLibraryPage(state: SettingsState, listState: LazyListState, e
     val newer = remember(code) { Regex("TK([0-9]+)-").find(code)?.groupValues?.get(1)?.toIntOrNull()?.let { it > 1 } == true }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    var actionBarHeight by remember { mutableStateOf(88.dp) }
     LaunchedEffect(importPanel, code) {
         state.importing = importPanel
         state.importPreviewValid = imported != null || code.isBlank()
@@ -72,16 +77,18 @@ internal fun LayoutLibraryPage(state: SettingsState, listState: LazyListState, e
         sheet = false
         if (state.library.requestNew() == NewLayoutFlow.SAVE_FIRST) {
             pendingSource = source
+            pendingSplit = selected.split
             name = "Custom"
             naming = "continue"
         } else {
-            state.selectLayout(state.library.startDraft(selected.grid()))
+            state.selectLayout(state.library.startDraft(selected.grid(), selected.split))
             if (!editing) onEdit()
         }
     }
     Column(Modifier.fillMaxSize()) {
         LazyColumn(state = listState, modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp,
+                bottom = if (importPanel) 16.dp else actionBarHeight + 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (importPanel) item("import") {
                 Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainerHighest) {
                     Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -91,15 +98,15 @@ internal fun LayoutLibraryPage(state: SettingsState, listState: LazyListState, e
                             isError = code.isNotBlank() && imported == null, modifier = Modifier.fillMaxWidth())
                         if (imported == null) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text("⚠", color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { contentDescription = "Invalid code" })
+                                if (code.isNotBlank()) Text("⚠", color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { contentDescription = "Invalid code" })
                                 Text(if (code.isBlank()) "Paste a code someone shared with you." else if (newer)
                                     "This code is from a newer version of TailorKeys" else
                                     "This code can’t be read. Copy the whole TK1- code and paste it again.",
                                     color = if (code.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error)
                             }
-                            Text("No preview for this code", style = MaterialTheme.typography.bodyMedium)
+                            if (code.isNotBlank()) Text("No preview for this code", style = MaterialTheme.typography.bodyMedium)
                             TextButton({ code = context.getSystemService(ClipboardManager::class.java).primaryClip
-                                ?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty() }) { Text("Paste again") }
+                                ?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty() }) { Text(if (code.isBlank()) "Paste from clipboard" else "Paste again") }
                         } else Text("✓ Valid TK1 code · ${imported.rows} rows · ${imported.items.size} keys", style = MaterialTheme.typography.bodyMedium)
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             if (imported != null) LayoutThumbnail(LayoutEntry("import", importName, imported.toJson()), state.thumbnails,
@@ -148,15 +155,17 @@ internal fun LayoutLibraryPage(state: SettingsState, listState: LazyListState, e
             } }
             }
         }
-        if (!importPanel) SelectedLayoutActionBar(state, editing, onTry = { entry ->
-            scope.launch {
-                val row = 1 + entries.indexOfFirst { it.key == entry.key }.coerceAtLeast(0) / 2
-                listState.animateScrollToItem(row)
-                withFrameNanos { }
-                onTry(entry)
-            }
-        }, onEdit = onEdit,
-            onRename = { name = it.name; naming = it.key }, onDelete = { delete = it.key })
+        if (!importPanel) Box(Modifier.onSizeChanged { actionBarHeight = with(density) { it.height.toDp() } }) {
+            SelectedLayoutActionBar(state, editing, onTry = { entry ->
+                scope.launch {
+                    val row = 1 + entries.indexOfFirst { it.key == entry.key }.coerceAtLeast(0) / 2
+                    listState.animateScrollToItem(row)
+                    withFrameNanos { }
+                    onTry(entry)
+                }
+            }, onEdit = onEdit,
+                onRename = { name = it.name; naming = it.key }, onDelete = { delete = it.key })
+        }
     }
     if (sheet) ModalBottomSheet(onDismissRequest = { sheet = false }) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 32.dp)) {
@@ -188,7 +197,7 @@ internal fun LayoutLibraryPage(state: SettingsState, listState: LazyListState, e
             OutlinedTextField(name, { name = it.take(24) }, label = { Text("Layout name") }, singleLine = true,
                 supportingText = { Text("Keep it or give it a name.  ${name.length} / 24") })
         } }, confirmButton = { TextButton({
-            val entry = if (flow == "continue") state.library.saveAndContinue(name, requireNotNull(KeyGrid.fromJson(pendingSource)))
+            val entry = if (flow == "continue") state.library.saveAndContinue(name, requireNotNull(KeyGrid.fromJson(pendingSource)), pendingSplit)
                 else state.library.rename(flow, name)
             state.selectLayout(entry)
             naming = null; pendingSource = null

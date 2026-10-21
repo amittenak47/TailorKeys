@@ -8,6 +8,7 @@ struct LayoutScreen: View {
     @State private var name = "Custom"
     @State private var deleting = false
     @State private var notice: String?
+    @State private var dockHeight: CGFloat = 72
 
     private enum LayoutModal: Equatable { case add, rename, saveFirst }
 
@@ -34,19 +35,27 @@ struct LayoutScreen: View {
         let target = UIScreen.main.bounds.height * CGFloat(model.settings.profile(size.width > size.height).heightPercent) / 100
         return VStack(spacing: 0) {
             AppHeader(model: model, layoutStyle: true).padding(.bottom, 8)
-            if size.height - target > 260 {
+            if !model.importOpen && size.height - target > 260 {
                 preview.padding(.horizontal, 4)
                 ScrollView { pageContent(wide: size.width >= 600).padding(16) }
             } else {
                 ScrollView {
                     VStack(spacing: 12) {
-                        preview.padding(.horizontal, 4)
+                        if !model.importOpen { preview.padding(.horizontal, 4) }
                         pageContent(wide: size.width >= 600).padding(.horizontal, 16).padding(.bottom, 8)
                     }
                 }
             }
-            if !model.importOpen { actionDock(wide: size.width >= 600).padding(.horizontal, 16).padding(.bottom, 8) }
+            if !model.importOpen {
+                actionDock(wide: size.width >= 600).padding(.horizontal, 16).padding(.bottom, 8)
+                    .background(GeometryReader { geometry in
+                        Color.clear.preference(key: LayoutDockHeight.self, value: geometry.size.height)
+                    })
+            }
         }
+        // SwiftUI shrinks this container to the keyboard safe area. The import panel
+        // stays in the scrolling branch, with no full keyboard preview consuming its space.
+        .onPreferenceChange(LayoutDockHeight.self) { dockHeight = $0 }
     }
 
     private var preview: some View {
@@ -98,7 +107,7 @@ struct LayoutScreen: View {
                         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                         .accessibilityAddTraits(.updatesFrequently)
                 }
-            }
+            }.padding(.bottom, dockHeight + 16)
         }
     }
 
@@ -399,4 +408,9 @@ private struct LayoutNameDialog: View {
         }
         .padding(24).background(RoundedRectangle(cornerRadius: 28).fill(LayoutStyle.raised))
     }
+}
+
+private struct LayoutDockHeight: PreferenceKey {
+    static var defaultValue: CGFloat = 72
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }

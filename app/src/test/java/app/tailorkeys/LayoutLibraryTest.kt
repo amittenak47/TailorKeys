@@ -92,6 +92,7 @@ class LayoutLibraryTest {
     private class Fixture {
         val values = mutableMapOf<String, String>()
         var grid = KeyGrid.default()
+        var split = false
         var id = 0
         val events = mutableListOf<String>()
         fun store() = LayoutLibrary(object : LayoutPreferences {
@@ -100,7 +101,7 @@ class LayoutLibraryTest {
                 values.forEach { (key, value) -> if (value == null) this@Fixture.values.remove(key) else this@Fixture.values[key] = value }
                 events += "write"
             }
-        }, { grid }, { grid = it; events += "apply" }, { "en" }, { grid.rows == 5 }, { "id-${++id}" })
+        }, { grid }, { grid = it; events += "apply" }, { "en" }, { grid.rows == 5 }, { "id-${++id}" }, { split }, { split = it })
     }
 
     @Test fun migrationSelectsEveryPresetAndPreservesCustomExactlyOnce() {
@@ -130,7 +131,7 @@ class LayoutLibraryTest {
         store.rename(first.key, "Work")
         assertEquals(listOf("Work", "Couch"), store.entries().filter { it.custom }.map { it.name })
         val array = JSONArray(f.values[LayoutKeys.SAVED])
-        assertEquals(setOf("id", "name", "grid"), array.getJSONObject(0).keys().asSequence().toSet())
+        assertEquals(setOf("id", "name", "grid", "split"), array.getJSONObject(0).keys().asSequence().toSet())
         assertTrue(array.getJSONObject(0).get("grid") is JSONObject)
         store.delete(first.key)
         assertEquals(second.key, store.entries().single { it.custom }.key)
@@ -199,6 +200,61 @@ class LayoutLibraryTest {
         assertEquals(5, f.grid.rows)
         assertEquals(trial.key, store.inUse)
         assertNull(f.values[LayoutKeys.TRIAL])
+    }
+
+    @Test fun layoutsApplyTheirOwnSplitAndTrialsRestoreBothGridAndSplit() {
+        val f = Fixture(); val store = f.store(); store.migrate()
+        val standard = store.entries().first { it.preset == Template.STANDARD }
+        val split = store.entries().first { it.preset == Template.SPLIT }
+        f.split = true
+        assertFalse(standard.split)
+        store.beginTrial(standard) // even the applied tile can have a different split
+        assertEquals("false", f.values[LayoutKeys.TRIAL_SPLIT])
+        assertTrue(f.split) // Size preferences remain intact throughout the trial
+        store.restoreTrial()
+        assertTrue(f.split)
+        assertNull(f.values[LayoutKeys.TRIAL_SPLIT])
+        store.use(standard)
+        assertFalse(f.split)
+        store.use(split)
+        assertTrue(f.split)
+        val saved = store.add("Desk", KeyGrid.default())
+        store.use(standard)
+        val reloaded = f.store().entries().first { it.key == saved.key }
+        assertTrue(reloaded.split)
+        store.beginTrial(reloaded)
+        assertEquals("true", f.values[LayoutKeys.TRIAL_SPLIT])
+        f.store().migrate() // process-death recovery
+        assertFalse(f.split)
+        assertNull(f.values[LayoutKeys.TRIAL_SPLIT])
+        store.beginTrial(reloaded); store.use(reloaded); store.restoreTrial()
+        assertTrue(f.split)
+    }
+
+    @Test fun draftForkAndSaveKeepTheSourcesSplit() {
+        val f = Fixture(); val store = f.store(); store.migrate()
+        val source = store.entries().first { it.preset == Template.SPLIT }
+        val draft = store.quickEdit(source, false)
+        assertTrue(draft.split)
+        val saved = store.saveDraft("Split custom")
+        assertTrue(saved.split)
+        assertTrue(f.store().entries().first { it.key == saved.key }.split)
+        assertNull(f.values[LayoutKeys.DRAFT_SPLIT])
+    }
+
+    @Test fun freeTypingAndAbandonedTestsNeverWriteTypingResults() {
+        val f = Fixture(); val store = f.store(); store.migrate()
+        val free = TypingSession(TypingMode.FREE)
+        free.update("words and typos", 0)
+        free.takeResult(30_000)?.let { store.record(store.inUse, it) }
+        val test = TypingSession(TypingMode.TEST, "hello world")
+        test.update("hello", 1_000)
+        test.takeResult(4_000)?.let { store.record(store.inUse, it) }
+        assertNull(f.values[LayoutKeys.RESULTS])
+        assertTrue(store.results(store.inUse).isEmpty())
+        test.update("hello world", 5_000)
+        test.takeResult(6_000)?.let { store.record(store.inUse, it) }
+        assertEquals(33.0, store.results(store.inUse).single().wpm, 0.0)
     }
 
     @Test fun resultsKeepLastTwentyPerLayoutAndFollowSavedDraft() {
