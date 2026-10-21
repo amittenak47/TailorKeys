@@ -668,7 +668,10 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             updateSuggestions(); keyboardView?.refreshInputState(); return
         }
         clearChoice()
-        val endedBefore = if (separator != null && separator != " ") editor().before else null
+        val endingGlide = if (separator != null && separator != " " && currentGlide()) glideWord else null
+        val endedBefore = if (separator != null && separator != " ") {
+            if (endingGlide != null && hasAutomaticSpace()) editor().before.dropLast(1) else editor().before
+        } else null
         var letterCommitted = false
         when {
             code == Keys.BACKSPACE -> {
@@ -706,7 +709,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
                 }
             }
         }
-        if (endedBefore != null) deferLearning(currentWord(endedBefore), previousWord(endedBefore), previousWord2(endedBefore))
+        if (endedBefore != null) deferLearning(endingGlide ?: currentWord(endedBefore), previousWord(endedBefore), previousWord2(endedBefore))
         updateSuggestions(letterCommitted)
         keyboardView?.refreshInputState()
     }
@@ -816,7 +819,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         quickOptions?.showTidy(fixes) { chosen -> editorPhase apply@ {
             if (chosen.isEmpty() || session != inputSession || !correctAllowed) return@apply
             val live = editor()
-            if (live.selected || connection.getTextBeforeCursor(left.length, 0)?.toString() != left ||
+            if (live.selected || connection.getTextBeforeCursor(left.length, 0)?.toString().orEmpty() != left ||
                 connection.getTextAfterCursor(right.length, 0)?.toString().orEmpty() != right) return@apply
             val replacement = TidyText.apply(text, chosen)
             val ic = currentInputConnection ?: return@apply
