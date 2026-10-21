@@ -13,6 +13,7 @@ object InsertPrefs {
     const val DEVICE_ONLY = "insert_device_only"
     const val STORE = "insert_clips"
     const val SECTION = "insert_section"
+    const val HAD_CLIPS = "insert_had_clips"
     val toneNames = listOf("Default", "Light", "Medium-light", "Medium", "Medium-dark", "Dark")
 }
 
@@ -23,6 +24,7 @@ class InsertRepository(val prefs: SharedPreferences) {
     fun store() = ClipboardStore.decode(prefs.getString(InsertPrefs.STORE, "[]") ?: "[]").also { it.expire(keep) }
     fun change(block: (ClipboardStore) -> Unit) { val s = store(); block(s); save(s) }
     fun save(store: ClipboardStore) {
+        if (store.clips().isNotEmpty() && !prefs.getBoolean(InsertPrefs.HAD_CLIPS, false)) prefs.edit().putBoolean(InsertPrefs.HAD_CLIPS, true).apply()
         val json = store.encode()
         if (json != prefs.getString(InsertPrefs.STORE, "[]")) prefs.edit().putString(InsertPrefs.STORE, json).apply()
     }
@@ -31,9 +33,14 @@ class InsertRepository(val prefs: SharedPreferences) {
     }
     fun recent(section: String): List<String> = runCatching { val a = JSONArray(prefs.getString("insert_recent_$section", "[]")); (0 until a.length()).map { a.getString(it) } }.getOrDefault(emptyList())
     fun used(section: String, text: String) {
-        if (!prefs.getBoolean(InsertPrefs.RECENTS, true)) return
+        if (section !in listOf("Emoji", "Kaomoji") || text.isEmpty()) return
         val recent = InsertRecents(recent(section)); recent.use(text)
         prefs.edit().putString("insert_recent_$section", JSONArray(recent.values()).toString()).apply()
+    }
+    /** Both taps and tone picks pass here, before an insertion callback can refresh/close the panel. */
+    fun insertSymbol(section: String, entry: InsertSymbol, insert: (String) -> Unit) {
+        used(section, entry.text)
+        insert(entry.text)
     }
     fun clearRecents() { prefs.edit().remove("insert_recent_Emoji").remove("insert_recent_Kaomoji").apply() }
 }

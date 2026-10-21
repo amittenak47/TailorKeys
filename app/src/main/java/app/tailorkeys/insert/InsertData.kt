@@ -43,6 +43,17 @@ class InsertRecents(initial: List<String> = emptyList()) {
     fun values(): List<String> = items.toList()
 }
 
+enum class ClipboardPanelState { HISTORY_OFF, ACCESS_REQUIRED, FIRST_USE, EMPTY, ITEMS }
+
+/** One state only. Disabled history wins even when stored clips or onboarding remain. */
+fun clipboardPanelState(enabled: Boolean, hasItems: Boolean, hadItems: Boolean, dismissed: Boolean, fullAccess: Boolean = true): ClipboardPanelState = when {
+    !enabled -> ClipboardPanelState.HISTORY_OFF
+    !fullAccess -> ClipboardPanelState.ACCESS_REQUIRED
+    hasItems -> ClipboardPanelState.ITEMS
+    !hadItems && !dismissed -> ClipboardPanelState.FIRST_USE
+    else -> ClipboardPanelState.EMPTY
+}
+
 enum class ClipKeep(val title: String, val millis: Long) {
     HOUR("1 hour", 3_600_000), DAY("1 day", 86_400_000), WEEK("1 week", 604_800_000), FOREVER("until cleared", Long.MAX_VALUE)
 }

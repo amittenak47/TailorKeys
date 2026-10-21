@@ -43,6 +43,17 @@ class InsertDataTest {
         assertEquals(1, recents.values().count { it == "12" })
         assertEquals("40", recents.values()[1])
     }
+    @Test fun clipboardChoosesExactlyOneStateAndHistoryOffWins() {
+        for (has in listOf(false, true)) for (had in listOf(false, true)) for (dismissed in listOf(false, true)) {
+            assertEquals(ClipboardPanelState.HISTORY_OFF, clipboardPanelState(false, has, had, dismissed))
+            assertEquals(ClipboardPanelState.HISTORY_OFF, clipboardPanelState(false, has, had, dismissed, false))
+            assertEquals(ClipboardPanelState.ACCESS_REQUIRED, clipboardPanelState(true, has, had, dismissed, false))
+        }
+        assertEquals(ClipboardPanelState.FIRST_USE, clipboardPanelState(true, false, false, false))
+        assertEquals(ClipboardPanelState.EMPTY, clipboardPanelState(true, false, true, false))
+        assertEquals(ClipboardPanelState.EMPTY, clipboardPanelState(true, false, false, true))
+        assertEquals(ClipboardPanelState.ITEMS, clipboardPanelState(true, true, false, false))
+    }
     @Test fun capturePrivacyExpiryPinsAndRoundTrip() {
         var now = 0L
         val s = ClipboardStore(clock = { now })

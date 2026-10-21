@@ -24,6 +24,14 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
 }
 
 // Insert models deliberately avoid UIKit and all device permissions.
+for has in [false, true] { for had in [false, true] { for dismissed in [false, true] {
+    check(clipboardPanelState(enabled: false, hasItems: has, hadItems: had, dismissed: dismissed, fullAccess: false) == .historyOff, "disabled clipboard did not win")
+    check(clipboardPanelState(enabled: true, hasItems: has, hadItems: had, dismissed: dismissed, fullAccess: false) == .accessRequired, "clipboard access state missing")
+} } }
+check(clipboardPanelState(enabled: true, hasItems: false, hadItems: false, dismissed: false) == .firstUse, "first-use clipboard missing")
+check(clipboardPanelState(enabled: true, hasItems: false, hadItems: true, dismissed: false) == .empty, "first-use returned after clips were cleared")
+check(clipboardPanelState(enabled: true, hasItems: false, hadItems: false, dismissed: true) == .empty, "dismissed clipboard onboarding returned")
+check(clipboardPanelState(enabled: true, hasItems: true, hadItems: false, dismissed: false) == .items, "clipboard items and onboarding overlap")
 let emojiTSV = try String(contentsOfFile: "app/src/main/assets/insert/emoji.tsv", encoding: .utf8)
 let emojiCatalog = EmojiCatalog(emojiTSV)
 check(emojiCatalog.entries.count > 3900, "Unicode emoji data was truncated")
@@ -44,6 +52,29 @@ check(kaomojiTSV.split(whereSeparator: \.isNewline).count == 150 && kaomojiTSV.u
 var insertRecents = InsertRecents()
 for value in 0...40 { insertRecents.use(String(value)) }; insertRecents.use("12")
 check(insertRecents.values.count == 32 && insertRecents.values[0] == "12" && insertRecents.values[1] == "40", "recents ordering/cap failed")
+do {
+    let suite = "tailorkeys.insert.tests." + UUID().uuidString
+    let defaults = UserDefaults(suiteName: suite)!; defer { defaults.removePersistentDomain(forName: suite) }
+    let repo = InsertRepository(defaults: { defaults })
+    let plain = emojiCatalog.variants("👍")[0], toned = emojiCatalog.variants("👍")[3]
+    for entry in [plain, toned] {
+        repo.insertSymbol("Emoji", entry) { text in
+            check(text == entry.text && InsertRepository(defaults: { defaults }).recent("Emoji").first == text, "insert happened before recent persisted")
+        }
+    }
+    let face = InsertSymbol("(^_^)", "happy", "Happy")
+    repo.insertSymbol("Kaomoji", face) { _ in }
+    check(repo.recent("Emoji") == [toned.text, plain.text] && repo.recent("Kaomoji") == [face.text], "recents mixed sections or lost tone")
+    defaults.set(false, forKey: InsertPrefs.recents); repo.insertSymbol("Emoji", plain) { _ in }
+    check(repo.recent("Emoji").isEmpty, "hidden recents still displayed")
+    defaults.set(true, forKey: InsertPrefs.recents)
+    check(repo.recent("Emoji") == [plain.text, toned.text], "hidden recents were not recorded")
+    for i in 0..<40 { repo.insertSymbol("Kaomoji", InsertSymbol("face\(i)", "face", "Happy")) { _ in } }
+    check(repo.recent("Kaomoji").count == 32 && repo.recent("Emoji").count == 2, "recents cap crossed sections")
+    repo.change { $0.capture("copied", enabled: true, sensitive: false, password: false) }; repo.change { $0.clear() }
+    check(defaults.bool(forKey: InsertPrefs.hadClips), "clipboard forgot that items had existed")
+    repo.clearRecents(); check(repo.recent("Emoji").isEmpty && repo.recent("Kaomoji").isEmpty, "recents did not clear")
+}
 var insertNow: TimeInterval = 0
 let clips = ClipboardStore(now: { insertNow })
 check(!clips.capture("secret", enabled: true, sensitive: true, password: false), "sensitive clip stored")

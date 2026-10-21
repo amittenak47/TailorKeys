@@ -50,6 +50,15 @@ struct InsertRecents {
     mutating func use(_ text: String) { values.removeAll { $0 == text }; values.insert(text, at: 0); values = Array(values.prefix(32)) }
 }
 
+enum ClipboardPanelState { case historyOff, accessRequired, firstUse, empty, items }
+func clipboardPanelState(enabled: Bool, hasItems: Bool, hadItems: Bool, dismissed: Bool, fullAccess: Bool = true) -> ClipboardPanelState {
+    if !enabled { return .historyOff }
+    if !fullAccess { return .accessRequired }
+    if hasItems { return .items }
+    if !hadItems && !dismissed { return .firstUse }
+    return .empty
+}
+
 enum ClipKeep: Int, CaseIterable {
     case hour, day, week, forever
     var title: String { ["1 hour", "1 day", "1 week", "until cleared"][rawValue] }
@@ -98,6 +107,7 @@ enum InsertPrefs {
     static let history = "insert_history", keep = "insert_keep", tone = "insert_tone", recents = "insert_recents", section = "insert_section"
     static let toneNames = ["Default", "Light", "Medium-light", "Medium", "Medium-dark", "Dark"]
     static let promptSeen = "insert_key_prompt_v1"
+    static let hadClips = "insert_had_clips"
     static func needsPrompt(seen: Bool, custom: Bool, grid: KeyGrid) -> Bool { !seen && custom && !grid.items.contains { $0.keys.contains(Keys.insert) } }
 }
 
@@ -109,13 +119,24 @@ final class InsertRepository {
     func store() -> ClipboardStore {
         let result = ClipboardStore.decode(prefs.data(forKey: "insert_clips") ?? Data()); result.expire(prefs.object(forKey: InsertPrefs.keep) == nil ? .day : keep); return result
     }
-    func save(_ store: ClipboardStore) { let data = store.encode(); if prefs.data(forKey: "insert_clips") != data { prefs.set(data, forKey: "insert_clips") } }
+    func save(_ store: ClipboardStore) {
+        if !store.clips.isEmpty { prefs.set(true, forKey: InsertPrefs.hadClips) }
+        let data = store.encode(); if prefs.data(forKey: "insert_clips") != data { prefs.set(data, forKey: "insert_clips") }
+    }
     func searchableItems(fullAccess: Bool) -> [ClipItem] {
         let s = store(); return (fullAccess && prefs.boolDefault(InsertPrefs.history, false) ? s.clips : []) + s.notes
     }
     func change(_ action: (ClipboardStore) -> Void) { let s = store(); action(s); save(s) }
     func recent(_ section: String) -> [String] { prefs.boolDefault(InsertPrefs.recents, true) ? prefs.stringArray(forKey: "insert_recent_" + section) ?? [] : [] }
-    func used(_ section: String, _ text: String) { guard prefs.boolDefault(InsertPrefs.recents, true) else { return }; var r = InsertRecents(recent(section)); r.use(text); prefs.set(r.values, forKey: "insert_recent_" + section) }
+    func used(_ section: String, _ text: String) {
+        guard ["Emoji", "Kaomoji"].contains(section), !text.isEmpty else { return }
+        var r = InsertRecents(prefs.stringArray(forKey: "insert_recent_" + section) ?? []); r.use(text)
+        prefs.set(r.values, forKey: "insert_recent_" + section)
+    }
+    /// Persist before an insertion callback can refresh or close the panel. Taps and tone picks share it.
+    func insertSymbol(_ section: String, _ entry: InsertSymbol, insert: (String) -> Void) {
+        used(section, entry.text); insert(entry.text)
+    }
     func clearRecents() { prefs.removeObject(forKey: "insert_recent_Emoji"); prefs.removeObject(forKey: "insert_recent_Kaomoji") }
 }
 
