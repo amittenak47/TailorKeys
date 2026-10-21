@@ -89,6 +89,7 @@ enum KeyText {
         case Keys.abc: return "letters" + (state.capsLock ? ", caps lock on" : (state.shift ? ", shift on" : ""))
         case Keys.num: return "numbers"
         case Keys.sym: return "symbols"
+        case Keys.insert: return "Insert, emoji, kaomoji, clipboard and Dictate"
         default:
             let face = output(code, state) ?? code
             switch face {
@@ -136,6 +137,7 @@ enum KeyText {
         switch k {
         case Keys.abc: return s.capsLock ? "ABC" : (s.shift && s.layer == .abc ? "Abc" : "abc")
         case Keys.num: return "123"
+        case Keys.insert: return "☺"
         case Keys.sym: return "#+="
         case Keys.space, Keys.backspace, Keys.enter: return ""
         default: return output(k, s) ?? k

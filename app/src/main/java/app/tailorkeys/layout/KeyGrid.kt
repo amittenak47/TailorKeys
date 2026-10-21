@@ -15,6 +15,7 @@ object Keys {
     const val ABC = "abc"
     const val NUM = "num"
     const val SYM = "sym"
+    const val INSERT = "insert"
 }
 
 /** Starting layouts offered in the editor. [split] also turns on the split keyboard. */
@@ -213,6 +214,18 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         return best
     }
 
+    /** Explicit editor action only. Persisted grids are never silently upgraded. */
+    fun addInsert(): Boolean {
+        if (items.any { Keys.INSERT in it.keys }) return false
+        val key = GridKey(nextId++, rows - 1, 1, 1, mutableListOf(Keys.INSERT))
+        val num = items.firstOrNull { Keys.NUM in it.keys }
+        if (num != null && insertShift(key, num, before = false)) { items.add(key); return true }
+        val space = items.firstOrNull { it.isSpace && it.w > 1 }
+        if (space != null && insertBesideSpace(key, space)) { items.add(key); return true }
+        val spot = findEmpty(rows - 1, 1) ?: return false
+        key.r = spot.first; key.c = spot.second; items.add(key); return true
+    }
+
     /** Adds or removes a top row of digit keys. Removing fails while other keys sit in that row. */
     fun setNumberRow(on: Boolean): Boolean {
         if (on && rows == 4) {
@@ -315,7 +328,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
                 add(3, 6, listOf(Keys.ENTER))
                 add(3, 7, listOf(Keys.SPACE), 4)
             }
-            return KeyGrid(4, items, items.size).also { it.mapLetters(lang) }
+            return KeyGrid(4, items, items.size).also { it.mapLetters(lang); it.addInsert() }
         }
 
         fun default(lang: String = "en"): KeyGrid {
@@ -333,7 +346,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
             add(3, 1, listOf(Keys.SPACE), 4)
             add(3, 6, listOf(Keys.SPACE), 4)
             add(3, 10, listOf(Keys.ENTER))
-            return KeyGrid(4, items, items.size).also { it.mapLetters(lang) }
+            return KeyGrid(4, items, items.size).also { it.mapLetters(lang); it.addInsert() }
         }
 
         fun fromJson(s: String?): KeyGrid? {
