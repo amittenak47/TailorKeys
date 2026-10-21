@@ -1414,7 +1414,8 @@ final class KeyboardView: UIView {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
         if drag != nil {
             let active = drag?.target?.type == .remove
-            (active ? palette.accent : palette.key).setFill()
+            // Deleting a tray key is final, so that target fills with ink instead of the accent.
+            (!active ? palette.key : (drag?.tray ?? -1) >= 0 ? palette.text : palette.accent).setFill()
             UIBezierPath(roundedRect: hintRect, cornerRadius: 8).fill()
             drawSymbol("trash", in: hintRect, color: active ? palette.background : palette.text)
             return
@@ -2324,7 +2325,7 @@ final class KeyboardView: UIView {
             if let i = trayChips.firstIndex(where: { $0.contains(p) }), i < trayKeys.count {
                 resetPreview()
                 editTouch = t
-                drag = Drag(item: trayKeys[i], size: CGSize(width: letterWidth, height: unit - editGap), p: p, off: .zero, radius: viewPrefs.radius, tray: i)
+                drag = Drag(item: trayKeys[i], size: CGSize(width: letterWidth, height: unit - editGap), p: p, off: .zero, radius: viewPrefs.radius, tray: grid.tray.count - 1 - i)
                 setNeedsDisplay()
             }
             return
@@ -2518,15 +2519,21 @@ final class KeyboardView: UIView {
             if !reducedMotion {
                 ctx.translateBy(x: rect.midX, y: rect.midY); ctx.rotate(by: wiggle(pk.item, now)); ctx.translateBy(x: -rect.midX, y: -rect.midY)
             }
+            let combining = d.target?.type == .combine && d.target?.item === pk.item
+            if combining {
+                ctx.translateBy(x: rect.midX, y: rect.midY); ctx.scaleBy(x: 1 + 0.08 * p, y: 1 + 0.08 * p); ctx.translateBy(x: -rect.midX, y: -rect.midY)
+            }
             // A key that the drop folds into another (combine) fades out instead of moving.
             let shape = KeyShape(rect, viewPrefs.radius)
             drawKey(ctx, pk.item, shape, false, to == nil ? 1 - p : 1)
-            if d.target?.type == .combine && d.target?.item === pk.item {
+            if combining {
                 palette.accent.setStroke(); ctx.addPath(shape.body); ctx.setLineWidth(3); ctx.strokePath()
             }
             ctx.restoreGState()
         }
-        if let slot = previewSlot {
+        // Until the finger reaches a target, the key's home slot stays open.
+        let home = previewSig == nil && d.tray < 0 ? placed.first { $0.item === d.item }.map(screenRect) : nil
+        if let slot = previewSlot ?? home {
             let path = UIBezierPath(roundedRect: slot, cornerRadius: viewPrefs.radius).cgPath
             ctx.saveGState()
             ctx.setAlpha(0.14 * p); palette.accent.setFill(); ctx.addPath(path); ctx.fillPath()
@@ -2568,7 +2575,8 @@ final class KeyboardView: UIView {
 
     /// Mini keys in the tray: centred, shrinking to fit when many are waiting.
     private func layoutTray() {
-        trayKeys = grid.tray.enumerated().map { GridKey(id: -1 - $0.offset, r: 0, c: 0, w: 1, keys: $0.element) }
+        // Newest on the left: chip i shows tray entry count - 1 - i.
+        trayKeys = grid.tray.indices.reversed().map { GridKey(id: -1 - $0, r: 0, c: 0, w: 1, keys: grid.tray[$0]) }
         trayChips = []
         guard !trayRect.isEmpty, !trayKeys.isEmpty else { return }
         let h = Swift.min(trayRect.height - 8, 36), gapX: CGFloat = 6, count = CGFloat(trayKeys.count)
@@ -2590,7 +2598,7 @@ final class KeyboardView: UIView {
         }
         for (i, chip) in trayChips.enumerated() where i < trayKeys.count {
             let key = trayKeys[i]
-            drawKey(ctx, key, KeyShape(chip, viewPrefs.radius * 0.7), false, drag?.tray == i ? 0.3 : 1)
+            drawKey(ctx, key, KeyShape(chip, viewPrefs.radius * 0.7), false, drag?.tray == grid.tray.count - 1 - i ? 0.3 : 1)
             if key.isSpace { drawText("space", center: CGPoint(x: chip.midX, y: chip.midY), size: Swift.min(11, chip.height * 0.3), color: palette.text) }
         }
     }
@@ -2609,7 +2617,8 @@ final class KeyboardView: UIView {
 
     private func drawGhost(_ ctx: CGContext, _ d: Drag) {
         ctx.saveGState()
-        ctx.translateBy(x: d.p.x - d.off.x, y: d.p.y - d.off.y)
+        // The floating key rides above the finger so the opening slot stays visible; the finger picks the target.
+        ctx.translateBy(x: d.p.x - d.off.x, y: d.p.y - d.off.y - 50)
         ctx.scaleBy(x: 1.1, y: 1.1)
         drawKey(ctx, d.item, d.shape, false, 0.92)
         ctx.restoreGState()

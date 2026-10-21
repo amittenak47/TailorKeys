@@ -617,7 +617,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     /** Mini keys in the tray: centred, shrinking to fit when many are waiting. */
     private fun layoutTray() {
-        trayKeys = grid.tray.mapIndexed { i, faces -> GridKey(-1 - i, 0, 0, 1, faces.toMutableList()) }
+        // Newest on the left: chip i shows tray entry size - 1 - i.
+        trayKeys = grid.tray.indices.reversed().map { i -> GridKey(-1 - i, 0, 0, 1, grid.tray[i].toMutableList()) }
         trayChips.clear()
         if (trayRect.isEmpty || trayKeys.isEmpty()) return
         val h = min(trayRect.height() - 8 * density, 36 * density)
@@ -1270,7 +1271,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private fun drawToolbar(canvas: Canvas) {
         if (drag != null) {
             val active = drag?.target?.type == T_REMOVE
-            fill.color = if (active) palette.accent else palette.key
+            // Deleting a tray key is final, so that target fills with ink instead of the accent.
+            fill.color = if (!active) palette.key else if ((drag?.tray ?: -1) >= 0) palette.text else palette.accent
             canvas.drawRoundRect(hintRect, 8 * density, 8 * density, fill)
             val cx = hintRect.centerX(); val cy = hintRect.centerY(); val s = 10 * density
             val p = strokeIn(if (active) palette.background else palette.text, s * 2, 255)
@@ -2331,15 +2333,19 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             shownRects[id] = rect
             canvas.save()
             if (!reducedMotion) canvas.rotate(wiggle(pk.item, now), rect.centerX(), rect.centerY())
+            val combining = dg.target?.type == T_COMBINE && dg.target?.item === pk.item
+            if (combining) canvas.scale(1f + .08f * p, 1f + .08f * p, rect.centerX(), rect.centerY())
             // A key that the drop folds into another (combine) fades out instead of moving.
             drawKey(canvas, pk.item, rect, radius, false, if (to == null) 1f - p else 1f)
-            if (dg.target?.type == T_COMBINE && dg.target?.item === pk.item) {
+            if (combining) {
                 stroke.color = palette.accent; stroke.alpha = 255; stroke.strokeWidth = 3 * density
                 canvas.drawRoundRect(rect, radius, radius, stroke)
             }
             canvas.restore()
         }
-        previewSlot?.let { slot ->
+        // Until the finger reaches a target, the key's home slot stays open.
+        val slotRect = previewSlot ?: if (previewSig == null && dg.tray < 0) placed.firstOrNull { it.item === dg.item }?.let(::screenRect) else null
+        slotRect?.let { slot ->
             fill.color = palette.accent; fill.alpha = (36 * p).toInt()
             canvas.drawRoundRect(slot, radius, radius, fill); fill.alpha = 255
             dash.color = palette.accent; dash.alpha = (255 * p).toInt(); dash.strokeWidth = 2 * density
@@ -2364,8 +2370,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         }
         for (i in trayChips.indices) {
             val chip = trayChips[i]; val key = trayKeys.getOrNull(i) ?: continue
-            drawKey(canvas, key, chip, radius * 0.7f, false, if (drag?.tray == i) 0.3f else 1f)
-            if (key.isSpace) drawLabel(canvas, chip, "space", min(11 * sp, chip.height() * 0.3f), palette.text, if (drag?.tray == i) 80 else 255)
+            val held = drag?.tray == grid.tray.size - 1 - i
+            drawKey(canvas, key, chip, radius * 0.7f, false, if (held) 0.3f else 1f)
+            if (key.isSpace) drawLabel(canvas, chip, "space", min(11 * sp, chip.height() * 0.3f), palette.text, if (held) 80 else 255)
         }
     }
 
@@ -2386,7 +2393,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     val i = trayChips.indexOfFirst { it.contains(x, y) }
                     if (i >= 0 && i < trayKeys.size) {
                         resetPreview()
-                        drag = Drag(trayKeys[i], letterWidth, unit - editGap, x, y, 0f, 0f, tray = i)
+                        drag = Drag(trayKeys[i], letterWidth, unit - editGap, x, y, 0f, 0f, tray = grid.tray.size - 1 - i)
                         invalidate()
                     }
                     return true
@@ -2564,7 +2571,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val rect = ghostRect
         rect.set(0f, 0f, dg.w, dg.h)
         canvas.save()
-        canvas.translate(dg.x - dg.offX - dg.w / 2, dg.y - dg.offY - dg.h / 2)
+        // The floating key rides above the finger so the opening slot stays visible; the finger picks the target.
+        canvas.translate(dg.x - dg.offX - dg.w / 2, dg.y - dg.offY - dg.h / 2 - GHOST_LIFT * density)
         canvas.scale(1.1f, 1.1f, dg.w / 2, dg.h / 2)
         drawKey(canvas, dg.item, rect, radius, false, 0.92f)
         canvas.restore()
@@ -2607,6 +2615,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         const val T_INSERT = 3
         const val T_TRAY = 5
         const val PREVIEW_MS = 160f
+        const val GHOST_LIFT = 50f
 
         /** Column raise (fraction of a row) and fan angle (degrees) for each half, outer to inner on the left. */
         val RAISE = arrayOf(floatArrayOf(0f, .22f, .38f, .28f, .16f), floatArrayOf(.16f, .28f, .38f, .22f, 0f))
