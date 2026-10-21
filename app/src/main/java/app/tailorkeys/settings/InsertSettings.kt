@@ -42,7 +42,7 @@ internal fun LazyListScope.insertPanelOptions(settings: KeyboardSettings, page: 
 }
 
 @Composable
-internal fun InsertSettingsLinks(open: (String) -> Unit) {
+internal fun InsertSettingsLinks(settings: KeyboardSettings, open: (String) -> Unit) {
     val context = LocalContext.current
     val repository = remember { InsertRepository(context) }
     var revision by remember { mutableIntStateOf(0) }
@@ -182,7 +182,8 @@ private fun InsertClearRow(title: String, subtitle: String, clear: () -> Unit) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        OutlinedButton(clear, Modifier.heightIn(min = 44.dp)) { Text("Clear", color = MaterialTheme.colorScheme.error) }
+        OutlinedButton(clear, Modifier.heightIn(min = 48.dp).semantics { contentDescription = title },
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, MaterialTheme.colorScheme.error)) { Text("Clear", color = MaterialTheme.colorScheme.error) }
     }
 }
 

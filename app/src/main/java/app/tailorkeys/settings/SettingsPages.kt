@@ -270,7 +270,7 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
         }
     }
     item("panels") {
-        Column { GroupTitle("Panels"); InsertSettingsLinks(onPanel) }
+        Column { GroupTitle("Panels"); InsertSettingsLinks(state.settings, onPanel) }
     }
     item("assist") {
         var open by remember { mutableStateOf(false) }

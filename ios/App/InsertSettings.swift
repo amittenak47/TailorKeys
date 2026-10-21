@@ -74,7 +74,7 @@ struct InsertSettingsOptions: View {
         HStack {
             settingsLabel(title, note)
             Spacer()
-            Button("Clear", role: .destructive, action: clear).buttonStyle(.bordered).frame(minHeight: 44)
+            Button("Clear", role: .destructive, action: clear).buttonStyle(.bordered).frame(minHeight: 44).accessibilityLabel(title)
         }
     }
 
