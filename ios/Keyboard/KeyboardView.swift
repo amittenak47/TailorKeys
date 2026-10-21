@@ -585,7 +585,7 @@ final class KeyboardView: UIView {
         let reserve = split && !editMode
         let s: Sol
         if reserve {
-            // Fit both ranges together at maximum curve; neither live angle changes key dimensions.
+            // Fit the shared tilt range at maximum curve; live angles never change key dimensions.
             let range = Prefs.tilt(isLandscape)
             let angles = [range.min, range.max].map { Double($0) * Double.pi / 180 }
             // 14 halvings resolve widths and heights far below a point.
@@ -625,7 +625,7 @@ final class KeyboardView: UIView {
         let y0 = strip + s.padTop + (reserve ? 0 : Swift.max(0, target - total(s)))
         let hc = s.hc
 
-        struct Cont { let c0: Int; let cols: Int; let u: CGFloat; let side: Int; let base: CGAffineTransform; var spaceBase: CGAffineTransform? = nil }
+        struct Cont { let c0: Int; let cols: Int; let u: CGFloat; let side: Int; let base: CGAffineTransform }
         var conts: [Cont] = []
         let showCenter = editMode || grid.items.contains { $0.c == KeyGrid.center && $0.r < n }
         if !split {
@@ -634,19 +634,18 @@ final class KeyboardView: UIView {
             if showCenter { conts.append(Cont(c0: 5, cols: 1, u: u, side: -1, base: CGAffineTransform(translationX: innerLeft + 5 * u, y: y0))) }
             conts.append(Cont(c0: 6, cols: 5, u: u, side: -1, base: CGAffineTransform(translationX: innerLeft + (showCenter ? 6 : 5) * u, y: y0)))
         } else if reserve {
-            let letterH = unit * CGFloat(n - 1)
             let lx = innerLeft + s.pv - s.cw
             let rx = innerLeft + half + gapPx + half - s.pv
-            func base(_ x: CGFloat, _ side: Int, _ space: Bool) -> CGAffineTransform {
+            func base(_ x: CGFloat, _ side: Int) -> CGAffineTransform {
                 let top = y0 + s.letterY
                 let pivotY = top + CGFloat(n) * unit
                 let angle = tilt * (side == 0 ? 1 : -1) * CGFloat.pi / 180
                 return CGAffineTransform(translationX: x, y: top).concatenating(rotateAbout(angle, x + (side == 0 ? s.cw : 0), pivotY))
             }
-            conts.append(Cont(c0: 0, cols: 5, u: s.cw / 5, side: 0, base: base(lx, 0, false), spaceBase: base(lx, 0, true)))
+            conts.append(Cont(c0: 0, cols: 5, u: s.cw / 5, side: 0, base: base(lx, 0)))
             let cwc = Swift.max(10, Swift.min(s.cw / 5, gapPx - 4))
             conts.append(Cont(c0: 5, cols: 1, u: cwc, side: -1, base: CGAffineTransform(translationX: innerLeft + half + (gapPx - cwc) / 2, y: y0 + (hc - CGFloat(n) * unit) / 2)))
-            conts.append(Cont(c0: 6, cols: 5, u: s.cw / 5, side: 1, base: base(rx, 1, false), spaceBase: base(rx, 1, true)))
+            conts.append(Cont(c0: 6, cols: 5, u: s.cw / 5, side: 1, base: base(rx, 1)))
         } else {
             let a = tilt * CGFloat.pi / 180
             let lx = innerLeft + (s.pv - s.cw)
@@ -669,7 +668,7 @@ final class KeyboardView: UIView {
                 let b = Swift.min(item.c + item.w, ct.c0 + ct.cols)
                 if b <= a { continue }
                 let lc = a - ct.c0
-                let rowUnit = editMode ? ct.u : ct.u * CGFloat(ct.cols) / CGFloat(grid.rowColumns(item.r, ct.c0))
+                let rowUnit = ct.u * CGFloat(ct.cols) / CGFloat(grid.rowColumns(item.r, ct.c0))
                 let rect = CGRect(x: CGFloat(lc) * rowUnit + gap / 2, y: CGFloat(item.r) * unit + gap / 2, width: CGFloat(b - a) * rowUnit - gap, height: unit - gap)
                 var t = CGAffineTransform.identity
                 // Ergonomic curve: raise the middle fingers' columns and angle each key like a fan.
@@ -677,8 +676,7 @@ final class KeyboardView: UIView {
                     let angle = KeyboardView.ang[ct.side][lc] * curve * CGFloat.pi / 180
                     t = rotateAbout(angle, rect.midX, rect.midY).concatenating(CGAffineTransform(translationX: 0, y: -KeyboardView.raise[ct.side][lc] * curve * unit))
                 }
-                let base = item.r == n - 1 ? (ct.spaceBase ?? ct.base) : ct.base
-                placed.append(Placed(item: item, rect: rect, t: t.concatenating(base), radius: viewPrefs.radius))
+                placed.append(Placed(item: item, rect: rect, t: t.concatenating(ct.base), radius: viewPrefs.radius))
             }
         }
         if editMode {
@@ -882,6 +880,19 @@ final class KeyboardView: UIView {
                 e.accessibilityValue = face
                 e.increment = { [weak self] in self?.adjustAccessibleKey(index, 1) }
                 e.decrement = { [weak self] in self?.adjustAccessibleKey(index, -1) }
+            }
+            if editMode {
+                e.accessibilityCustomActions = [UIAccessibilityCustomAction(name: "Remove key") { [weak self] _ in
+                    guard let self = self else { return false }
+                    if let hint = self.grid.removalHint(pk.item) {
+                        UIAccessibility.post(notification: .announcement, argument: hint)
+                        return false
+                    }
+                    let before = self.grid.toJSON()
+                    guard self.grid.remove(pk.item) else { return false }
+                    self.edited(before, normalize: false)
+                    return true
+                }]
             }
         }
         if editMode {
@@ -2293,12 +2304,13 @@ final class KeyboardView: UIView {
         editHint = nil
         let before = grid.toJSON()
         apply(d)
-        edited(before)
+        if d.target?.type == .remove && grid.toJSON() == before { setNeedsDisplay() }
+        else { edited(before, normalize: d.target?.type != .remove) }
     }
 
     /// Saves the layout as it was `before` an edit, so undo can return to it. Edits that changed nothing are skipped.
-    private func edited(_ before: String) {
-        grid.normalize()
+    private func edited(_ before: String, normalize: Bool = true) {
+        if normalize { grid.normalize() }
         if grid.toJSON() != before {
             history.append(before)
             if history.count > KeyboardView.maxUndo { history.removeFirst() }

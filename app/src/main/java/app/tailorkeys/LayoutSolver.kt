@@ -42,7 +42,6 @@ internal class LayoutSolver {
     private var haveReserved = false
     private val reserved = FloatArray(3)
     private val boundsLetters = FloatArray(4)
-    private val boundsSpace = FloatArray(4)
     fun compute(
         d: Float, n: Int, gap: Float, stripH: Float, handleH: Float, pad: Float, bottomPad: Float,
         target: Float, half: Float, innerW: Float, split: Boolean, editMode: Boolean,
@@ -153,7 +152,7 @@ internal class LayoutSolver {
                 top + letterH, letters[2] - letters[0])
         }
         val s = if (reserve) {
-            // Fit both ranges together at maximum curve; neither live angle changes key dimensions.
+            // Fit the shared tilt range at maximum curve; live angles never change key dimensions.
             val angles = EXTREME_ANGLES
             // 14 halvings resolve widths and heights far below a pixel.
             fun worst(un: Float): Work {

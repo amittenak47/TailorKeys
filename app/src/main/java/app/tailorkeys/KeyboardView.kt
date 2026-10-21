@@ -400,7 +400,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val y0 = stripH + s.padTop + if (reserve) 0f else max(0f, target - s.total)
         val hc = s.hc
 
-        class Cont(val c0: Int, val cols: Int, val u: Float, val side: Int, val base: Matrix, val spaceBase: Matrix? = null)
+        class Cont(val c0: Int, val cols: Int, val u: Float, val side: Int, val base: Matrix)
         val conts = ArrayList<Cont>()
         val showCenter = editMode || grid.items.any { it.c == KeyGrid.CENTER && it.r < n }
         if (!split) {
@@ -409,10 +409,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             if (showCenter) conts += Cont(5, 1, u, -1, Matrix().apply { setTranslate(innerLeft + 5 * u, y0) })
             conts += Cont(6, 5, u, -1, Matrix().apply { setTranslate(innerLeft + (if (showCenter) 6 else 5) * u, y0) })
         } else if (reserve) {
-            val letterH = unit * (n - 1)
             val lx = innerLeft + s.pv - s.cw
             val rx = innerLeft + half + gapPx + half - s.pv
-            fun base(x: Float, side: Int, space: Boolean): Matrix {
+            fun base(x: Float, side: Int): Matrix {
                 val top = y0 + s.letterY
                 val pivotY = top + n * unit
                 val angle = tilt * (if (side == 0) 1 else -1)
@@ -421,10 +420,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     postRotate(angle, x + (if (side == 0) s.cw else 0f), pivotY)
                 }
             }
-            conts += Cont(0, 5, s.cw / 5, 0, base(lx, 0, false), base(lx, 0, true))
+            conts += Cont(0, 5, s.cw / 5, 0, base(lx, 0))
             val cwc = max(10 * d, min(s.cw / 5, gapPx - 4 * d))
             conts += Cont(5, 1, cwc, -1, Matrix().apply { setTranslate(innerLeft + half + (gapPx - cwc) / 2, y0 + (hc - n * unit) / 2) })
-            conts += Cont(6, 5, s.cw / 5, 1, base(rx, 1, false), base(rx, 1, true))
+            conts += Cont(6, 5, s.cw / 5, 1, base(rx, 1))
         } else {
             val lx = innerLeft + (s.pv - s.cw)
             conts += Cont(0, 5, s.cw / 5, 0, Matrix().apply {
@@ -447,7 +446,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 val b = min(item.c + item.w, ct.c0 + ct.cols)
                 if (b <= a) continue
                 val lc = a - ct.c0
-                val rowUnit = if (editMode) ct.u else layoutSolver.rowUnit(grid, item.r, ct.c0, ct.u * ct.cols)
+                val rowUnit = layoutSolver.rowUnit(grid, item.r, ct.c0, ct.u * ct.cols)
                 val rect = RectF(lc * rowUnit + gap / 2, item.r * unit + gap / 2, (lc + b - a) * rowUnit - gap / 2, (item.r + 1) * unit - gap / 2)
                 val m = Matrix()
                 // Ergonomic curve: raise the middle fingers' columns and angle each key like a fan.
@@ -455,7 +454,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     m.setRotate(ANG[ct.side][lc] * curve, rect.centerX(), rect.centerY())
                     m.postTranslate(0f, -RAISE[ct.side][lc] * curve * unit)
                 }
-                m.postConcat(if (item.r == n - 1) ct.spaceBase ?: ct.base else ct.base)
+                m.postConcat(ct.base)
                 placed += Placed(item, rect, m, Matrix().also { inv -> m.invert(inv) })
             }
         }
@@ -917,7 +916,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 val changed = LayoutEditing.apply(grid, item, LayoutEditing.Action.entries[action - A_EDIT], editingKey)
                 if (!changed && LayoutEditing.Action.entries[action - A_EDIT] == LayoutEditing.Action.REMOVE)
                     grid.removalHint(item)?.let { announceForAccessibility(it) }
-                if (changed) { editingKey = null; edited(before) }
+                if (changed) { editingKey = null; edited(before, normalize = LayoutEditing.Action.entries[action - A_EDIT] != LayoutEditing.Action.REMOVE) }
                 return changed
             }
             return when (action) {
@@ -2214,7 +2213,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 editHint = null
                 val before = grid.toJson()
                 applyDrop(dg)
-                edited(before)
+                if (dg.target?.type == T_REMOVE && grid.toJson() == before) invalidate()
+                else edited(before, normalize = dg.target?.type != T_REMOVE)
             }
             MotionEvent.ACTION_CANCEL -> { drag = null; editHint = null; invalidate() }
         }
@@ -2222,8 +2222,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     /** Saves the layout as it was [before] an edit, so undo can return to it. Edits that changed nothing are skipped. */
-    private fun edited(before: String) {
-        grid.normalize()
+    private fun edited(before: String, normalize: Boolean = true) {
+        if (normalize) grid.normalize()
         if (grid.toJson() != before) {
             history += before
             if (history.size > MAX_UNDO) history.removeAt(0)
