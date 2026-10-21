@@ -37,6 +37,36 @@ class GridKey(val id: Int, var r: Int, var c: Int, var w: Int, val keys: Mutable
  */
 class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>, private var nextId: Int) {
 
+    /**
+     * Keys set aside in the editor: removed keys and faces taken off a swipe key wait here (newest last)
+     * until they are placed again or deleted. Typing ignores the tray.
+     */
+    val tray = mutableListOf<MutableList<String>>()
+
+    /** Deep copy with the same key ids, so a preview can be matched key for key with the live grid. */
+    fun copy(): KeyGrid = KeyGrid(rows, items.mapTo(mutableListOf()) { GridKey(it.id, it.r, it.c, it.w, it.keys.toMutableList(), it.idx) }, nextId)
+        .also { copy -> tray.forEach { copy.tray.add(it.toMutableList()) } }
+
+    /** A new key for faces coming out of the tray. It joins [items] only once a placement succeeds. */
+    fun detachedKey(faces: List<String>) = GridKey(nextId++, 0, 0, 1, faces.toMutableList())
+
+    /** Places a tray entry with [place]; on success the key joins the grid and leaves the tray. */
+    fun placeFromTray(index: Int, place: (GridKey) -> Boolean): Boolean {
+        val faces = tray.getOrNull(index) ?: return false
+        val key = detachedKey(faces)
+        if (!place(key)) return false
+        if (key !in items) items.add(key)
+        tray.removeAt(index)
+        return true
+    }
+
+    /** Puts a tray entry into an existing key, making it a swipe key. */
+    fun combineFromTray(index: Int, target: GridKey): Boolean {
+        val faces = tray.getOrNull(index) ?: return false
+        target.keys.addAll(faces); tray.removeAt(index)
+        return true
+    }
+
     private fun mapLetters(lang: String) {
         val from = "qwertyuiopasdfghjkl'zxcvbnm"
         val to = when (lang) {
@@ -62,6 +92,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
                 val result = template(t, lang)
                 if (rows == 5) result.setNumberRow(true)
                 result.items.zip(items).forEach { (a, b) -> a.idx = b.idx }
+                tray.forEach { result.tray.add(it.toMutableList()) }
                 return result
             }
         }
@@ -81,10 +112,13 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
             ?.let { "${it.value} can't be removed" }
     }
 
+    /** Removing sets the key aside in the [tray]; nothing is lost until it is deleted from there. */
     fun remove(key: GridKey): Boolean {
         if (key !in items || removalHint(key) != null) return false
         items.remove(key)
         compactRow(key.r, key.c)
+        tray.add(key.keys.toMutableList())
+        if (tray.size > MAX_TRAY) tray.removeAt(0)
         return true
     }
 
@@ -192,15 +226,16 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         items.remove(key)
     }
 
-    /** Splits a swipe key back into single keys, placed in the nearest empty cells. */
+    /**
+     * Splits a swipe key back into single keys. The first face stays; the others go to the [tray] as their
+     * own keys, so they never land in a hidden cell and can be placed exactly where they belong.
+     */
     fun separate(key: GridKey) {
         val rest = key.keys.drop(1)
         while (key.keys.size > 1) key.keys.removeAt(key.keys.lastIndex)
         key.idx = 0
-        for (k in rest) {
-            val spot = findEmpty(key.r, key.c)
-            if (spot == null) key.keys.add(k) else items.add(GridKey(nextId++, spot.first, spot.second, 1, mutableListOf(k)))
-        }
+        rest.forEach { tray.add(mutableListOf(it)) }
+        while (tray.size > MAX_TRAY) tray.removeAt(0)
     }
 
     private fun findEmpty(r0: Int, c0: Int): Pair<Int, Int>? {
@@ -249,7 +284,9 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         items.forEach {
             a.put(JSONObject().put("r", it.r).put("c", it.c).put("w", it.w).put("k", JSONArray(it.keys)).put("i", it.idx))
         }
-        return JSONObject().put("rows", rows).put("items", a).toString()
+        val json = JSONObject().put("rows", rows).put("items", a)
+        if (tray.isNotEmpty()) json.put("tray", JSONArray().apply { tray.forEach { put(JSONArray(it)) } })
+        return json.toString()
     }
 
     /** A short text code for sharing the layout: the JSON, compressed and base64url-encoded. iOS reads the same codes. */
@@ -267,6 +304,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
     companion object {
         const val COLS = 11
         const val CENTER = 5
+        const val MAX_TRAY = 24
         private const val CODE_PREFIX = "TK1-"
         private val CODE = Regex("TK1-([A-Za-z0-9_-]+)")
 
@@ -362,7 +400,16 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
                     val ks = j.getJSONArray("k")
                     items.add(GridKey(i, integer(j, "r"), integer(j, "c"), integer(j, "w"), MutableList(ks.length()) { ks.getString(it) }, if (j.has("i")) integer(j, "i") else 0))
                 }
-                KeyGrid(integer(o, "rows"), items, items.size).takeIf { it.isSound() }
+                KeyGrid(integer(o, "rows"), items, items.size).takeIf { it.isSound() }?.also { grid ->
+                    // The tray is optional and never makes a layout invalid; malformed entries are dropped.
+                    o.optJSONArray("tray")?.let { t ->
+                        for (i in 0 until minOf(t.length(), MAX_TRAY)) {
+                            val faces = t.optJSONArray(i) ?: continue
+                            val list = MutableList(faces.length()) { faces.optString(it) }.filter { it.isNotEmpty() && it.length <= 16 }
+                            if (list.isNotEmpty()) grid.tray.add(list.toMutableList())
+                        }
+                    }
+                }
             } catch (e: Exception) {
                 null
             }

@@ -926,3 +926,22 @@ do {
     check(nextTypingKey(grid, sentence: ",", typedLength: 0) === stacked, "explicit punctuation lost to a long-press hint")
     check(nextTypingKey(grid, sentence: "🙂", typedLength: 0) == nil, "unknown character highlighted")
 }
+
+do {
+    // The editor tray: removed keys and separated faces wait there and can be placed again.
+    let grid = KeyGrid.template(.split)
+    let e = grid.items.first { $0.keys == ["e"] }!
+    check(grid.remove(e) && grid.tray == [["e"]], "removed key did not reach the tray")
+    check(KeyGrid.fromJSON(grid.toJSON())?.tray == [["e"]], "tray lost in JSON")
+    let r = grid.items.first { $0.keys == ["r"] }!
+    check(grid.placeFromTray(0) { grid.insertShift($0, r, before: true) } && grid.tray.isEmpty, "tray key not placed")
+    check(grid.items.filter { $0.r == 0 && $0.c < 5 }.sorted { $0.c < $1.c }.map { $0.keys[0] } == ["q", "w", "e", "r", "t"], "tray key landed in the wrong place")
+    let q = grid.items.first { $0.keys == ["q"] }!, w = grid.items.first { $0.keys == ["w"] }!
+    grid.combine(w, into: q); let count = grid.items.count; grid.separate(q)
+    check(q.keys == ["q"] && grid.items.count == count && grid.tray == [["w"]] && grid.isSound, "separated face did not go to the tray")
+    check(grid.copy().tray == grid.tray && grid.copy().items.map { $0.id } == grid.items.map { $0.id }, "copy lost ids or tray")
+    var object = (try? JSONSerialization.jsonObject(with: Data(grid.toJSON().utf8))) as? [String: Any] ?? [:]
+    object["tray"] = [["a"], [], "bad", [""]] as [Any]
+    let malformed = (try? JSONSerialization.data(withJSONObject: object)).map { String(decoding: $0, as: UTF8.self) }
+    check(KeyGrid.fromJSON(malformed)?.tray == [["a"]], "malformed tray entries were kept or broke the layout")
+}

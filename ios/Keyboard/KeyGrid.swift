@@ -49,19 +49,49 @@ final class GridKey {
 final class KeyGrid {
     static let cols = 11
     static let center = 5
+    static let maxTray = 24
 
     var rows: Int
     var items: [GridKey]
     private var nextId: Int
+    /// Keys set aside in the editor: removed keys and faces taken off a swipe key wait here (newest last)
+    /// until they are placed again or deleted. Typing ignores the tray. Same as Android.
+    var tray: [[String]] = []
 
     init(rows: Int, items: [GridKey], nextId: Int) {
         self.rows = rows; self.items = items; self.nextId = nextId
     }
 
+    /// Deep copy with the same key ids, so a preview can be matched key for key with the live grid.
     func copy() -> KeyGrid {
-        KeyGrid(rows: rows, items: items.map {
+        let grid = KeyGrid(rows: rows, items: items.map {
             GridKey(id: $0.id, r: $0.r, c: $0.c, w: $0.w, keys: $0.keys, idx: $0.idx)
         }, nextId: nextId)
+        grid.tray = tray
+        return grid
+    }
+
+    /// A new key for faces coming out of the tray. It joins `items` only once a placement succeeds.
+    func detachedKey(_ faces: [String]) -> GridKey {
+        defer { nextId += 1 }
+        return GridKey(id: nextId, r: 0, c: 0, w: 1, keys: faces)
+    }
+
+    /// Places a tray entry with `place`; on success the key joins the grid and leaves the tray.
+    @discardableResult func placeFromTray(_ index: Int, _ place: (GridKey) -> Bool) -> Bool {
+        guard tray.indices.contains(index) else { return false }
+        let key = detachedKey(tray[index])
+        guard place(key) else { return false }
+        if !items.contains(where: { $0 === key }) { items.append(key) }
+        tray.remove(at: index)
+        return true
+    }
+
+    /// Puts a tray entry into an existing key, making it a swipe key.
+    @discardableResult func combineFromTray(_ index: Int, _ target: GridKey) -> Bool {
+        guard tray.indices.contains(index) else { return false }
+        target.keys.append(contentsOf: tray.remove(at: index))
+        return true
     }
 
     static func region(_ c: Int) -> Int { c < 5 ? 0 : (c == 5 ? 1 : 2) }
@@ -91,6 +121,9 @@ final class KeyGrid {
         guard items.contains(where: { $0 === key }), removalHint(key) == nil else { return false }
         items.removeAll { $0 === key }
         compactRow(key.r, key.c)
+        // Removing sets the key aside in the tray; nothing is lost until it is deleted from there.
+        tray.append(key.keys)
+        if tray.count > Self.maxTray { tray.removeFirst() }
         return true
     }
 
@@ -194,18 +227,13 @@ final class KeyGrid {
         items.removeAll { $0 === k }
     }
 
+    /// The first face stays; the others go to the tray as their own keys, so they never land in a hidden cell.
     func separate(_ k: GridKey) {
         let rest = Array(k.keys.dropFirst())
         k.keys = [k.keys[0]]
         k.idx = 0
-        for code in rest {
-            if let spot = findEmpty(k.r, k.c) {
-                items.append(GridKey(id: nextId, r: spot.0, c: spot.1, w: 1, keys: [code]))
-                nextId += 1
-            } else {
-                k.keys.append(code)
-            }
-        }
+        tray.append(contentsOf: rest.map { [$0] })
+        while tray.count > Self.maxTray { tray.removeFirst() }
     }
 
     @discardableResult func addInsert() -> Bool {
@@ -352,6 +380,7 @@ final class KeyGrid {
                 let result = KeyGrid.template(t, lang)
                 if rows == 5 { result.setNumberRow(true) }
                 for (a, b) in zip(result.items, items) { a.idx = b.idx }
+                result.tray = tray
                 return result
             }
         } }
@@ -394,6 +423,10 @@ final class KeyGrid {
     func toJSON() -> String {
         let dto = GridDTO(rows: rows, items: items.map { ItemDTO(r: $0.r, c: $0.c, w: $0.w, k: $0.keys, i: $0.idx) })
         guard let data = try? JSONEncoder().encode(dto) else { return "" }
+        if !tray.isEmpty, var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+            object["tray"] = tray
+            if let withTray = try? JSONSerialization.data(withJSONObject: object) { return String(decoding: withTray, as: UTF8.self) }
+        }
         return String(decoding: data, as: UTF8.self)
     }
 
@@ -410,7 +443,15 @@ final class KeyGrid {
         }) else { return nil }
         let items = dto.items.enumerated().map { GridKey(id: $0.offset, r: $0.element.r, c: $0.element.c, w: $0.element.w, keys: $0.element.k, idx: $0.element.i) }
         let grid = KeyGrid(rows: dto.rows, items: items, nextId: items.count)
-        return grid.isSound ? grid : nil
+        guard grid.isSound else { return nil }
+        // The tray is optional and never makes a layout invalid; malformed entries are dropped.
+        if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let entries = object["tray"] as? [Any] {
+            grid.tray = entries.prefix(maxTray).compactMap { entry in
+                let faces = (entry as? [Any] ?? []).compactMap { $0 as? String }.filter { !$0.isEmpty && $0.count <= 16 }
+                return faces.isEmpty ? nil : faces
+            }
+        }
+        return grid
     }
 
     static func makeDefault(_ lang: String = "en") -> KeyGrid {

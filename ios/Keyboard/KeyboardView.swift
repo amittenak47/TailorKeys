@@ -207,6 +207,15 @@ final class KeyboardView: UIView {
     private var placed: [Placed] = []
     private var tapDistances = [Float](repeating: 100, count: ComposingTaps.letters)
     private var cells: [Cell] = []
+    /// One block of columns (left half, center column, right half) and its transform.
+    private struct Cont { let c0: Int; let cols: Int; let u: CGFloat; let side: Int; let base: CGAffineTransform }
+    /// Edit-mode blocks from the last layout, reused to place a preview grid without a full layout pass.
+    private var editConts: [Cont] = []
+    private var editGap: CGFloat = 0
+    /// Below the keys while rearranging: removed and unstacked keys wait here as mini keys.
+    private var trayRect = CGRect.zero
+    private var trayChips: [CGRect] = []
+    private var trayKeys: [GridKey] = []
     private let wheels = [Wheel(side: 0), Wheel(side: 1)]
     private var handleRect = CGRect.zero
     private var centerZone: CursorZone?
@@ -481,7 +490,8 @@ final class KeyboardView: UIView {
         if insertStripHeight > 0 { stripH = insertStripHeight }
         let handleH: CGFloat = 14
         let pad: CGFloat = 4
-        let bottomPad = CGFloat(p.bottomPadding)
+        let trayH: CGFloat = editMode ? 52 : 0
+        let bottomPad = CGFloat(p.bottomPadding) + trayH
         // "Same size when rotated": landscape keeps portrait's physical key size instead of applying the same
         // percentages to the shorter screen. Split halves keep their portrait width and sit at the edges.
         let screen = UIScreen.main.bounds.size
@@ -565,7 +575,10 @@ final class KeyboardView: UIView {
                 let side = item.c < KeyGrid.center ? 0 : 1
                 let lc = side == 0 ? item.c : item.c - 6
                 widths.append(CGFloat(item.w * 5) / CGFloat(grid.rowColumns(item.r, item.c)))
-                sines.append(CGFloat(sin(Double(abs(KeyboardView.ang[side][lc]) * bend) * Double.pi / 180)))
+                // Wide keys use the average fan of the columns they span, as they are drawn.
+                let span = Swift.max(1, Swift.min(item.w, 5 - Swift.min(Swift.max(lc, 0), 4)))
+                let fan = abs((lc..<lc + span).reduce(CGFloat(0)) { $0 + KeyboardView.ang[side][Swift.min(Swift.max($1, 0), 4)] } / CGFloat(span))
+                sines.append(CGFloat(sin(Double(fan * bend) * Double.pi / 180)))
             }
             fanCache[bend] = (widths, sines)
             return (widths, sines)
@@ -641,7 +654,6 @@ final class KeyboardView: UIView {
         let y0 = strip + s.padTop + (reserve ? 0 : Swift.max(0, target - total(s)))
         let hc = s.hc
 
-        struct Cont { let c0: Int; let cols: Int; let u: CGFloat; let side: Int; let base: CGAffineTransform }
         var conts: [Cont] = []
         let showCenter = editMode || grid.items.contains { $0.c == KeyGrid.center && $0.r < n }
         if !split {
@@ -660,7 +672,8 @@ final class KeyboardView: UIView {
             }
             conts.append(Cont(c0: 0, cols: 5, u: s.cw / 5, side: 0, base: base(lx, 0)))
             let cwc = Swift.max(10, Swift.min(s.cw / 5, gapPx - 4))
-            conts.append(Cont(c0: 5, cols: 1, u: cwc, side: -1, base: CGAffineTransform(translationX: innerLeft + half + (gapPx - cwc) / 2, y: y0 + (hc - CGFloat(n) * unit) / 2)))
+            // The halves pivot on their inner bottom corners, so the center column shares their row top.
+            conts.append(Cont(c0: 5, cols: 1, u: cwc, side: -1, base: CGAffineTransform(translationX: innerLeft + half + (gapPx - cwc) / 2, y: y0 + s.letterY)))
             conts.append(Cont(c0: 6, cols: 5, u: s.cw / 5, side: 1, base: base(rx, 1)))
         } else {
             let a = tilt * CGFloat.pi / 180
@@ -676,31 +689,19 @@ final class KeyboardView: UIView {
             conts.append(Cont(c0: 6, cols: 5, u: s.cw / 5, side: 1, base: rb))
         }
 
-        placed = []
+        placed = placeKeys(grid, conts, gap: gap, curve: curve)
         cells = []
-        for item in grid.items where item.r < n {
-            for ct in conts {
-                let a = Swift.max(item.c, ct.c0)
-                let b = Swift.min(item.c + item.w, ct.c0 + ct.cols)
-                if b <= a { continue }
-                let lc = a - ct.c0
-                let rowUnit = ct.u * CGFloat(ct.cols) / CGFloat(grid.rowColumns(item.r, ct.c0))
-                let rect = CGRect(x: CGFloat(lc) * rowUnit + gap / 2, y: CGFloat(item.r) * unit + gap / 2, width: CGFloat(b - a) * rowUnit - gap, height: unit - gap)
-                var t = CGAffineTransform.identity
-                // Ergonomic curve: raise the middle fingers' columns and angle each key like a fan.
-                if ct.side >= 0 && curve > 0 {
-                    let angle = KeyboardView.ang[ct.side][lc] * curve * CGFloat.pi / 180
-                    t = rotateAbout(angle, rect.midX, rect.midY).concatenating(CGAffineTransform(translationX: 0, y: -KeyboardView.raise[ct.side][lc] * curve * unit))
-                }
-                placed.append(Placed(item: item, rect: rect, t: t.concatenating(ct.base), radius: viewPrefs.radius))
-            }
-        }
+        // Empty-cell outlines follow each row's actual columns, so they line up with the keys after removals.
         if editMode {
-            for ct in conts { for r in 0..<n { for c in 0..<ct.cols {
-                let rect = CGRect(x: CGFloat(c) * ct.u + gap / 2, y: CGFloat(r) * unit + gap / 2, width: ct.u - gap, height: unit - gap)
-                cells.append(Cell(r: r, c: ct.c0 + c, rect: rect, t: ct.base, inv: ct.base.inverted(), path: UIBezierPath(roundedRect: rect, cornerRadius: viewPrefs.radius).cgPath))
-            } } }
+            for ct in conts { for r in 0..<n {
+                let rowUnit = ct.u * CGFloat(ct.cols) / CGFloat(grid.rowColumns(r, ct.c0))
+                for c in 0..<grid.rowColumns(r, ct.c0) where grid.itemAt(r, ct.c0 + c) == nil {
+                    let rect = CGRect(x: CGFloat(c) * rowUnit + gap / 2, y: CGFloat(r) * unit + gap / 2, width: rowUnit - gap, height: unit - gap)
+                    cells.append(Cell(r: r, c: ct.c0 + c, rect: rect, t: ct.base, inv: ct.base.inverted(), path: UIBezierPath(roundedRect: rect, cornerRadius: viewPrefs.radius).cgPath))
+                }
+            } }
         }
+        editConts = conts; editGap = gap
 
         if split {
             wheels[0].rect = CGRect(x: innerLeft, y: 0, width: half, height: strip)
@@ -724,7 +725,9 @@ final class KeyboardView: UIView {
         doneRect = CGRect(x: right - 64, y: 0, width: 64, height: strip)
         moreRect = CGRect(x: doneRect.minX - 44, y: 0, width: 44, height: strip)
         hintRect = CGRect(x: undoRect.maxX, y: 0, width: Swift.max(0, moreRect.minX - undoRect.maxX), height: strip)
-        handleRect = CGRect(x: areaLeft, y: y0 + hc, width: areaW, height: handleH)
+        handleRect = CGRect(x: areaLeft, y: y0 + hc + trayH, width: areaW, height: handleH)
+        trayRect = editMode ? CGRect(x: innerLeft, y: y0 + hc + 4, width: innerW, height: trayH - 8) : .zero
+        layoutTray()
         // Select the inner or outer key in each row, then follow its transformed edge just as the split does.
         func keyEdge(_ leftHalf: Bool, inner: Bool) -> [CGPoint] {
             let edgeRight = leftHalf == inner
@@ -1046,6 +1049,14 @@ final class KeyboardView: UIView {
             if cursorGlow { drawWave(ctx) }
         }
         let now = CACurrentMediaTime()
+        if editMode { drawTray(ctx) }
+        if editMode, let d = drag {
+            drawPreview(ctx, d, now)
+            drawHandle()
+            drawGhost(ctx, d)
+            ctx.restoreGState()
+            return
+        }
         for pk in placed {
             ctx.saveGState()
             ctx.concatenate(pk.t)
@@ -1424,12 +1435,14 @@ final class KeyboardView: UIView {
 
     private static let cellDash: [CGFloat] = [4, 4]
     private func drawCells(_ ctx: CGContext) {
-        for (i, cell) in cells.enumerated() {
-            let isTarget = drag?.target?.cellIndex == i
+        // While a drop is previewed the keys make room themselves, so the old outlines fade away.
+        let fade = drag == nil ? 1 : (previewSig == nil ? previewProgress() : 1 - previewProgress())
+        guard fade > 0.01 else { return }
+        for cell in cells {
             ctx.saveGState(); ctx.concatenate(cell.t)
-            ctx.setAlpha(isTarget ? 1 : 0.5)
-            (isTarget ? palette.accent : palette.hint).setStroke()
-            ctx.addPath(cell.path); ctx.setLineWidth(isTarget ? 2 : 1)
+            ctx.setAlpha(0.5 * fade)
+            palette.hint.setStroke()
+            ctx.addPath(cell.path); ctx.setLineWidth(1)
             ctx.setLineDash(phase: 0, lengths: Self.cellDash); ctx.strokePath()
             ctx.restoreGState()
         }
@@ -2242,7 +2255,7 @@ final class KeyboardView: UIView {
 
     // MARK: - Edit mode: drag and drop
 
-    private enum TargetType { case move, space, combine, insert, remove }
+    private enum TargetType { case move, space, combine, insert, remove, tray }
 
     private struct Target {
         let type: TargetType
@@ -2254,15 +2267,17 @@ final class KeyboardView: UIView {
         var cellIndex: Int? = nil
     }
 
+    /// `tray` is the tray index when a mini key is being dragged, else -1.
     private final class Drag {
         let item: GridKey
         let size: CGSize
         let shape: KeyShape
         var p: CGPoint
         let off: CGPoint
+        let tray: Int
         var target: Target?
-        init(item: GridKey, size: CGSize, p: CGPoint, off: CGPoint, radius: CGFloat) {
-            self.item = item; self.size = size; self.p = p; self.off = off
+        init(item: GridKey, size: CGSize, p: CGPoint, off: CGPoint, radius: CGFloat, tray: Int = -1) {
+            self.item = item; self.size = size; self.p = p; self.off = off; self.tray = tray
             shape = KeyShape(CGRect(x: -size.width / 2, y: -size.height / 2, width: size.width, height: size.height), radius)
         }
     }
@@ -2305,6 +2320,15 @@ final class KeyboardView: UIView {
             else if doneRect.contains(p) { finishEditing() }
             return
         }
+        if trayRect.contains(p) {
+            if let i = trayChips.firstIndex(where: { $0.contains(p) }), i < trayKeys.count {
+                resetPreview()
+                editTouch = t
+                drag = Drag(item: trayKeys[i], size: CGSize(width: letterWidth, height: unit - editGap), p: p, off: .zero, radius: viewPrefs.radius, tray: i)
+                setNeedsDisplay()
+            }
+            return
+        }
         guard let pk = findKey(p, strict: true) else { return }
         let q = p.applying(pk.inv)
         if pk.item.isStack && hypot(q.x - (pk.rect.maxX - 8), q.y - (pk.rect.minY + 8)) < 12 {
@@ -2314,6 +2338,7 @@ final class KeyboardView: UIView {
             return
         }
         editTouch = t
+        resetPreview()
         drag = Drag(item: pk.item, size: pk.rect.size, p: p, off: CGPoint(x: q.x - pk.rect.midX, y: q.y - pk.rect.midY), radius: viewPrefs.radius)
         setNeedsDisplay()
     }
@@ -2322,7 +2347,8 @@ final class KeyboardView: UIView {
         guard t === editTouch, let d = drag else { return }
         d.p = p
         d.target = target(p, d)
-        editHint = hint(d.target)
+        editHint = hint(d)
+        updatePreview(d)
         setNeedsDisplay()
     }
 
@@ -2333,10 +2359,11 @@ final class KeyboardView: UIView {
         d.target = target(t.location(in: self), d)
         drag = nil
         editHint = nil
+        resetPreview()
         let before = grid.toJSON()
-        apply(d)
-        if d.target?.type == .remove && grid.toJSON() == before { setNeedsDisplay() }
-        else { edited(before, normalize: d.target?.type != .remove) }
+        if let target = d.target { apply(grid, d, target, item: d.tray >= 0 ? nil : d.item, target: target.item, live: true) }
+        let removal = d.target?.type == .remove || d.target?.type == .tray
+        if grid.toJSON() == before { setNeedsDisplay() } else { edited(before, normalize: !removal) }
     }
 
     /// Saves the layout as it was `before` an edit, so undo can return to it. Edits that changed nothing are skipped.
@@ -2373,6 +2400,7 @@ final class KeyboardView: UIView {
 
     private func target(_ p: CGPoint, _ d: Drag) -> Target? {
         if hintRect.contains(p) { return Target(type: .remove) }
+        if trayRect.contains(p) { return d.tray >= 0 ? nil : Target(type: .tray) }
         if let pk = findKey(p, strict: true, skip: d.item) {
             let item = pk.item
             if item.isSpace && item.w > 1 && KeyGrid.region(item.c) != 1 && !d.item.isSpace { return Target(type: .space, item: item, pk: pk) }
@@ -2386,30 +2414,184 @@ final class KeyboardView: UIView {
         return nil
     }
 
-    private func hint(_ t: Target?) -> String? {
-        guard let t = t else { return nil }
+    private func hint(_ d: Drag) -> String? {
+        guard let t = d.target else { return nil }
         switch t.type {
         case .combine: return "Combine into a swipe key"
         case .insert: return "Insert, neighbours shift over"
         case .space: return "Sit beside the spacebar"
         case .move: return "Move here"
-        case .remove: return drag.flatMap { grid.removalHint($0.item) } ?? "Remove key"
+        case .tray: return grid.removalHint(d.item) ?? "Set aside in the tray"
+        case .remove: return d.tray >= 0 ? "Delete for good" : grid.removalHint(d.item) ?? "Set aside in the tray"
         }
     }
 
-    private func apply(_ d: Drag) {
-        guard let t = d.target else { return }
+    /// Applies a drop to `g`: the live grid on release, or a copy for the preview. `item` is the dragged key in `g`
+    /// (nil for a tray key) and `target` the target key in `g`. Removing sets a key aside in the tray; only a tray
+    /// key dropped on the trash is deleted.
+    private func apply(_ g: KeyGrid, _ d: Drag, _ t: Target, item: GridKey?, target: GridKey?, live: Bool) {
+        if d.tray >= 0 {
+            switch t.type {
+            case .remove: if g.tray.indices.contains(d.tray) { g.tray.remove(at: d.tray) }
+            case .move: g.placeFromTray(d.tray) { g.moveTo($0, t.r, t.c) }
+            case .space: if let other = target { g.placeFromTray(d.tray) { g.insertBesideSpace($0, other) } }
+            case .combine: if let other = target { g.combineFromTray(d.tray, other) }
+            case .insert: if let other = target { g.placeFromTray(d.tray) { g.insertShift($0, other, before: t.before) } }
+            case .tray: break
+            }
+            return
+        }
+        guard let item = item else { return }
         switch t.type {
-        case .remove:
-            if let message = grid.removalHint(d.item) {
+        case .remove, .tray:
+            if let message = g.removalHint(item) {
+                guard live else { return }
                 editHint = message
                 UIAccessibility.post(notification: .announcement, argument: message)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in self?.editHint = nil; self?.setNeedsDisplay() }
-            } else { grid.remove(d.item) }
-        case .move: grid.moveTo(d.item, t.r, t.c)
-        case .space: if let other = t.item { grid.insertBesideSpace(d.item, other) }
-        case .combine: if let other = t.item { grid.combine(d.item, into: other) }
-        case .insert: if let other = t.item, !grid.insertShift(d.item, other, before: t.before) { grid.swap(d.item, other) }
+            } else { g.remove(item) }
+        case .move: g.moveTo(item, t.r, t.c)
+        case .space: if let other = target { g.insertBesideSpace(item, other) }
+        case .combine: if let other = target { g.combine(item, into: other) }
+        case .insert: if let other = target, !g.insertShift(item, other, before: t.before) { g.swap(item, other) }
+        }
+    }
+
+    // Live drop preview: while a key is held over a target, the other keys glide to where the drop would put them,
+    // so the drop itself needs no jump. Rects are in view coordinates (edit mode lays keys flat).
+    private var previewSig: String?
+    private var previewTo: [Int: CGRect] = [:]
+    private var previewFrom: [Int: CGRect] = [:]
+    private var shownRects: [Int: CGRect] = [:]
+    private var previewSlot: CGRect?
+    private var previewStart: CFTimeInterval = 0
+    private static let previewDuration: CFTimeInterval = 0.16
+
+    private func previewProgress() -> CGFloat {
+        if reducedMotion { return 1 }
+        let t = CGFloat(Swift.min(1, Swift.max(0, (CACurrentMediaTime() - previewStart) / Self.previewDuration)))
+        return 1 - (1 - t) * (1 - t) * (1 - t)
+    }
+
+    private func resetPreview() { previewSig = nil; previewTo = [:]; previewFrom = [:]; shownRects = [:]; previewSlot = nil }
+
+    private func screenRect(_ pk: Placed) -> CGRect { pk.rect.applying(pk.t) }
+
+    /// Recomputes the preview only when the target changes; keys start from wherever they are drawn now.
+    private func updatePreview(_ d: Drag) {
+        let t = d.target
+        let sig = t.map { "\($0.type):\($0.item?.id ?? -1):\($0.before):\($0.r):\($0.c)" }
+        guard sig != previewSig else { return }
+        previewSig = sig
+        previewFrom = shownRects
+        previewTo = [:]; previewSlot = nil
+        previewStart = CACurrentMediaTime()
+        if let t = t {
+            let g = grid.copy()
+            let ids = Set(g.items.map { $0.id })
+            let item = d.tray >= 0 ? nil : g.items.first { $0.id == d.item.id }
+            let target = t.item.flatMap { ti in g.items.first { $0.id == ti.id } }
+            apply(g, d, t, item: item, target: target, live: false)
+            if t.type != .remove && t.type != .tray { g.normalize() }
+            let slotId = d.tray >= 0 ? g.items.first { !ids.contains($0.id) }?.id : item?.id
+            for pk in placeKeys(g, editConts, gap: editGap, curve: 0) {
+                let r = screenRect(pk)
+                if pk.item.id == slotId { previewSlot = r } else { previewTo[pk.item.id] = r }
+            }
+        }
+        setNeedsDisplay()
+    }
+
+    /// Edit-mode drawing while dragging: every key at its eased preview position, plus the opening slot.
+    private func drawPreview(_ ctx: CGContext, _ d: Drag, _ now: CFTimeInterval) {
+        let p = previewProgress()
+        for pk in placed {
+            let id = pk.item.id
+            let base = screenRect(pk)
+            if d.tray < 0 && pk.item === d.item { shownRects[id] = base; continue }
+            let from = previewFrom[id] ?? base
+            let to: CGRect? = previewSig == nil ? base : previewTo[id]
+            let rect = to.map { to in CGRect(x: from.minX + (to.minX - from.minX) * p, y: from.minY + (to.minY - from.minY) * p,
+                                             width: from.width + (to.width - from.width) * p, height: from.height + (to.height - from.height) * p) } ?? from
+            shownRects[id] = rect
+            ctx.saveGState()
+            if !reducedMotion {
+                ctx.translateBy(x: rect.midX, y: rect.midY); ctx.rotate(by: wiggle(pk.item, now)); ctx.translateBy(x: -rect.midX, y: -rect.midY)
+            }
+            // A key that the drop folds into another (combine) fades out instead of moving.
+            let shape = KeyShape(rect, viewPrefs.radius)
+            drawKey(ctx, pk.item, shape, false, to == nil ? 1 - p : 1)
+            if d.target?.type == .combine && d.target?.item === pk.item {
+                palette.accent.setStroke(); ctx.addPath(shape.body); ctx.setLineWidth(3); ctx.strokePath()
+            }
+            ctx.restoreGState()
+        }
+        if let slot = previewSlot {
+            let path = UIBezierPath(roundedRect: slot, cornerRadius: viewPrefs.radius).cgPath
+            ctx.saveGState()
+            ctx.setAlpha(0.14 * p); palette.accent.setFill(); ctx.addPath(path); ctx.fillPath()
+            ctx.setAlpha(p); palette.accent.setStroke(); ctx.addPath(path); ctx.setLineWidth(2)
+            ctx.setLineDash(phase: 0, lengths: Self.cellDash); ctx.strokePath()
+            ctx.restoreGState()
+        }
+    }
+
+    /// Places `g`'s keys in the given blocks. Shared by layout and the editor's live drop preview.
+    private func placeKeys(_ g: KeyGrid, _ conts: [Cont], gap: CGFloat, curve: CGFloat) -> [Placed] {
+        var out: [Placed] = []
+        for item in g.items where item.r < g.rows {
+            for ct in conts {
+                let a = Swift.max(item.c, ct.c0)
+                let b = Swift.min(item.c + item.w, ct.c0 + ct.cols)
+                if b <= a { continue }
+                let lc = a - ct.c0
+                let rowUnit = ct.u * CGFloat(ct.cols) / CGFloat(g.rowColumns(item.r, ct.c0))
+                let rect = CGRect(x: CGFloat(lc) * rowUnit + gap / 2, y: CGFloat(item.r) * unit + gap / 2, width: CGFloat(b - a) * rowUnit - gap, height: unit - gap)
+                var t = CGAffineTransform.identity
+                // Ergonomic curve: raise the middle fingers' columns and angle each key like a fan. A wide key (the
+                // spacebar) averages the columns it spans, so it sits square under the keys above it.
+                if ct.side >= 0 && curve > 0 {
+                    let span = Swift.max(1, b - a)
+                    let cols = (lc..<lc + span).map { Swift.min(Swift.max($0, 0), 4) }
+                    let raise = cols.reduce(CGFloat(0)) { $0 + KeyboardView.raise[ct.side][$1] } / CGFloat(span)
+                    let fan = cols.reduce(CGFloat(0)) { $0 + KeyboardView.ang[ct.side][$1] } / CGFloat(span)
+                    t = rotateAbout(fan * curve * CGFloat.pi / 180, rect.midX, rect.midY).concatenating(CGAffineTransform(translationX: 0, y: -raise * curve * unit))
+                } else if ct.side < 0 && curve > 0 && ct.cols == 1 {
+                    // The center column rises with the inner columns on either side of it.
+                    t = CGAffineTransform(translationX: 0, y: -KeyboardView.raise[0][4] * curve * unit)
+                }
+                out.append(Placed(item: item, rect: rect, t: t.concatenating(ct.base), radius: viewPrefs.radius))
+            }
+        }
+        return out
+    }
+
+    /// Mini keys in the tray: centred, shrinking to fit when many are waiting.
+    private func layoutTray() {
+        trayKeys = grid.tray.enumerated().map { GridKey(id: -1 - $0.offset, r: 0, c: 0, w: 1, keys: $0.element) }
+        trayChips = []
+        guard !trayRect.isEmpty, !trayKeys.isEmpty else { return }
+        let h = Swift.min(trayRect.height - 8, 36), gapX: CGFloat = 6, count = CGFloat(trayKeys.count)
+        let w = Swift.max(12, Swift.min(h * 1.25, (trayRect.width - gapX * (count + 1)) / count))
+        var x = trayRect.midX - (count * w + (count - 1) * gapX) / 2
+        for _ in trayKeys { trayChips.append(CGRect(x: x, y: trayRect.midY - h / 2, width: w, height: h)); x += w + gapX }
+    }
+
+    /// The tray band: mini keys waiting to be placed again, or a quiet hint when it is empty.
+    private func drawTray(_ ctx: CGContext) {
+        guard !trayRect.isEmpty else { return }
+        let over = drag?.target?.type == .tray
+        let band = UIBezierPath(roundedRect: trayRect, cornerRadius: 12).cgPath
+        ctx.saveGState(); ctx.setAlpha(over ? 0.6 : 0.28); palette.functionKey.setFill(); ctx.addPath(band); ctx.fillPath(); ctx.restoreGState()
+        if over { palette.accent.setStroke(); ctx.addPath(band); ctx.setLineWidth(2); ctx.strokePath() }
+        if trayKeys.isEmpty {
+            drawText(over ? "Set aside in the tray" : "Removed keys wait here", center: CGPoint(x: trayRect.midX, y: trayRect.midY), size: 13, color: palette.hint, maxWidth: trayRect.width * 0.9)
+            return
+        }
+        for (i, chip) in trayChips.enumerated() where i < trayKeys.count {
+            let key = trayKeys[i]
+            drawKey(ctx, key, KeyShape(chip, viewPrefs.radius * 0.7), false, drag?.tray == i ? 0.3 : 1)
+            if key.isSpace { drawText("space", center: CGPoint(x: chip.midX, y: chip.midY), size: Swift.min(11, chip.height * 0.3), color: palette.text) }
         }
     }
 

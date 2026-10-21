@@ -97,7 +97,10 @@ internal class LayoutSolver {
             for (item in grid.items) if (item.c != KeyGrid.CENTER) {
                 val side = if (item.c < KeyGrid.CENTER) 0 else 1
                 val lc = if (side == 0) item.c else item.c - 6
-                val value = sin(Math.toRadians((abs(ANG[side][lc]) * bend).toDouble())).toFloat()
+                // Wide keys use the average fan of the columns they span, as the view draws them.
+                val span = item.w.coerceIn(1, 5 - lc.coerceIn(0, 4))
+                val fan = abs((lc until lc + span).sumOf { ANG[side][it.coerceIn(0, 4)].toDouble() } / span)
+                val value = sin(Math.toRadians(fan * bend)).toFloat()
                 val width = ceil(item.w * 5f / grid.rowColumns(item.r, item.c)).toInt().coerceIn(1, 5)
                 sines[width] = max(sines[width], value)
             }

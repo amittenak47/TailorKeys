@@ -168,6 +168,15 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val tapDistances = FloatArray(ComposingTaps.LETTERS)
     private val tapPoint = FloatArray(2)
     private val cells = ArrayList<Cell>()
+    /** One block of columns (left half, center column, right half) and its transform. */
+    private class Cont(val c0: Int, val cols: Int, val u: Float, val side: Int, val base: Matrix)
+    /** Edit-mode blocks from the last layout, reused to place a preview grid without a full layout pass. */
+    private var editConts = emptyList<Cont>()
+    private var editGap = 0f
+    /** Below the keys while rearranging: removed and unstacked keys wait here as mini keys. */
+    private val trayRect = RectF()
+    private val trayChips = ArrayList<RectF>()
+    private var trayKeys = emptyList<GridKey>()
     private val wheels = listOf(Wheel(0), Wheel(1))
     private val handleRect = RectF()
     private var centerZone: CursorZone? = null
@@ -382,7 +391,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         if (insertStripHeight > 0) stripH = insertStripHeight.toFloat()
         val handleH = 14 * d
         val pad = 4 * d
-        val bottomPad = p.bottomPaddingDp * d
+        val trayH = if (editMode) 52 * d else 0f
+        val bottomPad = p.bottomPaddingDp * d + trayH
         // "Same size when rotated": landscape keeps portrait's physical key size instead of applying the same
         // percentages to the shorter screen. Split halves keep their portrait width and sit at the edges.
         val dm = resources.displayMetrics
@@ -411,7 +421,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val y0 = stripH + s.padTop + if (reserve) 0f else max(0f, target - s.total)
         val hc = s.hc
 
-        class Cont(val c0: Int, val cols: Int, val u: Float, val side: Int, val base: Matrix)
         val conts = ArrayList<Cont>()
         val showCenter = editMode || grid.items.any { it.c == KeyGrid.CENTER && it.r < n }
         if (!split) {
@@ -433,7 +442,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             }
             conts += Cont(0, 5, s.cw / 5, 0, base(lx, 0))
             val cwc = max(10 * d, min(s.cw / 5, gapPx - 4 * d))
-            conts += Cont(5, 1, cwc, -1, Matrix().apply { setTranslate(innerLeft + half + (gapPx - cwc) / 2, y0 + (hc - n * unit) / 2) })
+            // The halves pivot on their inner bottom corners, so rows at the inner edges keep their height:
+            // the center column shares the halves' row top instead of centring in the tilted block's bounds.
+            conts += Cont(5, 1, cwc, -1, Matrix().apply { setTranslate(innerLeft + half + (gapPx - cwc) / 2, y0 + s.letterY) })
             conts += Cont(6, 5, s.cw / 5, 1, base(rx, 1))
         } else {
             val lx = innerLeft + (s.pv - s.cw)
@@ -448,31 +459,18 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             })
         }
 
-        placed.clear()
+        placeKeys(grid, conts, gap, curve, placed)
         cells.clear()
-        for (item in grid.items) {
-            if (item.r >= n) continue
-            for (ct in conts) {
-                val a = max(item.c, ct.c0)
-                val b = min(item.c + item.w, ct.c0 + ct.cols)
-                if (b <= a) continue
-                val lc = a - ct.c0
-                val rowUnit = layoutSolver.rowUnit(grid, item.r, ct.c0, ct.u * ct.cols)
-                val rect = RectF(lc * rowUnit + gap / 2, item.r * unit + gap / 2, (lc + b - a) * rowUnit - gap / 2, (item.r + 1) * unit - gap / 2)
-                val m = Matrix()
-                // Ergonomic curve: raise the middle fingers' columns and angle each key like a fan.
-                if (ct.side >= 0 && curve > 0f) {
-                    m.setRotate(ANG[ct.side][lc] * curve, rect.centerX(), rect.centerY())
-                    m.postTranslate(0f, -RAISE[ct.side][lc] * curve * unit)
-                }
-                m.postConcat(ct.base)
-                placed += Placed(item, rect, m, Matrix().also { inv -> m.invert(inv) })
+        // Empty-cell outlines follow each row's actual columns, so they line up with the keys after removals.
+        if (editMode) for (ct in conts) for (r in 0 until n) {
+            val rowUnit = layoutSolver.rowUnit(grid, r, ct.c0, ct.u * ct.cols)
+            for (c in 0 until grid.rowColumns(r, ct.c0)) {
+                if (grid.itemAt(r, ct.c0 + c) != null) continue
+                val rect = RectF(c * rowUnit + gap / 2, r * unit + gap / 2, (c + 1) * rowUnit - gap / 2, (r + 1) * unit - gap / 2)
+                cells += Cell(r, ct.c0 + c, rect, ct.base, Matrix().also { inv -> ct.base.invert(inv) })
             }
         }
-        if (editMode) for (ct in conts) for (r in 0 until n) for (c in 0 until ct.cols) {
-            val rect = RectF(c * ct.u + gap / 2, r * unit + gap / 2, (c + 1) * ct.u - gap / 2, (r + 1) * unit - gap / 2)
-            cells += Cell(r, ct.c0 + c, rect, ct.base, Matrix().also { inv -> ct.base.invert(inv) })
-        }
+        editConts = conts; editGap = gap
 
         // The gear sits between the wheels: in the split gap, or in a small gap of its own.
         if (split) {
@@ -499,7 +497,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             moreRect.setEmpty()
             hintRect.set(undoRect.right, 0f, right - undoRect.width(), stripH)
         }
-        handleRect.set(areaLeft, y0 + hc, areaLeft + areaW, y0 + hc + handleH)
+        handleRect.set(areaLeft, y0 + hc + trayH, areaLeft + areaW, y0 + hc + trayH + handleH)
+        if (editMode) trayRect.set(innerLeft, y0 + hc + 4 * d, innerLeft + innerW, y0 + hc + trayH - 4 * d) else trayRect.setEmpty()
+        layoutTray()
         // All cursor regions use the same row-edge geometry, including the shared tilt and fan.
         fun keyEdge(leftHalf: Boolean, inner: Boolean): List<ZonePoint> {
             val edgeRight = leftHalf == inner
@@ -583,6 +583,52 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         return layoutHeight
     }
 
+    /** Places [g]'s keys in the given blocks. Shared by layout and the editor's live drop preview. */
+    private fun placeKeys(g: KeyGrid, conts: List<Cont>, gap: Float, curve: Float, out: MutableList<Placed>) {
+        out.clear()
+        for (item in g.items) {
+            if (item.r >= g.rows) continue
+            for (ct in conts) {
+                val a = max(item.c, ct.c0)
+                val b = min(item.c + item.w, ct.c0 + ct.cols)
+                if (b <= a) continue
+                val lc = a - ct.c0
+                val rowUnit = layoutSolver.rowUnit(g, item.r, ct.c0, ct.u * ct.cols)
+                val rect = RectF(lc * rowUnit + gap / 2, item.r * unit + gap / 2, (lc + b - a) * rowUnit - gap / 2, (item.r + 1) * unit - gap / 2)
+                val m = Matrix()
+                // Ergonomic curve: raise the middle fingers' columns and angle each key like a fan. A wide key
+                // (the spacebar) averages the columns it spans: taking only its first column skewed it by the
+                // outer column's fan and lifted it into the row above.
+                if (ct.side >= 0 && curve > 0f) {
+                    val span = (b - a).coerceAtLeast(1)
+                    val raise = (lc until lc + span).sumOf { RAISE[ct.side][it.coerceIn(0, 4)].toDouble() }.toFloat() / span
+                    val angle = (lc until lc + span).sumOf { ANG[ct.side][it.coerceIn(0, 4)].toDouble() }.toFloat() / span
+                    m.setRotate(angle * curve, rect.centerX(), rect.centerY())
+                    m.postTranslate(0f, -raise * curve * unit)
+                } else if (ct.side < 0 && curve > 0f) {
+                    // The center column rises with the inner columns on either side of it.
+                    m.setTranslate(0f, -RAISE[0][4] * curve * unit)
+                }
+                m.postConcat(ct.base)
+                out += Placed(item, rect, m, Matrix().also { inv -> m.invert(inv) })
+            }
+        }
+    }
+
+    /** Mini keys in the tray: centred, shrinking to fit when many are waiting. */
+    private fun layoutTray() {
+        trayKeys = grid.tray.mapIndexed { i, faces -> GridKey(-1 - i, 0, 0, 1, faces.toMutableList()) }
+        trayChips.clear()
+        if (trayRect.isEmpty || trayKeys.isEmpty()) return
+        val h = min(trayRect.height() - 8 * density, 36 * density)
+        val gapX = 6 * density
+        val count = trayKeys.size
+        val w = min(h * 1.25f, (trayRect.width() - gapX * (count + 1)) / count).coerceAtLeast(12 * density)
+        var x = trayRect.centerX() - (count * w + (count - 1) * gapX) / 2
+        val top = trayRect.centerY() - h / 2
+        for (i in 0 until count) { trayChips += RectF(x, top, x + w, top + h); x += w + gapX }
+    }
+
     private fun rebuildDrawingCache() {
         labelScale = settings.int(Prefs.TEXT_SCALE) / 100f * systemTextScale
         iconScale = settings.int(Prefs.TEXT_SCALE) / 100f
@@ -594,7 +640,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         languageLabel = state.language.uppercase()
         faceLabels.clear(); faceHints.clear()
         val sample = InputState().apply { language = state.language }
-        for (item in grid.items) for (code in item.keys) {
+        for (item in grid.items + trayKeys) for (code in item.keys) {
             val labels = Array(4) { mode ->
                 sample.layer = when (mode) { 2 -> Layer.NUM; 3 -> Layer.SYM; else -> Layer.ABC }
                 sample.shift = mode == 1
@@ -971,6 +1017,16 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         // Under the keys, so it shows through the split and the spaces between keys.
         if (!editMode && cursorGlow) drawWave(canvas)
         val now = SystemClock.uptimeMillis()
+        if (editMode) drawTray(canvas, radius)
+        val dragging = drag
+        if (editMode && dragging != null) {
+            drawPreview(canvas, dragging, radius, now)
+            drawHandle(canvas)
+            drawGhost(canvas, dragging, radius)
+            canvas.restore()
+            postInvalidateOnAnimation()
+            return
+        }
         for (i in placed.indices) {
             val pk = placed[i]
             canvas.save()
@@ -1351,11 +1407,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private fun drawCells(canvas: Canvas) {
         val radius = cornerRadius
         dash.strokeWidth = density
+        // While a drop is previewed the keys make room themselves, so the old outlines fade away.
+        val fade = if (drag == null) 1f else if (previewSig == null) previewProgress() else 1f - previewProgress()
+        if (fade <= 0.01f) return
         for (i in cells.indices) {
             val cell = cells[i]
-            val target = drag?.target?.cell === cell
-            dash.color = if (target) palette.accent else palette.hint
-            dash.alpha = if (target) 255 else 120
+            dash.color = palette.hint
+            dash.alpha = (120 * fade).toInt()
             canvas.save()
             canvas.concat(cell.matrix)
             canvas.drawRoundRect(cell.rect, radius, radius, dash)
@@ -2211,10 +2269,105 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     // ---- Edit mode: drag and drop ----
 
     private class Target(val type: Int, val item: GridKey? = null, val before: Boolean = false, val r: Int = 0, val c: Int = 0, val pk: Placed? = null, val cell: Cell? = null)
-    private class Drag(val item: GridKey, val w: Float, val h: Float, var x: Float, var y: Float, val offX: Float, val offY: Float) { var target: Target? = null }
+    /** [tray] is the tray index when a mini key is being dragged, else -1. */
+    private class Drag(val item: GridKey, val w: Float, val h: Float, var x: Float, var y: Float, val offX: Float, val offY: Float, val tray: Int = -1) { var target: Target? = null }
 
     private var drag: Drag? = null
     private var editingKey: GridKey? = null
+
+    // Live drop preview: while a key is held over a target, the other keys glide to where the drop would put
+    // them, so the drop itself needs no jump. Rects are in view coordinates (edit mode lays keys flat).
+    private var previewSig: String? = null
+    private val previewTo = HashMap<Int, RectF>()
+    private val previewFrom = HashMap<Int, RectF>()
+    private val shownRects = HashMap<Int, RectF>()
+    private var previewSlot: RectF? = null
+    private var previewStart = 0L
+
+    private fun previewProgress(): Float {
+        if (reducedMotion) return 1f
+        val t = ((SystemClock.uptimeMillis() - previewStart) / PREVIEW_MS).coerceIn(0f, 1f)
+        return 1f - (1f - t) * (1f - t) * (1f - t)
+    }
+
+    private fun resetPreview() { previewSig = null; previewTo.clear(); previewFrom.clear(); shownRects.clear(); previewSlot = null }
+
+    private fun screenRect(pk: Placed) = RectF(pk.rect).also { pk.matrix.mapRect(it) }
+
+    /** Recomputes the preview only when the target changes; keys start from wherever they are drawn now. */
+    private fun updatePreview(dg: Drag) {
+        val t = dg.target
+        val sig = t?.let { "${it.type}:${it.item?.id}:${it.before}:${it.r}:${it.c}" }
+        if (sig == previewSig) return
+        previewSig = sig
+        previewFrom.clear(); shownRects.forEach { (id, r) -> previewFrom[id] = RectF(r) }
+        previewTo.clear(); previewSlot = null
+        previewStart = SystemClock.uptimeMillis()
+        if (t != null) {
+            val g = grid.copy()
+            val ids = g.items.mapTo(HashSet()) { it.id }
+            val item = if (dg.tray >= 0) null else g.items.firstOrNull { it.id == dg.item.id }
+            applyDrop(g, dg, t, item, t.item?.let { ti -> g.items.firstOrNull { it.id == ti.id } }, live = false)
+            if (t.type != T_REMOVE && t.type != T_TRAY) g.normalize()
+            val slotId = if (dg.tray >= 0) g.items.firstOrNull { it.id !in ids }?.id else item?.id
+            val out = ArrayList<Placed>()
+            placeKeys(g, editConts, editGap, 0f, out)
+            for (pk in out) { val r = screenRect(pk); if (pk.item.id == slotId) previewSlot = r else previewTo[pk.item.id] = r }
+        }
+        invalidate()
+    }
+
+    /** Edit-mode drawing while dragging: every key at its eased preview position, plus the opening slot. */
+    private fun drawPreview(canvas: Canvas, dg: Drag, radius: Float, now: Long) {
+        val p = previewProgress()
+        for (pk in placed) {
+            val id = pk.item.id
+            val base = screenRect(pk)
+            if (dg.tray < 0 && pk.item === dg.item) { shownRects[id] = base; continue }
+            val from = previewFrom[id] ?: base
+            val to = if (previewSig == null) base else previewTo[id]
+            val rect = if (to == null) from else RectF(from.left + (to.left - from.left) * p, from.top + (to.top - from.top) * p,
+                from.right + (to.right - from.right) * p, from.bottom + (to.bottom - from.bottom) * p)
+            shownRects[id] = rect
+            canvas.save()
+            if (!reducedMotion) canvas.rotate(wiggle(pk.item, now), rect.centerX(), rect.centerY())
+            // A key that the drop folds into another (combine) fades out instead of moving.
+            drawKey(canvas, pk.item, rect, radius, false, if (to == null) 1f - p else 1f)
+            if (dg.target?.type == T_COMBINE && dg.target?.item === pk.item) {
+                stroke.color = palette.accent; stroke.alpha = 255; stroke.strokeWidth = 3 * density
+                canvas.drawRoundRect(rect, radius, radius, stroke)
+            }
+            canvas.restore()
+        }
+        previewSlot?.let { slot ->
+            fill.color = palette.accent; fill.alpha = (36 * p).toInt()
+            canvas.drawRoundRect(slot, radius, radius, fill); fill.alpha = 255
+            dash.color = palette.accent; dash.alpha = (255 * p).toInt(); dash.strokeWidth = 2 * density
+            canvas.drawRoundRect(slot, radius, radius, dash)
+        }
+    }
+
+    /** The tray band: mini keys waiting to be placed again, or a quiet hint when it is empty. */
+    private fun drawTray(canvas: Canvas, radius: Float) {
+        if (trayRect.isEmpty) return
+        val over = drag?.target?.type == T_TRAY
+        fill.color = palette.functionKey; fill.alpha = if (over) 150 else 70
+        canvas.drawRoundRect(trayRect, 12 * density, 12 * density, fill); fill.alpha = 255
+        if (over) {
+            stroke.color = palette.accent; stroke.alpha = 255; stroke.strokeWidth = 2 * density
+            canvas.drawRoundRect(trayRect, 12 * density, 12 * density, stroke)
+        }
+        val sp = resources.displayMetrics.scaledDensity
+        if (trayKeys.isEmpty()) {
+            drawLabel(canvas, trayRect, if (over) "Set aside in the tray" else "Removed keys wait here", 13 * sp, palette.hint, 255)
+            return
+        }
+        for (i in trayChips.indices) {
+            val chip = trayChips[i]; val key = trayKeys.getOrNull(i) ?: continue
+            drawKey(canvas, key, chip, radius * 0.7f, false, if (drag?.tray == i) 0.3f else 1f)
+            if (key.isSpace) drawLabel(canvas, chip, "space", min(11 * sp, chip.height() * 0.3f), palette.text, if (drag?.tray == i) 80 else 255)
+        }
+    }
 
     private fun editTouch(e: MotionEvent): Boolean {
         val x = e.x
@@ -2229,6 +2382,15 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     }
                     return true
                 }
+                if (trayRect.contains(x, y)) {
+                    val i = trayChips.indexOfFirst { it.contains(x, y) }
+                    if (i >= 0 && i < trayKeys.size) {
+                        resetPreview()
+                        drag = Drag(trayKeys[i], letterWidth, unit - editGap, x, y, 0f, 0f, tray = i)
+                        invalidate()
+                    }
+                    return true
+                }
                 val pk = findKey(x, y, strict = true) ?: return true
                 val pt = floatArrayOf(x, y)
                 pk.inverse.mapPoints(pt)
@@ -2238,6 +2400,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     edited(before)
                     return true
                 }
+                resetPreview()
                 drag = Drag(pk.item, pk.rect.width(), pk.rect.height(), x, y, pt[0] - pk.rect.centerX(), pt[1] - pk.rect.centerY())
                 invalidate()
             }
@@ -2245,7 +2408,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 val dg = drag ?: return true
                 dg.x = x; dg.y = y
                 dg.target = editTarget(x, y, dg)
-                editHint = hintFor(dg.target)
+                editHint = hintFor(dg)
+                updatePreview(dg)
                 invalidate()
             }
             MotionEvent.ACTION_UP -> {
@@ -2253,12 +2417,14 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 dg.target = editTarget(x, y, dg)
                 drag = null
                 editHint = null
+                resetPreview()
                 val before = grid.toJson()
-                applyDrop(dg)
-                if (dg.target?.type == T_REMOVE && grid.toJson() == before) invalidate()
-                else edited(before, normalize = dg.target?.type != T_REMOVE)
+                val t = dg.target
+                if (t != null) applyDrop(grid, dg, t, if (dg.tray >= 0) null else dg.item, t.item, live = true)
+                val removal = t?.type == T_REMOVE || t?.type == T_TRAY
+                if (grid.toJson() == before) invalidate() else edited(before, normalize = !removal)
             }
-            MotionEvent.ACTION_CANCEL -> { drag = null; editHint = null; invalidate() }
+            MotionEvent.ACTION_CANCEL -> { drag = null; editHint = null; resetPreview(); invalidate() }
         }
         return true
     }
@@ -2312,6 +2478,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     private fun editTarget(x: Float, y: Float, dg: Drag): Target? {
         if (hintRect.contains(x, y)) return Target(T_REMOVE)
+        if (trayRect.contains(x, y)) return if (dg.tray >= 0) null else Target(T_TRAY)
         findKey(x, y, strict = true, skip = dg.item)?.let { pk ->
             val item = pk.item
             if (item.isSpace && item.w > 1 && KeyGrid.region(item.c) != 1 && !dg.item.isSpace) return Target(T_SPACE, item, pk = pk)
@@ -2330,30 +2497,46 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         return null
     }
 
-    private fun hintFor(t: Target?) = when (t?.type) {
+    private fun hintFor(dg: Drag) = when (dg.target?.type) {
         T_COMBINE -> "Combine into a swipe key"
         T_INSERT -> "Insert, neighbours shift over"
         T_SPACE -> "Sit beside the spacebar"
         T_MOVE -> "Move here"
-        T_REMOVE -> drag?.item?.let { grid.removalHint(it) } ?: "Remove key"
+        T_TRAY -> grid.removalHint(dg.item) ?: "Set aside in the tray"
+        T_REMOVE -> if (dg.tray >= 0) "Delete for good" else grid.removalHint(dg.item) ?: "Set aside in the tray"
         else -> null
     }
 
-    private fun applyDrop(dg: Drag) {
-        val t = dg.target ?: return
+    /**
+     * Applies a drop to [g]: the live grid on release, or a copy for the preview. [item] is the dragged key in
+     * [g] (null for a tray key) and [target] the target key in [g]. Removing a key sets it aside in the tray;
+     * only a tray key dropped on the trash is deleted.
+     */
+    private fun applyDrop(g: KeyGrid, dg: Drag, t: Target, item: GridKey?, target: GridKey?, live: Boolean) {
+        if (dg.tray >= 0) {
+            when (t.type) {
+                T_REMOVE -> if (dg.tray < g.tray.size) g.tray.removeAt(dg.tray)
+                T_MOVE -> g.placeFromTray(dg.tray) { g.moveTo(it, t.r, t.c) }
+                T_SPACE -> if (target != null) g.placeFromTray(dg.tray) { g.insertBesideSpace(it, target) }
+                T_COMBINE -> if (target != null) g.combineFromTray(dg.tray, target)
+                T_INSERT -> if (target != null) g.placeFromTray(dg.tray) { g.insertShift(it, target, t.before) }
+            }
+            return
+        }
+        item ?: return
         when (t.type) {
-            T_REMOVE -> {
-                val hint = grid.removalHint(dg.item)
-                if (!grid.remove(dg.item) && hint != null) {
+            T_REMOVE, T_TRAY -> {
+                val hint = g.removalHint(item)
+                if (!g.remove(item) && hint != null && live) {
                     editHint = hint
                     announceForAccessibility(hint)
                     postDelayed({ editHint = null; invalidate() }, 1800)
                 }
             }
-            T_MOVE -> grid.moveTo(dg.item, t.r, t.c)
-            T_SPACE -> grid.insertBesideSpace(dg.item, t.item!!)
-            T_COMBINE -> grid.combine(dg.item, t.item!!)
-            T_INSERT -> if (!grid.insertShift(dg.item, t.item!!, t.before)) grid.swap(dg.item, t.item)
+            T_MOVE -> g.moveTo(item, t.r, t.c)
+            T_SPACE -> if (target != null) g.insertBesideSpace(item, target)
+            T_COMBINE -> if (target != null) g.combine(item, target)
+            T_INSERT -> if (target != null && !g.insertShift(item, target, t.before)) g.swap(item, target)
         }
     }
 
@@ -2422,6 +2605,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         const val T_SPACE = 1
         const val T_COMBINE = 2
         const val T_INSERT = 3
+        const val T_TRAY = 5
+        const val PREVIEW_MS = 160f
 
         /** Column raise (fraction of a row) and fan angle (degrees) for each half, outer to inner on the left. */
         val RAISE = arrayOf(floatArrayOf(0f, .22f, .38f, .28f, .16f), floatArrayOf(.16f, .28f, .38f, .22f, 0f))
