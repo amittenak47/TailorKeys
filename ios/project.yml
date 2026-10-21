@@ -23,6 +23,8 @@ targets:
       - Keyboard/KeyText.swift
       - Keyboard/Theme.swift
       - Keyboard/KeyboardSettings.swift
+      - Keyboard/LayoutLibrary.swift
+      - Keyboard/TypingMetrics.swift
       - Keyboard/KeyboardView.swift
       - Keyboard/SwipeTrace.swift
       - Keyboard/CursorZones.swift

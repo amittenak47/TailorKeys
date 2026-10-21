@@ -5,12 +5,13 @@ struct KeyboardPreview: View {
     @ObservedObject var model: AppSettingsModel
     let landscape: Bool?
     let permitsEditing: Bool
+    var previewsSelection = false
     @State private var height: CGFloat = 260
 
     var body: some View {
         GeometryReader { proxy in
             KeyboardPreviewView(model: model, landscape: landscape, permitsEditing: permitsEditing,
-                                width: proxy.size.width, height: $height)
+                                previewsSelection: previewsSelection, width: proxy.size.width, height: $height)
         }
         .frame(height: height)
         .clipShape(RoundedRectangle(cornerRadius: 24))
@@ -22,6 +23,7 @@ private struct KeyboardPreviewView: UIViewRepresentable {
     @ObservedObject var model: AppSettingsModel
     let landscape: Bool?
     let permitsEditing: Bool
+    let previewsSelection: Bool
     let width: CGFloat
     @Binding var height: CGFloat
 
@@ -30,6 +32,7 @@ private struct KeyboardPreviewView: UIViewRepresentable {
     func makeUIView(context: Context) -> KeyboardView {
         let prefs = KeyboardSettings(tablet: UIDevice.current.userInterfaceIdiom == .pad, store: model.group)
         prefs.previewOrientation = landscape
+        prefs.previewSplit = previewsSelection ? model.previewSplit : nil
         context.coordinator.settings = prefs
         let view = KeyboardView(settings: prefs, grid: model.grid)
         view.delegate = context.coordinator
@@ -50,6 +53,7 @@ private struct KeyboardPreviewView: UIViewRepresentable {
     func updateUIView(_ view: KeyboardView, context: Context) {
         context.coordinator.parent = self
         context.coordinator.settings?.previewOrientation = landscape
+        context.coordinator.settings?.previewSplit = previewsSelection ? model.previewSplit : nil
         if view.grid !== model.grid { view.grid = model.grid }
         view.editMode = permitsEditing && model.editing && model.fullAccessConfirmed
         // Normal keyboard gestures can change width/alignment internally. Only editing accepts touches here.

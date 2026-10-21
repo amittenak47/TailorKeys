@@ -3,13 +3,19 @@ import SwiftUI
 // All settings writes pass through this model so the controls and UIKit preview update together.
 final class AppSettingsModel: ObservableObject {
     enum Sheet: String, Identifiable {
-        case guide, fullAccess, importLayout, share, about
+        case guide, fullAccess, share, about
         var id: String { rawValue }
     }
 
     let group: UserDefaults
     let settings: KeyboardSettings
+    let library: LayoutLibrary
     @Published var grid: KeyGrid
+    @Published private(set) var selectedLayoutKey: String
+    @Published private(set) var testing = false
+    private(set) var trialChoice: LayoutChoice?
+    @Published var importOpen = false
+    @Published var importName = "Imported layout"
     @Published var editing = false
     @Published var landscape = false
     @Published var sheet: Sheet?
@@ -20,9 +26,29 @@ final class AppSettingsModel: ObservableObject {
     @Published private(set) var revision = 0
     var shareCode = ""
     @Published var importCode = "" {
-        didSet { if importCode != oldValue { importedGrid = KeyGrid.fromCode(importCode) } }
+        didSet {
+            guard importCode != oldValue else { return }
+            importStatus = LayoutCodeStatus.read(importCode)
+            if importOpen { grid = importedGrid?.copy() ?? settings.loadGrid() }
+        }
     }
-    private(set) var importedGrid: KeyGrid?
+    @Published private(set) var importStatus: LayoutCodeStatus = .empty
+    var importedGrid: KeyGrid? {
+        if case .valid(let grid) = importStatus { return grid }
+        return nil
+    }
+    var selectedLayout: LayoutChoice? { library.choice(selectedLayoutKey) }
+    var choices: [LayoutChoice] { library.choices }
+
+    func splitPreview(for choice: LayoutChoice) -> Bool? {
+        if choice.id == library.appliedKey { return nil }
+        return choice.template?.split
+    }
+
+    var previewSplit: Bool? {
+        guard !importOpen, let choice = testing ? trialChoice : selectedLayout else { return nil }
+        return splitPreview(for: choice)
+    }
 
     private var chordLibraries: [String: Chords] = [:]
     /// Dictionaries ship in the embedded keyboard extension, so the app needs no Predictor target dependency.
@@ -47,12 +73,15 @@ final class AppSettingsModel: ObservableObject {
     private var readyWork: DispatchWorkItem?
 
     init() {
-        guard let store = UserDefaults(suiteName: KeyboardSettings.groupID) else {
-            fatalError("The TailorKeys App Group store is unavailable.")
-        }
+        let store = UserDefaults(suiteName: KeyboardSettings.groupID) ?? .standard
         group = store
         let prefs = KeyboardSettings(tablet: UIDevice.current.userInterfaceIdiom == .pad, store: store)
         settings = prefs
+        // Do not seed the shared domain before the extension has migrated its local settings.
+        let ready = store.object(forKey: KeyboardSettings.fullAccessSeenKey) as? Date != nil
+        let layouts = LayoutLibrary(settings: prefs, defaults: store, migrate: ready)
+        library = layouts
+        selectedLayoutKey = layouts.appliedKey
         grid = prefs.loadGrid()
         fullAccessDismissed = UserDefaults.standard.bool(forKey: "full_access_pill_dismissed")
     }
@@ -82,7 +111,12 @@ final class AppSettingsModel: ObservableObject {
             readyWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
         }
-        grid = settings.loadGrid()
+        if !testing {
+            let previousApplied = library.appliedKey
+            library.reload(migrate: fullAccessConfirmed)
+            if selectedLayoutKey == previousApplied || selectedLayout == nil { selectedLayoutKey = library.appliedKey }
+            if !editing { updatePreview() }
+        }
         changed()
     }
 
@@ -112,63 +146,152 @@ final class AppSettingsModel: ObservableObject {
 
     func saveGrid(_ grid: KeyGrid) {
         guard fullAccessConfirmed else { return }
-        settings.saveGrid(grid)
+        // Editor changes belong to their tile. Previewing/editing an unused tile never applies it.
+        library.update(selectedLayoutKey, grid: grid)
         self.grid = grid
+        changed()
+    }
+
+    private func updatePreview() {
+        grid = importOpen ? (importedGrid?.copy() ?? settings.loadGrid()) : (selectedLayout?.grid ?? settings.loadGrid())
+    }
+
+    func previewSelectedLayout() { if !testing { updatePreview() } }
+    func previewAppliedLayout() { editing = false; grid = settings.loadGrid() }
+
+    func selectLayout(_ key: String) {
+        guard library.choice(key) != nil, !testing else { return }
+        editing = false
+        selectedLayoutKey = key
+        updatePreview()
+    }
+
+    func useSelectedLayout() { useLayout(selectedLayoutKey) }
+
+    private func useLayout(_ key: String) {
+        guard fullAccessConfirmed, let choice = library.choice(key) else { return }
+        library.use(key)
+        if let template = choice.template {
+            settings.setSplitFor(UIScreen.main.bounds.width > UIScreen.main.bounds.height, template.split)
+        }
+        changed()
+    }
+
+    func startCustom() {
+        guard fullAccessConfirmed, library.startDraft(from: selectedLayoutKey) else { return }
+        selectedLayoutKey = "draft"
+        updatePreview()
+        editing = true
+        changed()
+    }
+
+    @discardableResult func saveDraft(name: String) -> String? {
+        guard fullAccessConfirmed, let key = library.saveDraft(name: name) else { return nil }
+        if selectedLayoutKey == "draft" { selectedLayoutKey = key; updatePreview() }
+        changed()
+        return key
+    }
+
+    func renameSelected(_ name: String) {
+        guard fullAccessConfirmed else { return }
+        if selectedLayoutKey == "draft" { _ = saveDraft(name: name) }
+        else { library.rename(selectedLayoutKey, name: name); changed() }
+    }
+
+    func deleteSelected() {
+        guard fullAccessConfirmed else { return }
+        editing = false
+        let wasApplied = selectedLayoutKey == library.appliedKey
+        library.delete(selectedLayoutKey)
+        if wasApplied { useLayout(library.appliedKey) }
+        selectedLayoutKey = library.appliedKey
+        updatePreview()
+        changed()
+    }
+
+    func shareSelected() {
+        guard let choice = selectedLayout else { return }
+        shareCode = choice.grid.toCode()
+        sheet = .share
+    }
+
+    func beginTest() {
+        guard fullAccessConfirmed, let choice = selectedLayout, library.beginTrial(choice.id) else { return }
+        editing = false
+        trialChoice = choice
+        grid = choice.grid
+        testing = true
+    }
+
+    func endTest() {
+        library.restoreTrial()
+        testing = false
+        updatePreview()
+        changed()
+    }
+
+    func keepTrialLayout() {
+        guard testing, let choice = trialChoice else { return }
+        useLayout(choice.id)
+    }
+
+    func recordTest(_ result: TypingResult) {
+        guard testing, let choice = trialChoice else { return }
+        library.record(result, for: choice.id)
         changed()
     }
 
     func setLanguages(_ enabled: [String]) {
         guard fullAccessConfirmed else { return }
         settings.setLanguages(enabled)
-        grid = settings.loadGrid()
+        library.reload()
+        updatePreview()
         changed()
-    }
-
-    func applyTemplate(_ template: Template) {
-        guard fullAccessConfirmed else { return }
-        let g = KeyGrid.template(template, settings.currentLanguage)
-        if settings.numberRow { g.setNumberRow(true) }
-        saveGrid(g)
-        if template.split { settings.setSplitFor(landscape, true) }
-        changed()
-    }
-
-    var layoutTitle: String {
-        for template in Template.allCases {
-            let g = KeyGrid.template(template, settings.currentLanguage)
-            if settings.numberRow { g.setNumberRow(true) }
-            if Self.sameJSON(g.toJSON(), grid.toJSON()) { return template.title }
-        }
-        return "Custom"
-    }
-
-    private static func sameJSON(_ a: String, _ b: String) -> Bool {
-        // JSONEncoder's dictionary key order is unspecified; compare the decoded JSON.
-        guard let left = try? JSONSerialization.jsonObject(with: Data(a.utf8)),
-              let right = try? JSONSerialization.jsonObject(with: Data(b.utf8)),
-              let lhs = left as? NSDictionary, let rhs = right as? NSDictionary else { return false }
-        return lhs.isEqual(rhs)
     }
 
     func setNumberRow(_ on: Bool) -> Bool {
         guard fullAccessConfirmed else { return false }
         let g = settings.loadGrid()
         guard g.setNumberRow(on) else { return false }
-        saveGrid(g)
+        settings.saveGrid(g)
+        if let choice = library.choice(library.appliedKey), choice.isCustom { library.update(choice.id, grid: g) }
+        library.reload()
+        updatePreview()
+        changed()
         return true
     }
 
     func prepareImport() {
-        let text = UIPasteboard.general.string ?? ""
-        importCode = text
-        sheet = .importLayout
+        editing = false
+        importCode = ""
+        importName = "Imported layout"
+        importStatus = .empty
+        importOpen = true
+        updatePreview()
+    }
+
+    func cancelImport() {
+        importOpen = false
+        updatePreview()
+    }
+
+    func addImportedLayout() {
+        guard fullAccessConfirmed, let grid = importedGrid else { return }
+        guard let key = library.add(grid.copy(), name: importName) else { return }
+        importOpen = false
+        selectedLayoutKey = key
+        updatePreview()
+        changed()
     }
 
     func reset() {
         guard fullAccessConfirmed else { return }
         editing = false
+        library.restoreTrial()
         settings.resetAll()
-        grid = settings.loadGrid()
+        library.reload()
+        selectedLayoutKey = library.appliedKey
+        updatePreview()
         changed()
     }
 

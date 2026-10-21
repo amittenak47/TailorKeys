@@ -180,3 +180,191 @@ check(!TextInputRules.addSpace(true, " next") && !TextInputRules.addSpace(true, 
 let replacement = TextInputRules.replacement(2, "llo next", automaticSpace: true)
 check(replacement.before == 2 && replacement.after == 3 && !replacement.space, "middle-word replacement lost boundaries")
 check(TextInputRules.wordForms("dog", exists: { $0 == "dogs" }) == ["dogs", "dog's"], "word forms missing")
+
+// Layout library wire format, migration and trial recovery never touch real preference domains.
+func withLayoutStore(_ body: (KeyboardSettings, UserDefaults) -> Void) {
+    let name = "app.tailorkeys.layouts.test." + UUID().uuidString
+    let defaults = UserDefaults(suiteName: name)!
+    defer { defaults.removePersistentDomain(forName: name) }
+    let prefs = KeyboardSettings(tablet: false, store: defaults)
+    prefs.setLanguages(["en"])
+    body(prefs, defaults)
+}
+
+for template in Template.allCases {
+    for numberRow in [false, true] {
+        withLayoutStore { prefs, defaults in
+            let grid = KeyGrid.template(template)
+            grid.setNumberRow(numberRow)
+            prefs.saveGrid(grid)
+            let library = LayoutLibrary(settings: prefs, defaults: defaults)
+            check(library.appliedKey == LayoutLibrary.presetKey(template), "preset migration selected the wrong tile")
+            check(library.saved.isEmpty, "preset migration made a custom tile")
+            check(defaults.string(forKey: "layout_selected") == library.appliedKey, "applied selection key differs from Android")
+        }
+    }
+}
+
+withLayoutStore { prefs, defaults in
+    let library = LayoutLibrary(settings: prefs, defaults: defaults, migrate: false)
+    library.reload(migrate: false)
+    check(defaults.string(forKey: Prefs.layoutSelected) == nil, "app seeded shared settings before keyboard migration")
+    check(library.appliedKey == "preset:STANDARD", "read-only library has no selection")
+}
+
+withLayoutStore { prefs, defaults in
+    let custom = KeyGrid.fromJSON(validJSON)!
+    prefs.saveGrid(custom)
+    let library = LayoutLibrary(settings: prefs, defaults: defaults)
+    check(library.saved.count == 1 && library.saved[0].name == "My layout", "custom migration did not preserve My layout")
+    check(library.appliedKey == library.saved[0].key, "custom migration did not apply the saved identity")
+    library.reload()
+    check(library.saved.count == 1, "migration ran twice")
+    let second = library.add(KeyGrid.template(.thumbs), name: "Couch typing")!
+    let json = try! JSONSerialization.jsonObject(with: Data(defaults.string(forKey: "layouts_saved")!.utf8)) as! [[String: Any]]
+    check(json.count == 2 && json[0]["grid"] is [String: Any], "saved grids must be JSON objects in user order")
+    check(json[0]["id"] as? String == library.saved[0].id && UUID(uuidString: library.saved[1].id) != nil, "saved IDs are not UUIDs")
+    library.rename(second, name: "  A new name\nfor my layout that is very long  ")
+    check(library.saved[1].name.count == 24 && !library.saved[1].name.contains("\n"), "name normalization or 24-character limit failed")
+    check(LayoutLibrary.name("   ") == "Custom", "blank names need a usable default")
+    let original = prefs.loadGrid()
+    check(library.startDraft(from: second), "cannot start a draft")
+    check(!library.startDraft(from: "preset:STANDARD"), "more than one draft was allowed")
+    let edited = library.choice("draft")!.grid
+    edited.items[0].keys = ["é"]
+    library.update("draft", grid: edited)
+    check(LayoutLibrary.sameGrid(original, prefs.loadGrid()), "editing an unused draft applied it")
+    check(!LayoutLibrary.sameGrid(library.choice(second)!.grid, edited), "draft edits mutated their source")
+    library.record(TypingResult(wpm: 42, accuracy: 0.9, at: 1_000), for: "draft")
+    library.use("draft")
+    let savedDraft = library.saveDraft(name: "Desk")!
+    check(library.draft == nil && defaults.string(forKey: "layout_draft") == nil, "saving a draft left its storage key")
+    check(library.appliedKey == savedDraft && library.average(savedDraft) == 42, "saving draft lost applied identity or results")
+    check(library.results["draft"] == nil, "draft results leaked into the next draft")
+    check(library.add(KeyGrid(rows: 0, items: [], nextId: 0), name: "Invalid") == nil, "invalid grid entered the library")
+    let oversized = KeyGrid.template(.standard)
+    for key in oversized.items { key.keys = Array(repeating: String(repeating: "x", count: 64), count: 64) }
+    check(oversized.isSound && library.add(oversized, name: "Too large") == nil, "unreadable oversized grid entered the library")
+    library.delete(savedDraft)
+    check(library.appliedKey == "preset:STANDARD", "deleting in-use custom did not switch to Standard")
+    check(LayoutLibrary.matchingPreset(prefs.loadGrid()) == .standard, "deleting in-use custom left its applied grid")
+    check(library.results[savedDraft] == nil, "deleting a layout left its results")
+    library.delete("preset:STANDARD")
+    check(library.choice("preset:STANDARD") != nil, "a built-in preset was deleted")
+    let reloaded = LayoutLibrary(settings: prefs, defaults: defaults)
+    check(reloaded.saved.map(\.id) == library.saved.map(\.id), "saved layout order did not survive reload")
+}
+
+withLayoutStore { prefs, defaults in
+    let library = LayoutLibrary(settings: prefs, defaults: defaults)
+    let previous = prefs.loadGrid()
+    check(library.beginTrial("preset:SPLIT"), "trial failed to start")
+    check(defaults.string(forKey: "layout_trial_previous") != nil, "trial has no recovery record")
+    check(library.appliedKey == "preset:STANDARD" && defaults.string(forKey: "layout_selected") == "preset:STANDARD", "trial changed permanent selection")
+    check(LayoutLibrary.matchingPreset(prefs.loadGrid()) == .split && prefs.profile(false).split, "extension cannot see trial layout/split")
+    check(!prefs.split(false), "trial permanently changed the Size tab")
+    library.restoreTrial()
+    check(LayoutLibrary.sameGrid(previous, prefs.loadGrid()) && !prefs.profile(false).split, "leaving trial did not restore grid/profile")
+    check(defaults.string(forKey: "layout_trial_previous") == nil, "trial recovery record was not cleared")
+    let fourRows = library.add(KeyGrid.fromJSON(validJSON)!, name: "Four rows")!
+    _ = library.beginTrial(fourRows)
+    check(!prefs.numberRow && library.choice("preset:STANDARD")!.grid.rows == previous.rows, "trial row count changed built-in tiles")
+    library.restoreTrial()
+    check(prefs.numberRow == (previous.rows == 5), "trial did not restore the number-row switch")
+    _ = library.beginTrial("preset:THUMBS")
+    let relaunched = LayoutLibrary(settings: prefs, defaults: defaults)
+    check(LayoutLibrary.sameGrid(previous, prefs.loadGrid()), "launch recovery did not restore the original layout")
+    check(relaunched.appliedKey == "preset:STANDARD", "launch recovery selected trial layout")
+    _ = relaunched.beginTrial("preset:THUMBS")
+    relaunched.use("preset:THUMBS")
+    relaunched.restoreTrial()
+    check(LayoutLibrary.matchingPreset(prefs.loadGrid()) == .thumbs && relaunched.appliedKey == "preset:THUMBS", "Use layout was restored away")
+    check(!relaunched.beginTrial("saved:missing"), "trial accepted an unknown layout")
+    _ = relaunched.beginTrial("preset:THUMBS")
+    check(defaults.string(forKey: "layout_trial_previous") == nil, "trying an applied tile created a needless recovery record")
+}
+
+withLayoutStore { prefs, defaults in
+    let library = LayoutLibrary(settings: prefs, defaults: defaults)
+    for index in 1...25 {
+        library.record(TypingResult(wpm: Double(index), accuracy: 0.95, at: Double(index) * 1_000), for: "preset:STANDARD")
+    }
+    library.record(TypingResult(wpm: 80, accuracy: 1, at: 99_000), for: "preset:SPLIT")
+    library.record(TypingResult(wpm: .infinity, accuracy: 1, at: 1), for: "preset:STANDARD")
+    library.record(TypingResult(wpm: 10, accuracy: -1, at: 1), for: "preset:STANDARD")
+    library.record(TypingResult(wpm: 10, accuracy: 1, at: 1), for: "saved:missing")
+    check(library.results["preset:STANDARD"]?.count == 20 && library.results["preset:STANDARD"]?.first?.wpm == 6, "history is not the last 20 results")
+    check(library.average("preset:STANDARD") == 15.5 && library.average("preset:SPLIT") == 80, "layout averages mixed histories")
+    let object = try! JSONSerialization.jsonObject(with: Data(defaults.string(forKey: "typing_results")!.utf8)) as! [String: [[String: Any]]]
+    check(object["preset:STANDARD"]?.last?["at"] as? Double == 25_000, "results do not store epoch milliseconds")
+    library.reload()
+    check(library.average("preset:STANDARD") == 15.5, "result history did not round trip")
+    defaults.set("broken", forKey: Prefs.layoutsSaved)
+    defaults.set("broken", forKey: Prefs.layoutDraft)
+    defaults.set("broken", forKey: Prefs.typingResults)
+    defaults.set("broken", forKey: Prefs.layoutTrialPrevious)
+    let recovered = LayoutLibrary(settings: prefs, defaults: defaults)
+    check(recovered.saved.isEmpty && recovered.draft == nil && recovered.results.isEmpty, "corrupt library storage did not recover")
+    check(recovered.appliedKey == "preset:STANDARD", "corrupt storage lost valid applied layout")
+    prefs.resetAll()
+    for key in ["layouts_saved", "layout_draft", "layout_selected", "layout_trial_previous", "typing_results"] {
+        check(defaults.object(forKey: key) == nil, "reset left layout library key \(key)")
+    }
+}
+
+switch LayoutCodeStatus.read("Someone shared TK2-abc") {
+case .invalid(let message): check(message == "This code is from a newer version of TailorKeys", "future code message differs")
+default: fatalError("future layout code accepted")
+}
+switch LayoutCodeStatus.read("TK1-cutoff") {
+case .invalid: break
+default: fatalError("bad code accepted")
+}
+switch LayoutCodeStatus.read(KeyGrid.template(.split).toCode()) {
+case .valid(let grid): check(LayoutLibrary.matchingPreset(grid) == .split, "live import decoder changed grid")
+default: fatalError("valid live import rejected")
+}
+
+check(TypingSession.wpm(characters: 250, seconds: 60) == 50, "WPM must use five-character words")
+check(TypingSession.wpm(characters: 10, seconds: 0) == 0 && TypingSession.wpm(characters: 10, seconds: -.infinity) == 0, "WPM has invalid zero-time behavior")
+var free = TypingSession(mode: .free, sentence: "")
+check(free.accuracy == 1 && free.elapsed(at: 100) == 0, "empty test metrics differ")
+free.update("hello", at: 100)
+free.update("hell", at: 101)
+free.update("hello", at: 102)
+check(free.inserted == 6 && free.deleted == 1 && free.mistakes == 1, "free typing did not count corrections")
+check(abs(free.accuracy - 5.0 / 6.0) < 0.0001, "free accuracy is not undeleted keystroke share")
+check(free.wpm(at: 160) == 1 && free.result(at: Date()) == nil, "free session saved a result or computed wrong speed")
+free.update("hallo", at: 103)
+check(free.inserted == 7 && free.deleted == 2 && free.mistakes == 2, "replacement counted unchanged suffix")
+free.update("ha🌻llo", at: 104)
+check(free.characterCount == 6 && free.inserted == 8, "metrics counted UTF-16 units instead of characters")
+free.update("", at: 105)
+check(free.accuracy == 0 && free.wpm(at: 105) == 0, "cleared text has negative accuracy or speed")
+
+var test = TypingSession(mode: .test, sentence: "hello world")
+test.update("heXlo", at: 100)
+check(test.mistakes == 1 && test.slippedPositions == [2] && test.accuracy == 0.8, "test mismatch metrics differ")
+test.update("hello", at: 101)
+check(test.accuracy == 1 && test.mistakes == 1, "correcting a test error lost its historical mistake")
+test.update("hello world", at: 160)
+check(test.isComplete && test.wpm(at: 200) == 2.2 && test.elapsed(at: 200) == 60, "completed test clock did not freeze")
+check(test.samples.last?.wpm == 2.2 && test.mistakeTimes == [0], "final speed sample or mistake timestamp missing")
+let testResult = test.result(at: Date(timeIntervalSince1970: 42))!
+check(testResult.at == 42_000 && testResult.accuracy == 1, "result timestamp/accuracy differs")
+test.update("changed", at: 201)
+check(test.text == "hello world", "finished session accepted more input")
+var wrongFinish = TypingSession(mode: .test, sentence: "abc")
+wrongFinish.update("a", at: 0)
+wrongFinish.update("axz", at: 2)
+check(wrongFinish.isComplete && wrongFinish.mistakes == 2 && abs(wrongFinish.accuracy - 1.0 / 3) < 0.0001, "mistyped sentence cannot finish with honest accuracy")
+var paste = TypingSession(mode: .test, sentence: "abc")
+paste.update("abc", at: 0)
+check(paste.wpm(at: 0) == 0 && paste.result(at: Date()) == nil, "instant paste saved infinite WPM")
+let spelling = "hello cafe\u{301} wrng"
+let misspelled = TypingSession.misspelledRanges(spelling, dictionary: ["hello", "café"])
+check(misspelled.map { String(spelling[$0]) } == ["wrng"], "dictionary changed Unicode ranges or missed the final misspelt word")
+check(TypingSentences.all.count == 40 && Set(TypingSentences.all).count == 40, "sentence bank is not 40 original entries")
+check(TypingSentences.all.allSatisfy { (8...14).contains($0.split(separator: " ").count) }, "sentence length outside 8–14 words")
+check(TypingSentences.next(after: TypingSentences.all[0]) != TypingSentences.all[0], "New sentence repeated the same sentence")
+print("Layout storage, recovery, import and typing metrics checks passed.")

@@ -13,14 +13,14 @@ enum AppStyle {
 }
 
 enum SettingsTab: Int, CaseIterable, Identifiable {
-    case layout, size, look, typing
+    case layout, size, look, settings
     var id: Int { rawValue }
     var title: String {
         switch self {
         case .layout: return "Layout"
         case .size: return "Size"
         case .look: return "Look"
-        case .typing: return "Typing"
+        case .settings: return "Settings"
         }
     }
     var symbol: String {
@@ -28,7 +28,7 @@ enum SettingsTab: Int, CaseIterable, Identifiable {
         case .layout: return "square.grid.2x2"
         case .size: return "arrow.up.right.and.arrow.down.left"
         case .look: return "paintpalette"
-        case .typing: return "textformat"
+        case .settings: return "slider.horizontal.3"
         }
     }
 }
@@ -66,11 +66,12 @@ struct LogoMark: View {
 
 struct AppHeader: View {
     @ObservedObject var model: AppSettingsModel
+    var layoutStyle = false
 
     var body: some View {
         HStack(spacing: 10) {
             LogoMark()
-            Text("TailorKeys").font(.system(size: 30, weight: .bold)).tracking(0.3)
+            Text("TailorKeys").font(.system(size: layoutStyle ? 22 : 30, weight: layoutStyle ? .medium : .bold)).tracking(0.3)
                 .lineLimit(1).fixedSize(horizontal: true, vertical: false)
             Spacer(minLength: 0)
             setupPill

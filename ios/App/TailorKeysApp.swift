@@ -5,11 +5,7 @@ struct TailorKeysApp: App {
     init() {
         // iOS 15 has no scrollContentBackground modifier.
         UITableView.appearance().backgroundColor = .clear
-        let bar = UITabBarAppearance()
-        bar.configureWithOpaqueBackground()
-        bar.backgroundColor = .systemBackground
-        UITabBar.appearance().standardAppearance = bar
-        UITabBar.appearance().scrollEdgeAppearance = bar
+        UITextView.appearance().backgroundColor = .clear
     }
 
     var body: some Scene {
@@ -19,16 +15,18 @@ struct TailorKeysApp: App {
 
 struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("onboarded") private var onboarded = false
     @StateObject private var model = AppSettingsModel()
     @State private var selection = SettingsTab.layout
 
     var body: some View {
-        TabView(selection: $selection) {
-            ForEach(SettingsTab.allCases) { tab in
-                SettingsScreen(model: model, tab: tab)
-                    .tabItem { Label(tab.title, systemImage: tab.symbol) }
-                    .tag(tab)
+        VStack(spacing: 0) {
+            if selection == .layout { LayoutScreen(model: model) }
+            else { SettingsScreen(model: model, tab: selection) }
+            if !model.testing {
+                SettingsNavigation(selection: $selection)
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity).animation(.easeOut(duration: 0.22)))
             }
         }
         .sheet(item: $model.sheet) { sheet in
@@ -44,7 +42,6 @@ struct RootView: View {
                 }
                 .navigationViewStyle(.stack)
             case .fullAccess: FullAccessSheet()
-            case .importLayout: ImportLayoutSheet(model: model)
             case .share: LayoutShareSheet(code: model.shareCode)
             case .about: AboutSheet()
             }
@@ -57,8 +54,17 @@ struct RootView: View {
             }
         }
         .onChange(of: scenePhase) { phase in
-            if phase == .active { model.refresh() }
+            if phase == .background && model.testing { model.endTest() }
+            if phase == .active {
+                model.refresh()
+                if selection != .layout { model.previewAppliedLayout() }
+            }
         }
-        .onChange(of: selection) { _ in model.editing = false }
+        .onChange(of: selection) { tab in
+            model.editing = false
+            if model.importOpen { model.cancelImport() }
+            if tab == .layout { model.previewSelectedLayout() }
+            else { model.previewAppliedLayout() }
+        }
     }
 }
