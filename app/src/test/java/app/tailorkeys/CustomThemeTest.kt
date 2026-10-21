@@ -53,7 +53,31 @@ class CustomThemeTest {
         assertEquals(1.0, contrastRatio(gray, gray), .00001)
         assertEquals(4.478, contrastRatio(gray, white), .001)
         assertEquals(contrastRatio(gray, white), contrastRatio(white, gray), .00001)
-        assertTrue(ThemeColors.from(Palette.of(ThemeName.WARM)).checks().any { it.second < 4.5 })
+        assertTrue(ThemeColors.from(Palette.of(ThemeName.WARM)).checks().any { !it.passes })
+    }
+    @Test fun fiveChecksUseTheirOwnTargetsAndCompositeTheOutline() {
+        val colors = ThemeColors.from(Palette.of(ThemeName.WARM))
+        assertEquals(listOf("Text on keys", "Text on function keys", "Enter key label", "Keys against background", "Pressed against keys"), colors.checks().map { it.label })
+        assertEquals(listOf(4.5, 4.5, 4.5, 1.2, 1.2), colors.checks().map { it.target })
+        assertEquals(contrastRatio(colors.palette().onAccent, colors.accent), colors.checks()[2].ratio, .00001)
+        assertFalse(colors.copy(pressed = colors.key).checks()[4].passes)
+        val outlined = ThemeColors.from(Palette.of(ThemeName.HIGH_CONTRAST))
+        assertTrue(outlined.checks()[3].label.contains("outline"))
+        assertEquals(3.0, outlined.checks()[3].target, 0.0)
+        assertTrue(outlined.copy(keyOutline = 0x10FFFFFF).keysBlend)
+        assertFalse(colors.copy(background = 0xFFFFFFFF.toInt(), key = 0xFFDDDDDD.toInt(), keyOutline = 0).keysBlend)
+    }
+    @Test fun closestReadableReachesTargetWithoutChangingHue() {
+        for (hex in listOf("#9A8D78", "#CC6688", "#387FA3", "#47953C", "#777777", "#FF0000")) {
+            val fg = requireNotNull(ThemeColors.parseHex(hex))
+            for (bg in listOf(0xFFF4EBDA.toInt(), 0xFF242424.toInt())) for (target in listOf(1.2, 3.0, 4.5)) {
+                val readable = closestReadable(fg, bg, target)
+                assertTrue("$hex/$target", contrastRatio(readable, bg) >= target)
+                val diff = kotlin.math.abs(themeHsl(fg)[0] - themeHsl(readable)[0])
+                assertTrue("$hex hue changed", minOf(diff, 360 - diff) <= 1.0)
+                if (contrastRatio(fg, bg) >= target) assertEquals(fg, readable)
+            }
+        }
     }
     @Test fun customResolutionAndDeletionFallback() {
         val theme = CustomTheme("sand", "Sand", ThemeColors.from(Palette.of(ThemeName.MIDNIGHT)))
@@ -88,6 +112,11 @@ class CustomThemeTest {
         val theme = CustomTheme("sand", "Sand", ThemeColors.from(Palette.of(ThemeName.WARM)))
         settings.saveTheme(theme)
         assertEquals("custom:sand", settings.themeId())
+        settings.saveTheme(theme.copy(id = "two")); settings.saveTheme(theme.copy(id = "three"))
+        settings.saveTheme(theme.copy(name = "Sand edited"))
+        assertEquals(listOf("sand", "two", "three"), settings.customThemes().map { it.id })
+        assertEquals("Sand edited", settings.customThemes()[0].name)
+        settings.deleteTheme("two"); settings.deleteTheme("three")
         settings.setTheme(ThemeName.HIGH_CONTRAST); settings.cycleQuickTheme()
         assertEquals(theme.selection, settings.themeId())
         settings.cycleQuickTheme(); assertEquals(ThemeName.SYSTEM.name, settings.themeId())

@@ -75,10 +75,14 @@ private struct ThemeEditor: View {
     @State private var colors: ThemeColors
     @State private var channel = 3
     @State private var picker = false
+    @State private var preset: String?
+    @State private var pickerOriginal: String
 
     init(model: AppSettingsModel, theme: CustomTheme) {
         self.model = model; self.theme = theme
         _name = State(initialValue: theme.name); _colors = State(initialValue: theme.colors)
+        _preset = State(initialValue: model.settings.customThemes.contains { $0.id == theme.id } ? theme.selection : nil)
+        _pickerOriginal = State(initialValue: theme.colors.text)
     }
 
     var body: some View {
@@ -98,32 +102,38 @@ private struct ThemeEditor: View {
                 ScrollView {
                     HStack(alignment: .top, spacing: 16) {
                         VStack(alignment: .leading, spacing: 12) {
+                            HStack { Text("Theme name").font(.caption); Spacer(); Text("\(name.count) / 24").font(.caption).monospacedDigit() }
                             TextField("Theme name", text: $name).textFieldStyle(.roundedBorder).onChange(of: name) { name = String($0.prefix(24)) }
                             Text("Start from").font(.caption.bold()).foregroundColor(AppStyle.accent)
                             ScrollView(.horizontal) {
                                 HStack {
                                     ForEach(ThemeName.allCases, id: \.self) { preset in
-                                        Button(preset.title) { colors = ThemeColors(Palette.of(preset, dark: scheme == .dark)) }.buttonStyle(.bordered)
+                                        startButton(preset.title, id: preset == .highContrast ? "HIGH_CONTRAST" : preset.rawValue.uppercased(), colors: ThemeColors(Palette.of(preset, dark: scheme == .dark)))
                                     }
                                     ForEach(model.settings.customThemes) { preset in
-                                        Button(preset.name) { colors = preset.colors }.buttonStyle(.bordered)
+                                        startButton(preset.name, id: preset.selection, colors: preset.colors)
                                     }
                                 }
                             }
                             Text("Colours").font(.caption.bold()).foregroundColor(AppStyle.accent)
                             ForEach(ThemeColors.labels.indices, id: \.self) { i in
-                                Button { channel = i; picker = true } label: {
+                                let open = channel == i && (wide || picker)
+                                let low = colors.checks.contains { !$0.passes && $0.channels.contains(i) }
+                                Button { if !open { pickerOriginal = colors.values[i] }; channel = i; picker = true } label: {
                                     HStack(spacing: 10) {
                                         Circle().fill(Color(ThemeColors.uiColor(colors.values[i]))).frame(width: 26, height: 26).overlay(Circle().stroke(Color.secondary, lineWidth: 1))
-                                        Text(ThemeColors.labels[i]).fontWeight(channel == i ? .bold : .regular)
-                                        Spacer(); Text(colors.values[i]).font(.caption.monospaced()); Image(systemName: "chevron.right").font(.caption)
-                                    }.padding(12).background(RoundedRectangle(cornerRadius: 14).fill(channel == i ? AppStyle.accent.opacity(0.14) : Color.secondary.opacity(0.06)))
+                                        VStack(alignment: .leading) {
+                                            Text(ThemeColors.labels[i]).fontWeight(open ? .bold : .regular)
+                                            if low { Label("Low contrast", systemImage: "exclamationmark.triangle").font(.caption2).foregroundColor(.red) }
+                                        }
+                                        Spacer(); Text(colors.values[i]).font(.caption.monospaced()); Image(systemName: open ? "chevron.down" : "chevron.right").font(.caption)
+                                    }.padding(12).background(RoundedRectangle(cornerRadius: 14).fill(open ? AppStyle.accent.opacity(0.14) : Color.secondary.opacity(0.06)))
                                 }.buttonStyle(.plain)
                             }
-                            if !wide { Readability(colors: colors) }
+                            if !wide { Readability(colors: $colors) }
                         }.frame(maxWidth: .infinity)
                         if wide {
-                            VStack(spacing: 12) { colorPicker; Readability(colors: colors) }.frame(maxWidth: .infinity)
+                            VStack(spacing: 12) { colorPicker; Readability(colors: $colors) }.frame(maxWidth: .infinity)
                         }
                     }.padding(16)
                 }
@@ -132,30 +142,48 @@ private struct ThemeEditor: View {
                     ScrollView {
                         VStack(spacing: 10) {
                             colorPicker
-                            Readability(colors: colors)
+                            Readability(colors: $colors)
                             Button("✓ Done") { picker = false }.buttonStyle(.borderedProminent).frame(maxWidth: .infinity, alignment: .trailing)
                         }.padding(20)
                     }.themePickerSheet()
                 }
         }
     }
+    private func startButton(_ title: String, id: String, colors seeded: ThemeColors) -> some View {
+        Button((preset == id ? "✓ " : "") + title) { preset = id; colors = seeded; pickerOriginal = seeded.values[channel] }
+            .buttonStyle(.bordered).font(.body.weight(preset == id ? .bold : .regular))
+            .background(RoundedRectangle(cornerRadius: 8).fill(preset == id ? AppStyle.accent.opacity(0.18) : Color.clear))
+            .accessibilityAddTraits(preset == id ? [.isSelected] : [])
+    }
     private var colorPicker: some View {
-        ThemeColorPicker(label: ThemeColors.labels[channel], hex: Binding(get: { colors.values[channel] }, set: { colors = colors.replacing(channel, with: $0) }), allowTransparent: channel == 6).id(channel)
+        ThemeColorPicker(label: ThemeColors.labels[channel], hex: Binding(get: { colors.values[channel] }, set: { colors = colors.replacing(channel, with: $0) }), resetColor: pickerOriginal, suggestion: pickerSuggestion, allowTransparent: channel == 6).id(channel)
+    }
+    private var pickerSuggestion: (String, Double)? {
+        guard let check = colors.checks.first(where: { !$0.passes && $0.channels.contains(channel) }) else { return nil }
+        let against = channel == check.fixChannel || channel == 6 ? check.background : colors.values[check.fixChannel]
+        let suggestion = ThemeColors.closestReadable(colors.values[channel], against, channel == 6 ? 3 : check.target)
+        return (suggestion, ThemeColors.contrast(suggestion, against))
     }
 }
 
 private struct Readability: View {
-    let colors: ThemeColors
+    @Binding var colors: ThemeColors
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Readability").font(.headline)
-            if colors.keysBlend { Text("Keys blend into the background").font(.caption.bold()).foregroundColor(.red) }
             ForEach(colors.checks.indices, id: \.self) { i in
                 let check = colors.checks[i]
                 HStack(alignment: .top) {
-                    Image(systemName: check.1 < 4.5 ? "exclamationmark.triangle" : "checkmark").foregroundColor(check.1 < 4.5 ? .red : .green)
-                    VStack(alignment: .leading) { Text(check.0).font(.caption.bold()); if check.1 < 4.5 { Text("Hard to read. Aim for 4.5 : 1 or more.").font(.caption2).foregroundColor(.red) } }
-                    Spacer(); Text(String(format: "%.1f : 1", check.1)).font(.caption.monospacedDigit())
+                    Image(systemName: check.passes ? "checkmark" : "exclamationmark.triangle").foregroundColor(check.passes ? .green : .red)
+                    VStack(alignment: .leading) {
+                        Text(check.label).font(.caption.bold())
+                        if !check.passes {
+                            Text(check.warning).font(.caption2).foregroundColor(.red)
+                            let suggestion = ThemeColors.closestReadable(colors.values[check.fixChannel], check.background, check.target)
+                            Button("Use \(suggestion)") { colors = colors.replacing(check.fixChannel, with: suggestion) }.frame(minHeight: 44)
+                        }
+                    }
+                    Spacer(); Text(String(format: "%.1f : 1", check.ratio)).font(.caption.monospacedDigit())
                 }
             }
             Text("You can save with warnings. They are advice, not rules.").font(.caption2).foregroundColor(.secondary)
@@ -166,6 +194,8 @@ private struct Readability: View {
 private struct ThemeColorPicker: View {
     let label: String
     @Binding var hex: String
+    let resetColor: String
+    let suggestion: (String, Double)?
     var allowTransparent = false
     @State private var entry = ""
     @State private var hue = 0.0
@@ -216,6 +246,13 @@ private struct ThemeColorPicker: View {
             Text("Hue").font(.caption); Slider(value: Binding(get: { hsv.0 }, set: { update($0, hsv.1, hsv.2) }), in: 0...1).accessibilityLabel("Hue")
             Text("Saturation").font(.caption); Slider(value: Binding(get: { hsv.1 }, set: { update(hsv.0, $0, hsv.2) }), in: 0...1).accessibilityLabel("Saturation")
             Text("Value").font(.caption); Slider(value: Binding(get: { hsv.2 }, set: { update(hsv.0, hsv.1, $0) }), in: 0...1).accessibilityLabel("Value")
+            if let suggestion = suggestion {
+                HStack {
+                    Text("Closest readable colour \(suggestion.0) reads at \(String(format: "%.1f", suggestion.1)) : 1").font(.caption)
+                    Spacer(); Button("Use") { hex = suggestion.0 }.frame(minHeight: 44)
+                }
+            }
+            Button("↻ Reset") { hex = resetColor; entry = resetColor; syncHSV() }.frame(maxWidth: .infinity, minHeight: 44, alignment: .trailing)
         }
     }
 }

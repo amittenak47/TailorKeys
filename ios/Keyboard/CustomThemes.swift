@@ -28,12 +28,49 @@ struct ThemeColors: Codable, Equatable {
         var v = values; v[index] = value
         return ThemeColors(background: v[0], key: v[1], functionKey: v[2], text: v[3], accent: v[4], pressed: v[5], keyOutline: v[6])
     }
-    var checks: [(String, Double)] {
-        [("Text on keys", Self.contrast(text, key)), ("Text on background", Self.contrast(text, background)),
-         ("Text on function keys", Self.contrast(text, functionKey)), ("Accent on keys", Self.contrast(accent, key))]
+    var onAccent: String { Self.contrast("#000000", accent) >= Self.contrast("#FFFFFF", accent) ? "#000000" : "#FFFFFF" }
+    var checks: [ThemeCheck] {
+        let outline = Self.contrast(Self.composite(keyOutline, on: background), background)
+        let outlinePasses = Self.contrast(key, background) < 1.2 && outline >= 3
+        return [
+            ThemeCheck(label: "Text on keys", ratio: Self.contrast(text, key), target: 4.5, channels: [3, 1], fixChannel: 3, background: key),
+            ThemeCheck(label: "Text on function keys", ratio: Self.contrast(text, functionKey), target: 4.5, channels: [3, 2], fixChannel: 3, background: functionKey),
+            ThemeCheck(label: "Enter key label", ratio: Self.contrast(onAccent, accent), target: 4.5, channels: [4], fixChannel: 4, background: onAccent),
+            ThemeCheck(label: outlinePasses ? "Keys against background (outline)" : "Keys against background", ratio: outlinePasses ? outline : Self.contrast(key, background), target: outlinePasses ? 3 : 1.2, channels: [1, 0, 6], fixChannel: 1, background: background),
+            ThemeCheck(label: "Pressed against keys", ratio: Self.contrast(pressed, key), target: 1.2, channels: [5, 1], fixChannel: 5, background: key)]
     }
-    var keysBlend: Bool {
-        Self.contrast(key, background) < 1.5 && Self.contrast(Self.composite(keyOutline, on: background), background) < 3
+    var keysBlend: Bool { !checks[3].passes }
+    /// HSL hue in degrees, saturation and lightness; shared with Android.
+    static func hsl(_ color: String) -> (h: Double, s: Double, l: Double) {
+        let rgb = parse(color, alpha: true) ?? 0
+        let r = Double((rgb >> 16) & 255) / 255, g = Double((rgb >> 8) & 255) / 255, b = Double(rgb & 255) / 255
+        let high = max(r, max(g, b)), low = min(r, min(g, b)), delta = high - low, light = (high + low) / 2
+        let hue = delta == 0 ? 0 : (high == r ? ((g - b) / delta + 6).truncatingRemainder(dividingBy: 6) : high == g ? (b - r) / delta + 2 : (r - g) / delta + 4) * 60
+        return (hue, delta == 0 ? 0 : delta / (1 - abs(2 * light - 1)), light)
+    }
+    private static func rgb(_ hue: Double, _ saturation: Double, _ light: Double) -> String {
+        let chroma = (1 - abs(2 * light - 1)) * saturation
+        let x = chroma * (1 - abs((hue / 60).truncatingRemainder(dividingBy: 2) - 1)), m = light - chroma / 2
+        let rgb: [Double]
+        switch Int(hue / 60) {
+        case 0: rgb = [chroma, x, 0]; case 1: rgb = [x, chroma, 0]; case 2: rgb = [0, chroma, x]
+        case 3: rgb = [0, x, chroma]; case 4: rgb = [x, 0, chroma]; default: rgb = [chroma, 0, x]
+        }
+        func channel(_ i: Int) -> UInt32 { UInt32(min(255, max(0, ((rgb[i] + m) * 255).rounded()))) }
+        return String(format: "#%06X", channel(0) << 16 | channel(1) << 8 | channel(2))
+    }
+    static func closestReadable(_ fg: String, _ bg: String, _ target: Double) -> String {
+        if contrast(fg, bg) >= target { return fg }
+        let source = hsl(fg)
+        for step in 1...10_000 {
+            for direction in [-1, 1] {
+                let light = source.l + Double(direction * step) / 10_000
+                if !(0...1).contains(light) { continue }
+                let candidate = rgb(source.h, source.s, light), diff = abs(hsl(candidate).h - source.h)
+                if contrast(candidate, bg) >= target && min(diff, 360 - diff) <= 1 { return candidate }
+            }
+        }
+        return contrast("#000000", bg) >= contrast("#FFFFFF", bg) ? "#000000" : "#FFFFFF"
     }
     static func composite(_ outline: String, on background: String) -> String {
         let value = parse(outline, alpha: true) ?? 0, bg = parse(background) ?? 0
@@ -61,6 +98,21 @@ struct ThemeColors: Codable, Equatable {
         }
         let a = luminance(first), b = luminance(second)
         return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+    }
+}
+
+struct ThemeCheck {
+    let label: String
+    let ratio: Double
+    let target: Double
+    let channels: [Int]
+    let fixChannel: Int
+    let background: String
+    var passes: Bool { ratio >= target }
+    var warning: String {
+        if target == 4.5 { return "Hard to read. Aim for 4.5 : 1 or more." }
+        if fixChannel == 5 { return "Pressed keys look the same. Aim for 1.2 : 1 or more." }
+        return "Keys blend into the background. Aim for 1.2 : 1, or a 3 : 1 outline."
     }
 }
 

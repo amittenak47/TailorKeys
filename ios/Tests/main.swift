@@ -801,12 +801,35 @@ do {
     check(CustomTheme.decode("broken").isEmpty, "invalid theme JSON accepted")
     check(abs(ThemeColors.contrast("#000000", "#FFFFFF") - 21) < 0.00001, "WCAG endpoints incorrect")
     check(abs(ThemeColors.contrast("#777777", "#FFFFFF") - 4.478) < 0.001, "WCAG sRGB linearisation incorrect")
+    check(colors.checks.map { $0.label } == ["Text on keys", "Text on function keys", "Enter key label", "Keys against background", "Pressed against keys"], "readability checks differ")
+    check(colors.checks.map { $0.target } == [4.5, 4.5, 4.5, 1.2, 1.2], "readability targets differ")
+    check(!colors.replacing(5, with: colors.key).checks[4].passes, "identical pressed fill passed")
+    check(blackKeys.replacing(6, with: "#FFFFFF").checks[3].label.contains("outline"), "outline pass not labelled")
+    check(blackKeys.replacing(6, with: "#FFFFFF").checks[3].target == 3, "outline target differs")
+    check(!blackKeys.replacing(0, with: "#FFFFFF").replacing(1, with: "#DDDDDD").keysBlend, "1.2 key target ignored")
+    for fg in ["#9A8D78", "#CC6688", "#387FA3", "#47953C", "#777777", "#FF0000"] {
+        for bg in ["#F4EBDA", "#242424"] {
+            for target in [1.2, 3.0, 4.5] {
+                let readable = ThemeColors.closestReadable(fg, bg, target)
+                let diff = abs(ThemeColors.hsl(fg).h - ThemeColors.hsl(readable).h)
+                check(ThemeColors.contrast(readable, bg) >= target, "readable suggestion missed target")
+                check(min(diff, 360 - diff) <= 1, "readable suggestion shifted hue")
+                if ThemeColors.contrast(fg, bg) >= target { check(readable == fg, "readable colour changed") }
+            }
+        }
+    }
     let suite = "tailorkeys.themes.tests." + UUID().uuidString
     let defaults = UserDefaults(suiteName: suite)!
     defer { defaults.removePersistentDomain(forName: suite) }
     let settings = KeyboardSettings(tablet: true, store: defaults)
     settings.saveTheme(theme)
     check(settings.themeID == "custom:sand" && settings.customThemes == [theme], "custom selection not stored")
+    settings.saveTheme(CustomTheme(id: "two", name: "Two", colors: colors))
+    settings.saveTheme(CustomTheme(id: "three", name: "Three", colors: colors))
+    settings.saveTheme(CustomTheme(id: theme.id, name: "Sand edited", colors: colors))
+    check(settings.customThemes.map { $0.id } == ["sand", "two", "three"], "edited theme moved")
+    check(settings.customThemes[0].name == "Sand edited", "edited theme not replaced")
+    settings.deleteTheme("two"); settings.deleteTheme("three")
     settings.theme = .highContrast; settings.cycleQuickTheme()
     check(settings.themeID == theme.selection, "quick theme cycle skipped custom themes")
     settings.cycleQuickTheme(); check(settings.theme == .system, "quick theme cycle did not wrap")
