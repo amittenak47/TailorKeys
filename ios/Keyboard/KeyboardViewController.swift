@@ -180,6 +180,8 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     private var heightConstraint: NSLayoutConstraint?
     private var panel: SettingsPanel?
     private var quickOptions: QuickOptions?
+    private var insertPanel: InsertPanel?
+    private var insertTypingGrid: KeyGrid?
     private var editingLayoutKey: String?
     private var lastSpace: CFTimeInterval = 0
     private var lastAbcTap: CFTimeInterval = 0
@@ -390,6 +392,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         keyboard = kb
         activateLanguage()
         attachQuickOptions()
+        attachInsertPanel()
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -428,6 +431,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         if heightConstraint?.constant != h { heightConstraint?.constant = h }
         let area = keyboard.quickOptionsBounds
         quickOptions?.frame = CGRect(x: area.minX, y: 0, width: area.width, height: view.bounds.height)
+        insertPanel?.frame = CGRect(x: area.minX, y: 0, width: area.width, height: view.bounds.height)
     }
 
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
@@ -446,6 +450,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         clearTaps()
         choiceInterrupted()
         closeQuickOptions()
+        closeInsert()
         keyboard?.endTypingSession()
         editingLayoutKey = nil; keyboard?.editTitle = nil
         predictor?.flushLearning(wait: true)
@@ -491,6 +496,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     // MARK: - KeyboardViewDelegate
 
     func chordTyped(_ word: String) {
+        if insertPanel?.typeText(word) == true { return }
         beginDocumentOperation()
         defer { endDocumentOperation() }
         keepPendingLearning(); finishArmedLearning()
@@ -530,6 +536,9 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     func keyTapped(_ code: String, distances: [Float]) { handleKey(code, distances) }
 
     private func handleKey(_ code: String, _ distances: [Float]?) {
+        if code == Keys.insert { openInsert(); return }
+        if insertPanel?.acceptsText == true, KeyText.isLayerKey(code) { tapLayerKey(code); keyboard.setNeedsDisplay(); return }
+        if insertPanel?.key(code, state: state) == true { keyboard.setNeedsDisplay(); return }
         beginDocumentOperation()
         defer { endDocumentOperation() }
         changingGlide = true
@@ -580,6 +589,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     func moveCursor(_ steps: Int) {
+        if insertPanel?.moveCursor(steps) == true { return }
         liveGlide = nil; clearAutomaticSpace()
         beginDocumentOperation()
         defer { endDocumentOperation() }
@@ -607,6 +617,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     func longPressText(_ text: String) {
+        if insertPanel?.typeText(text) == true { return }
         beginDocumentOperation()
         defer { endDocumentOperation() }
         choiceInterrupted()
@@ -700,6 +711,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     func glideStarted() {
+        if insertPanel?.acceptsText == true { return }
         beginDocumentOperation()
         defer { endDocumentOperation() }
         keepPendingLearning(); finishArmedLearning()
@@ -730,6 +742,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         session.shown = text; session.expected = document.before ?? ""
     }
     func glideProgress(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat, _ raw: String, _ hints: [DoubleLetterHint]) {
+        if insertPanel?.acceptsText == true { return }
         beginDocumentOperation()
         defer { endDocumentOperation() }
         changingGlide = true
@@ -739,6 +752,15 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         if modelReady && suggestAllowed && !liveBusy { decodeGlide(session, points, keys, keyWidth, raw, hints, false) }
     }
     func glideFinished(_ points: [GlidePoint], _ keys: [Character: CGPoint], _ keyWidth: CGFloat, _ raw: String, _ hints: [DoubleLetterHint]) {
+        if let panel = insertPanel, panel.acceptsText {
+            let session = panel.session
+            guard modelReady, !settings.swipeLetters, let scoring = predictor?.gestureScoring() else { panel.typeText(raw); return }
+            glideWorker.async {
+                let decoder = GestureDecoder(scoring.words); decoder.setKeys(keys, keyWidth)
+                let word = decoder.decode(points, nil, frequency: scoring.frequency, context: { _, _ in 1.0 }, hints: hints).first?.word ?? raw
+                DispatchQueue.main.async { [weak panel] in if panel?.session == session { panel?.typeText(word) } }
+            }; return
+        }
         beginDocumentOperation()
         defer { endDocumentOperation() }
         changingGlide = true
@@ -844,6 +866,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
     }
 
     func openQuickOptions() {
+        closeInsert()
         attachQuickOptions()
         guard let p = quickOptions, p.isHidden else { return }
         choiceInterrupted()
@@ -904,6 +927,38 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         keyboard?.layer.removeAllAnimations(); keyboard?.alpha = 1
         keyboard?.accessibilityElementsHidden = false
         UIAccessibility.post(notification: .layoutChanged, argument: keyboard)
+    }
+
+    private func attachInsertPanel() {
+        guard insertPanel == nil else { return }
+        let p = InsertPanel(settings: settings, state: state)
+        p.fullAccess = { [weak self] in self?.hasFullAccess == true }
+        p.password = { [weak self] in guard let proxy = self?.textDocumentProxy else { return true }; return proxy.documentContextBeforeInput == nil && proxy.documentContextAfterInput == nil }
+        p.onClose = { [weak self] in self?.closeInsert() }
+        p.onBackspace = { [weak self] in self?.keyTapped(Keys.backspace) }
+        p.onInsert = { [weak self] text in
+            guard let self = self else { return }; self.beginDocumentOperation(); defer { self.endDocumentOperation() }
+            self.choiceInterrupted(); self.insert(text); self.updateSuggestions()
+        }
+        p.onTyping = { [weak self] active, height in
+            guard let self = self else { return }
+            if active && self.insertTypingGrid == nil { self.insertTypingGrid = self.keyboard.grid.copy() }
+            if active, let saved = self.insertTypingGrid {
+                let grid = saved.copy(); if UIDevice.current.userInterfaceIdiom != .pad || height > 56 { grid.setNumberRow(false) }; self.keyboard.grid = grid
+            } else if let saved = self.insertTypingGrid { self.keyboard.grid = saved; self.insertTypingGrid = nil }
+            self.keyboard.insertStripHeight = height; self.keyboard.setOptionsCovered(!active); self.keyboard.alpha = active ? 1 : 0; self.keyboard.accessibilityElementsHidden = !active
+        }
+        addChild(p.settingsLinkController); view.addSubview(p); p.settingsLinkController.didMove(toParent: self); insertPanel = p
+    }
+    private func openInsert() {
+        closeQuickOptions(); attachInsertPanel(); choiceInterrupted(); keyboard.cancelTouches()
+        keyboard.setOptionsCovered(true); keyboard.alpha = 0; keyboard.accessibilityElementsHidden = true
+        let area = keyboard.quickOptionsBounds
+        insertPanel?.frame = CGRect(x: area.minX, y: 0, width: area.width, height: view.bounds.height)
+        insertPanel?.show(); UIAccessibility.post(notification: .screenChanged, argument: insertPanel)
+    }
+    private func closeInsert() {
+        insertPanel?.hide(); keyboard?.setOptionsCovered(false); keyboard?.alpha = 1; keyboard?.accessibilityElementsHidden = false
     }
 
     /// The gear in the rearranging toolbar: leaves rearranging and shows the settings panel.

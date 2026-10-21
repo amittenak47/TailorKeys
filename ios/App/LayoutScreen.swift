@@ -9,6 +9,7 @@ struct LayoutScreen: View {
     @State private var deleting = false
     @State private var notice: String?
     @State private var dockHeight: CGFloat = 72
+    @State private var insertPrompt: LayoutChoice?
 
     private enum LayoutModal: Equatable { case add, rename, saveFirst }
 
@@ -26,7 +27,15 @@ struct LayoutScreen: View {
         }
         .foregroundColor(LayoutStyle.text)
         .background(LayoutStyle.background.ignoresSafeArea())
-        .onAppear { model.previewSelectedLayout() }
+        .onAppear { model.previewSelectedLayout(); checkInsertPrompt() }
+        .onChange(of: model.fullAccessConfirmed) { _ in checkInsertPrompt() }
+        .alert("Add the Insert key to \(insertPrompt?.name ?? "your layout")?", isPresented: Binding(get: { insertPrompt != nil }, set: { if !$0 { insertPrompt = nil } })) {
+            Button("Add") {
+                if let choice = insertPrompt { let grid = choice.grid; if grid.addInsert() { model.library.update(choice.id, grid: grid); model.changed(); model.previewSelectedLayout() }
+                    else { notice = "No room for Insert. Remove a key in the editor, then add it." } }; insertPrompt = nil
+            }
+            Button("Not now", role: .cancel) { insertPrompt = nil }
+        } message: { Text("Open emoji, kaomoji, clipboard, notes and Dictate from a key next to 123. You can move or remove it later.") }
         .onDisappear { if model.testing { model.endTest() } }
         .onChange(of: model.selectedLayoutKey) { _ in deleting = false }
     }
@@ -58,6 +67,13 @@ struct LayoutScreen: View {
         .onPreferenceChange(LayoutDockHeight.self) { dockHeight = $0 }
     }
 
+    private func checkInsertPrompt() {
+        guard model.fullAccessConfirmed, !model.group.bool(forKey: InsertPrefs.promptSeen) else { return }
+        let candidates = [model.selectedLayout].compactMap { $0 } + model.choices
+        insertPrompt = candidates.first { InsertPrefs.needsPrompt(seen: false, custom: $0.isCustom, grid: $0.grid) }
+        model.group.set(true, forKey: InsertPrefs.promptSeen)
+    }
+
     private var preview: some View {
         KeyboardPreview(model: model, landscape: nil, permitsEditing: !model.importOpen, previewsSelection: true)
             .opacity(importError == nil ? 1 : 0.28)
@@ -87,6 +103,9 @@ struct LayoutScreen: View {
                     }.buttonStyle(.plain).foregroundColor(LayoutStyle.accent)
                 }
                 if model.editing {
+                    if !model.grid.items.contains(where: { $0.keys.contains(Keys.insert) }) {
+                        Button("Add Insert key") { let grid = model.grid.copy(); if grid.addInsert() { model.saveGrid(grid) } else { notice = "No room for Insert. Remove a key first." } }.frame(minHeight: 48)
+                    }
                     HStack {
                         Text("Drag keys in the preview to rearrange them.").font(.footnote)
                         Spacer()

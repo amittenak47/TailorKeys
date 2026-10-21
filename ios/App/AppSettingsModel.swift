@@ -17,6 +17,7 @@ final class AppSettingsModel: ObservableObject {
     @Published var importOpen = false
     @Published var importName = "Imported layout"
     @Published var editing = false
+    @Published var insertSettingsPage: String?
     @Published var landscape = false
     @Published var sheet: Sheet?
     @Published private(set) var fullAccessConfirmed = false

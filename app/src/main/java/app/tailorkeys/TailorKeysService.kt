@@ -118,6 +118,8 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private var glideExplore = emptyList<String>()
     private var keyboardView: KeyboardView? = null
     private var quickOptions: QuickOptions? = null
+    private var insertPanel: app.tailorkeys.insert.InsertPanel? = null
+    private var clipboardCapture: app.tailorkeys.insert.ClipboardCapture? = null
     private var editingLayoutKey: String? = null
     private val state = InputState()
     private var grid: KeyGrid = KeyGrid.default()
@@ -380,6 +382,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         }
         keyboardView?.reloadSettings()
         quickOptions?.refresh()
+        insertPanel?.refresh()
         updateSuggestions()
     }
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -397,6 +400,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     override fun onCreate() {
         super.onCreate()
         settings = KeyboardSettings(this)
+        clipboardCapture = app.tailorkeys.insert.ClipboardCapture(this, app.tailorkeys.insert.InsertRepository(this)) { insertPanel?.clipboardChanged() }
         state.language = settings.currentLanguage()
         grid = settings.loadGrid()
         activateLanguage()
@@ -404,6 +408,8 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onDestroy() {
+        clipboardCapture?.close()
+        insertPanel?.hide()
         onChoiceInterrupted()
         settings.prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
         models.values.forEach { it.predictor.save() }
@@ -415,6 +421,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onCreateInputView(): View {
+        insertPanel?.hide()
         closeQuickOptions()
         editingLayoutKey = null
         val keyboard = KeyboardView(this, settings).also {
@@ -468,10 +475,26 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             // refreshed in place, so neither a gear tap nor a theme tap constructs a view hierarchy.
             quickOptions = panel
             it.addView(panel, android.widget.FrameLayout.LayoutParams(-1, -1))
+            val repository = app.tailorkeys.insert.InsertRepository(this)
+            val insert = app.tailorkeys.insert.InsertPanel(this, settings, repository, state,
+                close = { closeInsert() }, insert = { text -> editorPhase { onLongPressTextPhase(text) } }, backspace = { onKey(Keys.BACKSPACE) },
+                typing = { active, height ->
+                    keyboard.setOptionsCovered(!active); keyboard.alpha = if (active) 1f else 0f
+                    keyboard.importantForAccessibility = if (active) View.IMPORTANT_FOR_ACCESSIBILITY_YES else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                    keyboard.insertStripHeight = (height * resources.displayMetrics.density).toInt()
+                    keyboard.grid = if (active && (resources.configuration.smallestScreenWidthDp < 600 || height > 56))
+                        KeyGrid.fromJson(grid.toJson())!!.apply { setNumberRow(false) } else grid
+                }, pickIme = { onPickIme() }).apply {
+                visibility = View.INVISIBLE
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            }
+            insertPanel = insert
+            it.addView(insert, android.widget.FrameLayout.LayoutParams(-1, -1))
         }
     }
 
     override fun onQuickOptions() {
+        closeInsert()
         val keyboard = keyboardView ?: return
         val panel = quickOptions ?: return
         if (panel.visibility == View.VISIBLE) return
@@ -504,12 +527,34 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         keyboardView?.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
     }
 
+    private fun openInsert() {
+        closeQuickOptions(); onChoiceInterrupted()
+        keyboardView?.let { it.cancelTouches(); it.setOptionsCovered(true); it.alpha = 0f; it.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
+        insertPanel?.show()
+    }
+    private fun closeInsert() {
+        insertPanel?.hide()
+        keyboardView?.let { it.setOptionsCovered(false); it.alpha = 1f; it.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES }
+    }
+    private fun insertKey(code: String): Boolean {
+        if (code == Keys.INSERT) { openInsert(); return true }
+        if (insertPanel?.acceptsText() == true && KeyText.isLayerKey(code)) {
+            tapLayerKey(code); keyboardView?.refreshInputState(); return true
+        }
+        return (insertPanel?.key(code) == true).also { if (it) keyboardView?.refreshInputState() }
+    }
+
     // Landscape "extract mode" covers the app with a full-screen text box. Keep the app visible instead.
     override fun onEvaluateFullscreenMode() = false
 
     override fun onStartInput(info: EditorInfo, restarting: Boolean) {
         super.onStartInput(info, restarting)
         inputSession++
+        closeInsert()
+        val variation = info.inputType and InputType.TYPE_MASK_VARIATION
+        val number = info.inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_NUMBER
+        clipboardCapture?.password = if (number) variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD else
+            variation in listOf(InputType.TYPE_TEXT_VARIATION_PASSWORD, InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD, InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD)
         armedUndo = null
         liveGlide = null
         clearAutomaticSpace()
@@ -543,6 +588,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         liveGlide = null
         clearAutomaticSpace()
         suggest = !password
+        clipboardCapture?.password = password
         keyboardView?.glideAllowed = suggest
         protectedBefore = null; protectedAfter = null; suppressedBefore = null; suppressedAfter = null
         correctAllowed = CorrectionRules.allowed(cls == InputType.TYPE_CLASS_TEXT, password,
@@ -562,6 +608,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
+        closeInsert()
         onGlideCancel()
         clearTaps()
         onChoiceInterrupted()
@@ -597,7 +644,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     // ---- KeyboardView.Listener ----
 
-    override fun onChord(word: String) = editorPhase { onChordPhase(word) }
+    override fun onChord(word: String) = editorPhase { if (insertPanel?.typeText(word) != true) onChordPhase(word) }
 
     private fun onChordPhase(word: String) {
         keepPendingLearning(); finishArmedLearning()
@@ -653,9 +700,9 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         updateSuggestions()
     }
 
-    override fun onKey(code: String) { handleKey(code, null) }
+    override fun onKey(code: String) { if (!insertKey(code)) handleKey(code, null) }
 
-    override fun onTapKey(code: String, distances: FloatArray) { handleKey(code, distances) }
+    override fun onTapKey(code: String, distances: FloatArray) { if (!insertKey(code)) handleKey(code, distances) }
 
     private fun handleKey(code: String, distances: FloatArray?) = editorPhase { handleKeyPhase(code, distances) }
 
@@ -730,6 +777,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onCursor(steps: Int, select: Boolean) {
+        if (insertPanel?.cursor(steps, select) == true) return
         if (steps == 0) return
         onGlideCancel()
         clearAutomaticSpace()
@@ -771,7 +819,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         keyboardView?.refreshInputState()
     }
 
-    override fun onLongPressText(text: String) = editorPhase { onLongPressTextPhase(text) }
+    override fun onLongPressText(text: String) = editorPhase { if (insertPanel?.typeText(text) != true) onLongPressTextPhase(text) }
 
     private fun onLongPressTextPhase(text: String) {
         onChoiceInterrupted()
@@ -880,6 +928,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onGlideStart() = editorPhase {
+        if (insertPanel?.acceptsText() == true) return@editorPhase
         keepPendingLearning(); finishArmedLearning()
         onChoiceInterrupted()
         val read = editor()
@@ -891,6 +940,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onGlideCancel() {
+        if (insertPanel?.acceptsText() == true) return
         liveGlide = null
         currentInputConnection?.finishComposingText()
     }
@@ -919,6 +969,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     override fun onGlideProgress(points: List<GestureDecoder.Point>, keys: Map<Char, GestureDecoder.Point>, keyWidth: Float,
                                  raw: String, hints: List<GestureDecoder.DoubleHint>) = editorPhase {
+        if (insertPanel?.acceptsText() == true) return@editorPhase
         val session = liveGlide ?: return@editorPhase
         if (session.letters) showRaw(session, raw)
         if (modelReady && suggest && !liveBusy) decodeGlide(session, points, keys, keyWidth, raw, hints, false)
@@ -926,6 +977,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     override fun onGlide(points: List<GestureDecoder.Point>, keys: Map<Char, GestureDecoder.Point>, keyWidth: Float,
                          raw: String, hints: List<GestureDecoder.DoubleHint>) = editorPhase {
+        if (insertGlide(points, keys, keyWidth, raw, hints)) return@editorPhase
         val session = liveGlide ?: return@editorPhase
         if (!suggest || !settings.bool(Prefs.SWIPE_TYPING) || state.layer != Layer.ABC) { onGlideCancel(); return@editorPhase }
         if (editor().before.takeLast(64) != session.expected || editor().after.take(64) != session.after || editor().selected) {
@@ -946,6 +998,22 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         }
         if (modelReady) decodeGlide(session, points, keys, keyWidth, raw, hints, true)
         updateSuggestions()
+    }
+
+    /** Panel typing never creates a composing session in the host editor. */
+    private fun insertGlide(points: List<GestureDecoder.Point>, keys: Map<Char, GestureDecoder.Point>, width: Float,
+        raw: String, hints: List<GestureDecoder.DoubleHint>): Boolean {
+        val panel = insertPanel ?: return false
+        if (!panel.acceptsText()) return false
+        if (!modelReady || settings.bool(Prefs.SWIPE_LETTERS)) { panel.typeText(raw); return true }
+        val session = panel.session
+        val scoring = predictor.gestureScoring(); val path = points.toList(); val map = keys.toMap(); val doubles = hints.toList()
+        glideWorker.execute {
+            val decoder = GestureDecoder(scoring.words.toList()); decoder.setKeys(map, width)
+            val word = decoder.decode(path, null, scoring.frequency, { _, _ -> 1.0 }, doubles).firstOrNull()?.word ?: raw
+            main.post { if (insertPanel === panel && panel.session == session && panel.acceptsText()) panel.typeText(word) }
+        }
+        return true
     }
 
     /** One live job at a time, plus a final job. No decoder work or path copies in drawGlide. */

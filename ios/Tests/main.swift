@@ -10,6 +10,56 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
     if !condition() { fatalError(message) }
 }
 
+// Insert models deliberately avoid UIKit and all device permissions.
+let emojiTSV = try String(contentsOfFile: "app/src/main/assets/insert/emoji.tsv", encoding: .utf8)
+let emojiCatalog = EmojiCatalog(emojiTSV)
+check(emojiCatalog.entries.count > 3900, "Unicode emoji data was truncated")
+check(emojiCatalog.search("grinning face").contains { $0.text == "😀" }, "emoji name search failed")
+check(emojiCatalog.search("happy").contains { $0.text == "😀" }, "CLDR keyword search failed")
+check(emojiCatalog.search("doctor").contains { $0.name.contains("health worker") }, "CLDR profession keyword failed")
+check(emojiCatalog.search("happy face") == emojiCatalog.search("  HAPPY   FACE  "), "search token/case folding failed")
+check(emojiCatalog.search("no-such-emoji-xyz").isEmpty, "no-results search failed")
+for text in ["👍", "👩‍💻", "🧑‍⚕️", "✌️", "☝️", "✍️"] {
+    let variants = emojiCatalog.variants(text)
+    check(variants.count == 6 && variants.first?.text == text, "skin-tone family failed")
+    for (i, entry) in variants.dropFirst().enumerated() { check(entry.text.unicodeScalars.contains { $0.value == UInt32(0x1F3FB + i) }, "skin tone sequence changed") }
+    check(emojiCatalog.variants(variants[3].text) == variants, "toned family lookup failed")
+    check(emojiCatalog.toned(variants[3], 5) == variants[3], "recent tone was replaced")
+}
+let kaomojiTSV = try String(contentsOfFile: "app/src/main/assets/insert/kaomoji.tsv", encoding: .utf8)
+check(kaomojiTSV.split(whereSeparator: \.isNewline).count == 150 && kaomojiTSV.unicodeScalars.contains { $0.value > 127 }, "kaomoji count or encoding changed")
+var insertRecents = InsertRecents()
+for value in 0...40 { insertRecents.use(String(value)) }; insertRecents.use("12")
+check(insertRecents.values.count == 32 && insertRecents.values[0] == "12" && insertRecents.values[1] == "40", "recents ordering/cap failed")
+var insertNow: TimeInterval = 0
+let clips = ClipboardStore(now: { insertNow })
+check(!clips.capture("secret", enabled: true, sensitive: true, password: false), "sensitive clip stored")
+check(!clips.capture("password", enabled: true, sensitive: false, password: true), "password clip stored")
+check(!clips.capture("no access", enabled: true, sensitive: false, password: false, fullAccess: false), "clip stored without Full Access")
+check(!clips.capture("off", enabled: false, sensitive: false, password: false), "disabled history stored a clip")
+clips.capture("pin", enabled: true, sensitive: false, password: false); clips.pin(clips.clips[0].id)
+insertNow += 1; clips.capture("expire", enabled: true, sensitive: false, password: false)
+let insertNote = clips.note("address", "old")
+clips.edit(insertNote.id, text: "new", title: "home")
+insertNow += 3600; clips.expire(.hour)
+check(clips.clips.count == 1 && clips.clips[0].pinned && clips.notes[0].text == "new", "expiry removed pins/notes or kept expired clips")
+clips.delete(insertNote.id); check(clips.notes.isEmpty && clips.undo(), "note undo failed")
+clips.delete(insertNote.id); insertNow += 7; check(!clips.undo(), "expired undo succeeded")
+clips.note("stay", "note"); clips.clear()
+check(clips.notes.count == 1 && clips.clips.count == 1, "clear removed notes/pins")
+check(ClipboardStore.decode(clips.encode()).notes == clips.notes, "clipboard serialization failed")
+for template in Template.allCases {
+    let grid = KeyGrid.template(template)
+    check(grid.isSound && !grid.addInsert(), "preset Insert key missing/duplicated")
+    let key = grid.items.first { $0.keys.contains(Keys.insert) }!
+    check(grid.removalHint(key) == nil && grid.remove(key), "Insert key protected")
+    let before = grid.toJSON()
+    check(InsertPrefs.needsPrompt(seen: false, custom: true, grid: grid), "missing Insert prompt suppressed")
+    check(!InsertPrefs.needsPrompt(seen: true, custom: true, grid: grid), "Insert prompt repeated")
+    check(!InsertPrefs.needsPrompt(seen: false, custom: false, grid: grid), "preset prompted")
+    check(before == grid.toJSON() && grid.addInsert() && grid.isSound, "prompt changed a layout or explicit add failed")
+}
+
 func shareCode(_ bytes: Data) -> String {
     let compressed = try! (bytes as NSData).compressed(using: .zlib) as Data
     return encoded(compressed)
@@ -537,6 +587,35 @@ withLayoutStore { prefs, defaults in
     defaults.set(String(decoding: try! JSONSerialization.data(withJSONObject: array), as: UTF8.self), forKey: Prefs.layoutsSaved)
     library.reload(); library.use(a)
     check(prefs.int(Prefs.textScale) == 135, "legacy entry reset current settings")
+}
+
+withLayoutStore { prefs, defaults in
+    let library = LayoutLibrary(settings: prefs, defaults: defaults)
+    let legacy = KeyGrid.makeDefault()
+    check(legacy.remove(legacy.items.first { $0.keys.contains(Keys.insert) }!), "legacy fixture failed")
+    legacy.normalize()
+    let original = legacy.toJSON()
+    let saved = library.add(legacy, name: "Legacy")!
+    check(library.startDraft(from: saved), "legacy draft failed")
+    library.use("preset:STANDARD")
+    check(prefs.loadGrid().items.contains { $0.keys.contains(Keys.insert) }, "preset was not updated")
+    check(library.beginTrial(saved), "legacy trial failed")
+    check(LayoutLibrary.sameGrid(prefs.loadGrid(), legacy), "preset loading replaced a trial")
+    library.restoreTrial()
+    check(prefs.loadGrid().items.contains { $0.keys.contains(Keys.insert) }, "trial did not restore preset")
+    check(library.choice(saved)!.grid.toJSON() == original && library.choice("draft")!.grid.toJSON() == original, "saved layout or draft changed automatically")
+    let added = library.choice(saved)!.grid
+    check(added.addInsert(), "explicit Insert add failed")
+    library.update(saved, grid: added)
+    check(library.choice("draft")!.grid.toJSON() == original, "explicit add altered another layout")
+}
+for keep in ClipKeep.allCases {
+    var now: TimeInterval = 0
+    let store = ClipboardStore(now: { now })
+    store.capture("clip", enabled: true, sensitive: false, password: false)
+    now = keep == .forever ? 1_000_000_000 : keep.seconds - 1
+    store.expire(keep); check(store.clips.count == 1, "clip expired too early")
+    if keep != .forever { now += 1; store.expire(keep); check(store.clips.isEmpty, "clip survived retention boundary") }
 }
 
 print("Tablet layout and typing checks passed")

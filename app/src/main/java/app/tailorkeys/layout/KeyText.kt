@@ -76,6 +76,7 @@ object KeyText {
         Keys.ABC -> "letters" + when { state.capsLock -> ", caps lock on"; state.shift -> ", shift on"; else -> "" }
         Keys.NUM -> "numbers"
         Keys.SYM -> "symbols"
+        Keys.INSERT -> "Insert, emoji, kaomoji, clipboard and voice"
         else -> {
             val face = output(code, state) ?: code
             when (face) {
@@ -123,6 +124,7 @@ object KeyText {
         Keys.ABC -> when { s.capsLock -> "ABC"; s.shift && s.layer == Layer.ABC -> "Abc"; else -> "abc" }
         Keys.NUM -> "123"
         Keys.SYM -> "#+="
+        Keys.INSERT -> "☺"
         Keys.SPACE, Keys.BACKSPACE, Keys.ENTER -> ""
         else -> output(k, s) ?: k
     }

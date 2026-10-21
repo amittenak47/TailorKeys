@@ -8,6 +8,7 @@ enum Keys {
     static let abc = "abc"
     static let num = "num"
     static let sym = "sym"
+    static let insert = "insert"
 }
 
 /// Starting layouts offered in the editor. `split` also turns on the split keyboard.
@@ -207,6 +208,15 @@ final class KeyGrid {
         }
     }
 
+    @discardableResult func addInsert() -> Bool {
+        guard !items.contains(where: { $0.keys.contains(Keys.insert) }) else { return false }
+        let key = GridKey(id: nextId, r: rows - 1, c: 1, w: 1, keys: [Keys.insert]); nextId += 1
+        if let num = items.first(where: { $0.keys.contains(Keys.num) }), insertShift(key, num, before: false) { items.append(key); return true }
+        if let space = items.first(where: { $0.isSpace && $0.w > 1 }), insertBesideSpace(key, space) { items.append(key); return true }
+        guard let spot = findEmpty(rows - 1, 1) else { return false }
+        key.r = spot.0; key.c = spot.1; items.append(key); return true
+    }
+
     private func findEmpty(_ r0: Int, _ c0: Int) -> (Int, Int)? {
         var best: (Int, Int)?
         var bestDist = Int.max
@@ -374,7 +384,7 @@ final class KeyGrid {
             add(3, 7, [Keys.space], 4)
         }
         let grid = KeyGrid(rows: 4, items: items, nextId: items.count)
-        grid.mapLetters(lang)
+        grid.mapLetters(lang); grid.addInsert()
         return grid
     }
 
@@ -419,7 +429,7 @@ final class KeyGrid {
         add(3, 6, [Keys.space], 4)
         add(3, 10, [Keys.enter])
         let grid = KeyGrid(rows: 4, items: items, nextId: items.count)
-        grid.mapLetters(lang)
+        grid.mapLetters(lang); grid.addInsert()
         return grid
     }
 }

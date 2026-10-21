@@ -1,0 +1,8 @@
+Emoji sequences and English names: Unicode Emoji 17.0, emoji-test.txt
+https://www.unicode.org/Public/17.0.0/emoji/emoji-test.txt
+Search annotations: Unicode CLDR 48, common/annotations/en.xml
+https://github.com/unicode-org/cldr/tree/release-48
+Copyright Unicode, Inc. Distributed under Unicode License V3.
+https://www.unicode.org/license.txt
+The TSV preserves fully-qualified Unicode sequences and combines CLDR English
+names and keywords. Kaomoji are an original curated list of text expressions.

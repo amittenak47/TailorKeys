@@ -110,6 +110,7 @@ final class KeyboardSettings {
 
     var learningStore: UserDefaults { d }
     private var d: UserDefaults
+    var insertDefaults: UserDefaults { d }
     func makeLayoutLibrary() -> LayoutLibrary { LayoutLibrary(settings: self, defaults: d, recoverTrial: false) }
     func thumbnailSettings() -> KeyboardSettings { KeyboardSettings(tablet: tablet, store: d) }
     private let tablet: Bool
@@ -334,6 +335,10 @@ final class KeyboardSettings {
     }
 
     func loadGrid() -> KeyGrid {
+        if d.string(forKey: Prefs.layoutTrialPrevious) == nil,
+           let preset = Template.allCases.first(where: { LayoutLibrary.presetKey($0) == d.string(forKey: Prefs.layoutSelected) }) {
+            let grid = KeyGrid.template(preset, currentLanguage); if numberRow { grid.setNumberRow(true) }; return grid
+        }
         if let g = KeyGrid.fromJSON(d.string(forKey: Prefs.layout)) { return g.languageVariant(currentLanguage) }
         let g = KeyGrid.makeDefault(currentLanguage)
         if numberRow { g.setNumberRow(true) }

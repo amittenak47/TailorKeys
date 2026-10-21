@@ -268,8 +268,11 @@ class KeyboardSettings internal constructor(
 
     fun setTheme(theme: ThemeName) { prefs.edit().putString(Prefs.THEME, theme.name).apply(); syncAppearance(Prefs.THEME) }
 
-    fun loadGrid(): KeyGrid = KeyGrid.savedOrDefault(KeyGrid.fromJson(prefs.getString(Prefs.LAYOUT, null)),
-        currentLanguage(), bool(Prefs.NUMBER_ROW))
+    fun loadGrid(): KeyGrid {
+        val preset = app.tailorkeys.layout.Template.entries.firstOrNull { prefs.getString(LayoutKeys.SELECTED, null) == "preset:${it.name}" }
+        if (preset != null && prefs.getString(LayoutKeys.TRIAL, null) == null) return KeyGrid.template(preset, currentLanguage()).also { if (bool(Prefs.NUMBER_ROW)) it.setNumberRow(true) }
+        return KeyGrid.savedOrDefault(KeyGrid.fromJson(prefs.getString(Prefs.LAYOUT, null)), currentLanguage(), bool(Prefs.NUMBER_ROW))
+    }
 
     /** Saves the layout. The number-row switch follows whether the layout has a number row. */
     fun saveGrid(grid: KeyGrid) {
