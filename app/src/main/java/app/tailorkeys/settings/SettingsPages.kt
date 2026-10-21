@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import app.tailorkeys.CursorControl
 import app.tailorkeys.Align
 import app.tailorkeys.OnboardingActivity
+import app.tailorkeys.RejectedCorrection
 import app.tailorkeys.PersonalStore
 import app.tailorkeys.Prefs
 import app.tailorkeys.R
@@ -267,6 +268,9 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
         val words by produceState(emptyList<Pair<String, String>>(), version) {
             value = withContext(Dispatchers.IO) { PersonalStore.listWords(context.filesDir) }
         }
+        val rejections by produceState(emptyList<RejectedCorrection>(), version) {
+            value = withContext(Dispatchers.IO) { PersonalStore.listRejected(context.filesDir) }
+        }
         fun forget(language: String? = null, word: String? = null) {
             PersonalStore.forget(context.filesDir, language, word)
             state.settings.prefs.edit().putLong(Prefs.LEARNING_REVISION, System.nanoTime()).apply()
@@ -276,7 +280,7 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
             ToggleRow("Learn from my typing", state.bool(Prefs.LEARNING)) { state.set(Prefs.LEARNING, it) }
             ActionRow("Forget learned words", destructive = true) { confirm = true }
             if (confirm) {
-                Text("Forget learned words and word sequences in every language?", Modifier.padding(16.dp))
+                Text("Forget learned words, word sequences and blocked corrections in every language?", Modifier.padding(16.dp))
                 Row {
                     TextButton(onClick = { confirm = false }) { Text("Cancel") }
                     TextButton(onClick = { forget() }) { Text("Forget all") }
@@ -291,6 +295,21 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
                     Row(Modifier.fillMaxWidth().padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(word + " \u00b7 " + Prefs.LANGUAGE_NAMES.getValue(language), Modifier.weight(1f))
                         TextButton(onClick = { forget(language, word) }) { Text("Remove") }
+                    }
+                }
+            }
+            Text("Never corrected (${rejections.size})", Modifier.padding(16.dp), fontWeight = FontWeight.Bold)
+            val blocked = rejections.filter { it.original.contains(query, true) || it.fix.contains(query, true) }
+            if (blocked.isEmpty()) Text("No blocked corrections", Modifier.padding(16.dp))
+            else LazyColumn(Modifier.heightIn(max = 240.dp)) {
+                items(blocked, key = { it.language + ":" + it.original + ":" + it.fix }) { rejection ->
+                    Row(Modifier.fillMaxWidth().padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(rejection.original + " \u2192 " + rejection.fix + " (" + rejection.language + ")", Modifier.weight(1f))
+                        TextButton(onClick = {
+                            PersonalStore.allowCorrection(context.filesDir, rejection.language, rejection.original, rejection.fix)
+                            state.settings.prefs.edit().putLong(Prefs.LEARNING_REVISION, System.nanoTime()).apply()
+                            version++
+                        }) { Text("Remove") }
                     }
                 }
             }

@@ -148,7 +148,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val pending = pendingLearning ?: return
         pendingLearning = null
         if (canLearnNow() && !editor().selected && pending.before == editor().before.takeLast(64) && pending.after == editor().after.take(64))
-            pending.model.observe(pending.word, pending.prev, pending.prev2, pending.picked)
+            pending.model.observeFinal(pending.word, pending.prev, pending.prev2, pending.picked)
     }
     private var deadEnd = false
     private val taps = ComposingTaps()
@@ -275,10 +275,12 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         }
         ic.endBatchEdit()
         if (undo.correction) {
+            if (modelReady) predictor.recordRejection(undo.original, undo.inserted.removeSuffix(undo.separator))
             suppressedBefore = editor().before.removeSuffix(undo.separator).takeLast(64)
             suppressedAfter = editor().after.take(64)
             val context = editor().before.removeSuffix(undo.separator)
-            deferLearning(undo.original, previousWord(context), previousWord2(context))
+            val previous = CorrectionRules.context(context, undo.original.length)
+            deferLearning(undo.original, previous.lastOrNull(), previous.getOrNull(previous.size - 2))
         }
         updateAutoCap()
         return true
@@ -287,25 +289,31 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private fun correctWord(separator: String): Boolean {
         if (!modelReady || !correctAllowed || state.layer != Layer.ABC || editor().selected) return false
         val read = editor()
-        val before = read.before.takeLast(64)
-        if (before == protectedBefore && read.after.take(64) == protectedAfter ||
-            before == suppressedBefore && read.after.take(64) == suppressedAfter ||
-            read.after.firstOrNull()?.let(TextInputRules::wordChar) == true || currentGlide()) return false
+        val before = read.before
         val word = before.takeLastWhile(TextInputRules::wordChar)
-        predictor.updateContext(read.before, word)
-        val prev = previousWord(before); val prev2 = previousWord2(before)
-        val fix = predictor.autocorrect(word, AutocorrectMode.entries[settings.int(Prefs.AUTOCORRECT)], prev, prev2, taps) ?: return false
+        val typed = taps.hasInput(word)
+        if (typed) predictor.noteTyped(word)
+        if (before.takeLast(64) == protectedBefore && read.after.take(64) == protectedAfter ||
+            before.takeLast(64) == suppressedBefore && read.after.take(64) == suppressedAfter ||
+            read.after.firstOrNull()?.let(TextInputRules::wordChar) == true || currentGlide()) return false
+        val previousPrefix = before.dropLast(word.length).trimEnd(' ').takeLast(64)
+        val pickedPrevious = protectedBefore?.trimEnd(' ') == previousPrefix && read.after.take(64) == protectedAfter
+        val change = predictor.correction(before, AutocorrectMode.entries[settings.int(Prefs.AUTOCORRECT)], taps,
+            userTyped = typed, allowJoin = !pickedPrevious) ?: return false
+        val context = CorrectionRules.context(before, change.original.length)
+        val prev = context.lastOrNull(); val prev2 = context.getOrNull(context.size - 2)
         val ic = currentInputConnection ?: return false
         val model = predictor
         val allowed = canLearnNow()
         clearTaps(); clearChoice(); clearGlide(); clearAutomaticSpace(); pendingLearning = null
         ic.beginBatchEdit()
-        ic.deleteSurroundingText(word.length, 0)
-        ic.commitText(fix + separator, 1)
+        ic.deleteSurroundingText(change.original.length, 0)
+        ic.commitText(change.replacement + separator, 1)
         editorRead = null
         ic.endBatchEdit()
-        armedUndo = ReversibleCommit(word, fix + separator, separator, editor().before.takeLast(64), editor().after.take(64), correction = true) {
-            if (allowed && canLearnNow()) model.observe(fix, prev, prev2)
+        armedUndo = ReversibleCommit(change.original, change.replacement + separator, separator, editor().before.takeLast(64), editor().after.take(64), correction = true,
+            onKept = { model.recordKept(change.original, change.replacement) }) {
+            if (allowed && canLearnNow()) model.observeFinal(change.replacement, prev, prev2)
         }
         updateAutoCap()
         return true
@@ -767,7 +775,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     private fun onLongPressTextPhase(text: String) {
         onChoiceInterrupted()
-        commit(text)
+        commit(text, typing = true)
         updateSuggestions(text.any { it.isLetter() })
         keyboardView?.refreshInputState()
     }
