@@ -676,7 +676,8 @@ final class KeyboardView: UIView {
                 let b = Swift.min(item.c + item.w, ct.c0 + ct.cols)
                 if b <= a { continue }
                 let lc = a - ct.c0
-                let rect = CGRect(x: CGFloat(lc) * ct.u + gap / 2, y: CGFloat(item.r) * unit + gap / 2, width: CGFloat(b - a) * ct.u - gap, height: unit - gap)
+                let rowUnit = editMode ? ct.u : ct.u * CGFloat(ct.cols) / CGFloat(grid.rowColumns(item.r, ct.c0))
+                let rect = CGRect(x: CGFloat(lc) * rowUnit + gap / 2, y: CGFloat(item.r) * unit + gap / 2, width: CGFloat(b - a) * rowUnit - gap, height: unit - gap)
                 var t = CGAffineTransform.identity
                 // Ergonomic curve: raise the middle fingers' columns and angle each key like a fan.
                 if ct.side >= 0 && curve > 0 && item.r < n - 1 {
@@ -1370,6 +1371,13 @@ final class KeyboardView: UIView {
 
     private func drawToolbar() {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
+        if drag != nil {
+            let active = drag?.target?.type == .remove
+            (active ? palette.accent : palette.key).setFill()
+            UIBezierPath(roundedRect: hintRect, cornerRadius: 8).fill()
+            drawSymbol("trash", in: hintRect, color: active ? palette.background : palette.text)
+            return
+        }
         ctx.saveGState(); ctx.setAlpha(history.isEmpty ? 0.3 : 1)
         drawSymbol("arrow.uturn.backward", in: undoRect, color: palette.text)
         ctx.restoreGState()
@@ -2199,7 +2207,7 @@ final class KeyboardView: UIView {
 
     // MARK: - Edit mode: drag and drop
 
-    private enum TargetType { case move, space, combine, insert }
+    private enum TargetType { case move, space, combine, insert, remove }
 
     private struct Target {
         let type: TargetType
@@ -2287,6 +2295,7 @@ final class KeyboardView: UIView {
         guard t === editTouch else { return }
         editTouch = nil
         guard let d = drag else { return }
+        d.target = target(t.location(in: self), d)
         drag = nil
         editHint = nil
         let before = grid.toJSON()
@@ -2327,6 +2336,7 @@ final class KeyboardView: UIView {
     }
 
     private func target(_ p: CGPoint, _ d: Drag) -> Target? {
+        if hintRect.contains(p) { return Target(type: .remove) }
         if let pk = findKey(p, strict: true, skip: d.item) {
             let item = pk.item
             if item.isSpace && item.w > 1 && KeyGrid.region(item.c) != 1 && !d.item.isSpace { return Target(type: .space, item: item, pk: pk) }
@@ -2347,12 +2357,19 @@ final class KeyboardView: UIView {
         case .insert: return "Insert, neighbours shift over"
         case .space: return "Sit beside the spacebar"
         case .move: return "Move here"
+        case .remove: return drag.flatMap { grid.removalHint($0.item) } ?? "Remove key"
         }
     }
 
     private func apply(_ d: Drag) {
         guard let t = d.target else { return }
         switch t.type {
+        case .remove:
+            if let message = grid.removalHint(d.item) {
+                editHint = message
+                UIAccessibility.post(notification: .announcement, argument: message)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in self?.editHint = nil; self?.setNeedsDisplay() }
+            } else { grid.remove(d.item) }
         case .move: grid.moveTo(d.item, t.r, t.c)
         case .space: if let other = t.item { grid.insertBesideSpace(d.item, other) }
         case .combine: if let other = t.item { grid.combine(d.item, into: other) }

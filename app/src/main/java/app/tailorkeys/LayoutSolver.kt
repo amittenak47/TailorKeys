@@ -5,6 +5,9 @@ import kotlin.math.*
 
 /** Pure size/tilt solver, shared by the view and opt-in JVM benchmarks. */
 internal class LayoutSolver {
+    /** Row width stays anchored to its half; compacted columns share the available width. */
+    fun rowUnit(grid: KeyGrid, row: Int, column: Int, halfWidth: Float): Float =
+        halfWidth / grid.rowColumns(row, column)
     data class Solution(val un: Float, val hc: Float, val cw: Float, val pv: Float, val disp: Float,
                         val padTop: Float, val letterY: Float, val spaceY: Float, val span: Float, val total: Float)
     private class Work {

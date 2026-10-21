@@ -79,6 +79,32 @@ final class KeyGrid {
 
     private func occupied(_ r: Int, _ c: Int, _ skip: GridKey?) -> Bool { itemAt(r, c, skip: skip) != nil }
 
+    func removalHint(_ key: GridKey) -> String? {
+        let protected = [(Keys.abc, "abc switch"), (Keys.num, "123 switch"), (Keys.sym, "Symbol switch"),
+                         (Keys.backspace, "Backspace"), (Keys.enter, "Enter"), (Keys.space, "Space")]
+        return protected.first { code, _ in key.keys.contains(code) && !items.contains { $0 !== key && $0.keys.contains(code) } }
+            .map { "\($0.1) can't be removed" }
+    }
+
+    @discardableResult func remove(_ key: GridKey) -> Bool {
+        guard items.contains(where: { $0 === key }), removalHint(key) == nil else { return false }
+        items.removeAll { $0 === key }
+        compactRow(key.r, key.c)
+        return true
+    }
+
+    func compactRow(_ row: Int, _ column: Int) {
+        var c = Self.bounds(column).lowerBound
+        for key in items.filter({ $0.r == row && Self.region($0.c) == Self.region(column) }).sorted(by: { $0.c < $1.c }) {
+            key.c = c; c += key.w
+        }
+    }
+
+    func rowColumns(_ row: Int, _ column: Int) -> Int {
+        let start = Self.bounds(column).lowerBound
+        return max(1, items.filter { $0.r == row && Self.region($0.c) == Self.region(column) }.map { $0.c + $0.w - start }.max() ?? Self.bounds(column).count)
+    }
+
     func valid(_ k: GridKey) -> Bool {
         // Check each operand before adding: decoded Int values may be Int.max/Int.min.
         guard (0..<KeyGrid.cols).contains(k.c), (1...KeyGrid.cols).contains(k.w),

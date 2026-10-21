@@ -72,6 +72,35 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
 
     private fun occupied(r: Int, c: Int, skip: GridKey?) = itemAt(r, c, skip) != null
 
+    /** A stack may contain the only route to a layer, so check every face before removing it. */
+    fun removalHint(key: GridKey): String? {
+        val protected = linkedMapOf(Keys.ABC to "abc switch", Keys.NUM to "123 switch", Keys.SYM to "Symbol switch",
+            Keys.BACKSPACE to "Backspace", Keys.ENTER to "Enter", Keys.SPACE to "Space")
+        return protected.entries.firstOrNull { (code, _) -> code in key.keys && items.none { it !== key && code in it.keys } }
+            ?.let { "${it.value} can't be removed" }
+    }
+
+    fun remove(key: GridKey): Boolean {
+        if (key !in items || removalHint(key) != null) return false
+        items.remove(key)
+        compactRow(key.r, key.c)
+        return true
+    }
+
+    /** Preserve key order and widths within this half; geometry stretches its remaining columns evenly. */
+    fun compactRow(row: Int, column: Int) {
+        var c = bounds(column).first
+        items.filter { it.r == row && region(it.c) == region(column) }.sortedBy { it.c }.forEach {
+            it.c = c; c += it.w
+        }
+    }
+
+    fun rowColumns(row: Int, column: Int): Int {
+        val start = bounds(column).first
+        return items.asSequence().filter { it.r == row && region(it.c) == region(column) }
+            .maxOfOrNull { it.c + it.w - start }?.coerceAtLeast(1) ?: bounds(column).count()
+    }
+
     fun valid(key: GridKey): Boolean {
         // Check each operand before adding: imported Int.MAX_VALUE widths must not wrap.
         if (rows !in 4..5 || key.c !in 0 until COLS || key.w !in 1..COLS ||

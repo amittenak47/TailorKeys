@@ -448,7 +448,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 val b = min(item.c + item.w, ct.c0 + ct.cols)
                 if (b <= a) continue
                 val lc = a - ct.c0
-                val rect = RectF(lc * ct.u + gap / 2, item.r * unit + gap / 2, (lc + b - a) * ct.u - gap / 2, (item.r + 1) * unit - gap / 2)
+                val rowUnit = if (editMode) ct.u else layoutSolver.rowUnit(grid, item.r, ct.c0, ct.u * ct.cols)
+                val rect = RectF(lc * rowUnit + gap / 2, item.r * unit + gap / 2, (lc + b - a) * rowUnit - gap / 2, (item.r + 1) * unit - gap / 2)
                 val m = Matrix()
                 // Ergonomic curve: raise the middle fingers' columns and angle each key like a fan.
                 if (ct.side >= 0 && curve > 0f && item.r < n - 1) {
@@ -915,6 +916,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 val item = placed.getOrNull(virtualViewId)?.item ?: return false
                 val before = grid.toJson()
                 val changed = LayoutEditing.apply(grid, item, LayoutEditing.Action.entries[action - A_EDIT], editingKey)
+                if (!changed && LayoutEditing.Action.entries[action - A_EDIT] == LayoutEditing.Action.REMOVE)
+                    grid.removalHint(item)?.let { announceForAccessibility(it) }
                 if (changed) { editingKey = null; edited(before) }
                 return changed
             }
@@ -1186,6 +1189,17 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun drawToolbar(canvas: Canvas) {
+        if (drag != null) {
+            val active = drag?.target?.type == T_REMOVE
+            fill.color = if (active) palette.accent else palette.key
+            canvas.drawRoundRect(hintRect, 8 * density, 8 * density, fill)
+            val cx = hintRect.centerX(); val cy = hintRect.centerY(); val s = 10 * density
+            val p = strokeIn(if (active) palette.background else palette.text, s * 2, 255)
+            canvas.drawRect(cx - s * .6f, cy - s * .4f, cx + s * .6f, cy + s * .8f, p)
+            canvas.drawLine(cx - s, cy - s * .7f, cx + s, cy - s * .7f, p)
+            canvas.drawLine(cx - s * .3f, cy - s, cx + s * .3f, cy - s, p)
+            return
+        }
         val s = 20 * density
         drawUndo(canvas, undoRect.centerX(), undoRect.centerY(), s, palette.text, if (history.isEmpty()) 70 else 255)
         val sp = resources.displayMetrics.scaledDensity
@@ -2196,6 +2210,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             }
             MotionEvent.ACTION_UP -> {
                 val dg = drag ?: return true
+                dg.target = editTarget(x, y, dg)
                 drag = null
                 editHint = null
                 val before = grid.toJson()
@@ -2255,6 +2270,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun editTarget(x: Float, y: Float, dg: Drag): Target? {
+        if (hintRect.contains(x, y)) return Target(T_REMOVE)
         findKey(x, y, strict = true, skip = dg.item)?.let { pk ->
             val item = pk.item
             if (item.isSpace && item.w > 1 && KeyGrid.region(item.c) != 1 && !dg.item.isSpace) return Target(T_SPACE, item, pk = pk)
@@ -2278,12 +2294,21 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         T_INSERT -> "Insert, neighbours shift over"
         T_SPACE -> "Sit beside the spacebar"
         T_MOVE -> "Move here"
+        T_REMOVE -> drag?.item?.let { grid.removalHint(it) } ?: "Remove key"
         else -> null
     }
 
     private fun applyDrop(dg: Drag) {
         val t = dg.target ?: return
         when (t.type) {
+            T_REMOVE -> {
+                val hint = grid.removalHint(dg.item)
+                if (!grid.remove(dg.item) && hint != null) {
+                    editHint = hint
+                    announceForAccessibility(hint)
+                    postDelayed({ editHint = null; invalidate() }, 1800)
+                }
+            }
             T_MOVE -> grid.moveTo(dg.item, t.r, t.c)
             T_SPACE -> grid.insertBesideSpace(dg.item, t.item!!)
             T_COMBINE -> grid.combine(dg.item, t.item!!)
@@ -2352,6 +2377,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         const val K_CURSOR = 5
         const val MAX_UNDO = 50
         const val T_MOVE = 0
+        const val T_REMOVE = 4
         const val T_SPACE = 1
         const val T_COMBINE = 2
         const val T_INSERT = 3
