@@ -4,6 +4,40 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CursorPointerTest {
+    @Test fun followsFingerVerticallyWithTheSameSpringAndClampsAtEdges() {
+        val p = pointer()
+        p.follow(500f)
+        p.step(0.5f, .016f, false)
+        assertTrue(p.y > 100f && p.y < 190f)
+        repeat(180) { p.step(.5f, .016f, false) }
+        assertEquals(190f, p.y, .001f)
+        p.follow(-100f)
+        repeat(180) {
+            val old = p.y
+            p.step(-.5f, .016f, false)
+            assertTrue(p.y in 10f..old)
+        }
+        assertEquals(10f, p.y, .001f)
+        p.follow(80f)
+        assertFalse(p.step(1f, 0f, true))
+        assertEquals(80f, p.y, 0f)
+    }
+
+    @Test fun movingVerticallyRefitsAgainstTiltAndTheSwitch() {
+        val z = CursorZone(vertical(0f), listOf(ZonePoint(100f, 0f), ZonePoint(35f, 100f), ZonePoint(100f, 200f)),
+            0f, 200f, ZoneRect(30f, 140f, 90f, 195f))
+        val p = pointer(20f, 30f, z)
+        for (y in listOf(100f, 180f, 20f)) {
+            p.follow(y)
+            repeat(180) {
+                p.step(1f, .016f, false)
+                for (i in 0..36) {
+                    val a = Math.toRadians(i * 10.0)
+                    assertTrue(z.contains(p.x + p.radius * kotlin.math.cos(a).toFloat(), p.y + p.radius * kotlin.math.sin(a).toFloat()))
+                }
+            }
+        }
+    }
     private fun vertical(x: Float) = listOf(ZonePoint(x, 0f), ZonePoint(x, 200f))
     private val zone = CursorZone(vertical(0f), vertical(100f), 0f, 200f)
     private fun pointer(x: Float = 50f, y: Float = 100f, zone: CursorZone = this.zone) =

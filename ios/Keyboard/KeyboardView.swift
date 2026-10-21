@@ -1645,6 +1645,7 @@ final class KeyboardView: UIView {
             held = true
             moveCursor(t, t.joystick.advance(now), now)
             let waveMoving = cursorGlow && stepWave(t, now)
+            cursorPointer?.follow(t.lastY)
             let pointerMoving = cursorPointer?.step(CGFloat(t.joystick.push), seconds: CGFloat(now - pointerTime),
                 reducedMotion: pointerReducedMotion) ?? false
             t.waveMoving = waveMoving || pointerMoving
@@ -1917,6 +1918,7 @@ final class KeyboardView: UIView {
         case .cursor:
             let now = CACurrentMediaTime()
             t.lastX = p.x; t.lastY = p.y
+            cursorPointer?.follow(p.y)
             moveCursor(t, t.joystick.displace(p.x - t.x0, now), now)
             if pointerReducedMotion { cursorPointer?.step(CGFloat(t.joystick.push), seconds: 0, reducedMotion: true) }
             t.waveMoving = true

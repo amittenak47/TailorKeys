@@ -56,6 +56,10 @@ final class CursorPointer {
     private(set) var x: CGFloat = 0
     private var origin: CGFloat = 0
     private var velocity: CGFloat = 0
+    private var velocityY: CGFloat = 0
+    private let zone: CursorZone
+    private let pressX: CGFloat
+    private var fingerY: CGFloat
     private let pressedAt: TimeInterval
     private var releasedAt: TimeInterval?
     private var releaseAlpha: CGFloat = 0
@@ -63,37 +67,58 @@ final class CursorPointer {
 
     init(zone: CursorZone, press: CGPoint, radius: CGFloat, now: TimeInterval) {
         pressedAt = now
+        self.zone = zone; pressX = press.x; fingerY = press.y
         self.radius = max(0, min(radius, (zone.bottom - zone.top) / 2))
         // Reserve a square around the disk, including all row vertices in its height, so tilted edges
         // and the one-hand switch cannot intersect the ring. Narrow zones scale the disk down.
-        func fit(_ r: CGFloat) -> Bool {
-            y = min(max(press.y, zone.top + r), zone.bottom - r)
-            var left = max(CursorZone.edge(zone.left, at: y - r), CursorZone.edge(zone.left, at: y + r))
-            var right = min(CursorZone.edge(zone.right, at: y - r), CursorZone.edge(zone.right, at: y + r))
-            for p in zone.left where p.y > y - r && p.y < y + r { left = max(left, p.x) }
-            for p in zone.right where p.y > y - r && p.y < y + r { right = min(right, p.x) }
-            if let excluded = zone.excluded, y + r > excluded.minY, y - r < excluded.maxY {
-                if press.x < excluded.midX { right = min(right, excluded.minX) }
-                else { left = max(left, excluded.maxX) }
-            }
-            minX = left + r; maxX = right - r
-            return minX <= maxX
-        }
-        if !fit(self.radius) {
+        if !fit(self.radius, at: press.y) {
             var low: CGFloat = 0, high = self.radius
             for _ in 0..<16 {
                 let mid = (low + high) / 2
-                if fit(mid) { low = mid } else { high = mid }
+                if fit(mid, at: press.y) { low = mid } else { high = mid }
             }
             self.radius = low
-            _ = fit(low)
+            _ = fit(low, at: press.y)
         }
         origin = min(max(press.x, minX), maxX)
         x = origin
     }
 
+    private func fit(_ r: CGFloat, at height: CGFloat) -> Bool {
+            y = min(max(height, zone.top + r), zone.bottom - r)
+            var left = max(CursorZone.edge(zone.left, at: y - r), CursorZone.edge(zone.left, at: y + r))
+            var right = min(CursorZone.edge(zone.right, at: y - r), CursorZone.edge(zone.right, at: y + r))
+            for p in zone.left where p.y > y - r && p.y < y + r { left = max(left, p.x) }
+            for p in zone.right where p.y > y - r && p.y < y + r { right = min(right, p.x) }
+            if let excluded = zone.excluded, y + r > excluded.minY, y - r < excluded.maxY {
+                if pressX < excluded.midX { right = min(right, excluded.minX) }
+                else { left = max(left, excluded.maxX) }
+            }
+            minX = left + r; maxX = right - r
+            return minX <= maxX
+    }
+
+    func follow(_ y: CGFloat) { if !released { fingerY = y } }
+
     @discardableResult
     func step(_ push: CGFloat, seconds: CGFloat, reducedMotion: Bool) -> Bool {
+        let targetY = min(max(fingerY, zone.top + radius), zone.bottom - radius)
+        let dtY = min(0.04, max(0, seconds))
+        let dy = y - targetY
+        if velocityY * dy > 0 { velocityY = 0 }
+        let cy = velocityY + 16 * dy
+        let decayY = CGFloat(exp(Double(-16 * dtY)))
+        let nextY = reducedMotion ? targetY : min(max(targetY + (dy + cy * dtY) * decayY, min(y, targetY)), max(y, targetY))
+        velocityY = reducedMotion ? 0 : (velocityY - 16 * cy * dtY) * decayY
+        if !fit(radius, at: nextY) {
+            var low: CGFloat = 0, high = radius
+            for _ in 0..<16 { let mid = (low + high) / 2; if fit(mid, at: nextY) { low = mid } else { high = mid } }
+            radius = low; _ = fit(radius, at: nextY)
+        }
+        origin = min(max(pressX, minX), maxX)
+        x = min(max(x, minX), maxX)
+        let verticalMoving = !reducedMotion && (abs(targetY - y) >= 0.01 || abs(velocityY) >= 0.1)
+        if !verticalMoving { velocityY = 0; _ = fit(radius, at: targetY) }
         let p = min(1, max(-1, push))
         let target = origin + p * (p < 0 ? origin - minX : maxX - origin)
         if reducedMotion { x = target; velocity = 0; return false }
@@ -108,7 +133,7 @@ final class CursorPointer {
         x = min(maxX, max(minX, clamped))
         if abs(target - x) < 0.01 && abs(velocity) < 0.1 {
             x = target; velocity = 0
-            return false
+            return verticalMoving
         }
         return true
     }

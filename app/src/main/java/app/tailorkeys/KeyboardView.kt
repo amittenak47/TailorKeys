@@ -1557,6 +1557,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 moveCursor(t, t.joystick.advance(now), now)
                 if (cursorTracker === t) {
                     val waveMoving = cursorGlow && stepWave(t, now)
+                    cursorPointer?.let { invalidatePointer(it); it.follow(t.fy) }
                     val pointerMoving = cursorPointer?.step(t.joystick.push.toFloat(),
                         (now - pointerTime) / 1000f, reducedMotion) == true
                     again = waveMoving || pointerMoving || t.joystick.speed != 0.0
@@ -1822,6 +1823,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 t.fx = x; t.fy = y
                 val now = SystemClock.uptimeMillis()
                 moveCursor(t, t.joystick.displace((x - t.x0) / density, now), now)
+                cursorPointer?.let { invalidatePointer(it); it.follow(y) }
                 if (reducedMotion) cursorPointer?.step(t.joystick.push.toFloat(), 0f, true)
                 removeCallbacks(cursorFrame)
                 postOnAnimation(cursorFrame)
