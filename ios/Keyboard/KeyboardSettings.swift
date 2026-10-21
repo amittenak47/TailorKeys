@@ -58,6 +58,11 @@ enum Prefs {
     static let sameOrientations = "same_orientations"
     static let theme = "theme"
     static let layout = "layout"
+    static let layoutsSaved = "layouts_saved"
+    static let layoutDraft = "layout_draft"
+    static let layoutSelected = "layout_selected"
+    static let layoutTrialPrevious = "layout_trial_previous"
+    static let typingResults = "typing_results"
     static let languages = "languages"
     static let currentLanguage = "current_language"
     static let languageCodes = ["en", "es", "de", "fr"]
@@ -72,7 +77,8 @@ enum Prefs {
     ]
     /// Registry for reset; device-dependent defaults are still resolved by their getters.
     static var settingKeys: [String] {
-        var keys = Array(booleanDefaults.keys) + [cursorControl, theme, layout, languages, currentLanguage]
+        var keys = Array(booleanDefaults.keys) + [cursorControl, theme, layout, languages, currentLanguage,
+                                                 layoutsSaved, layoutDraft, layoutSelected, layoutTrialPrevious, typingResults]
         keys += [curve, keyGap, cornerRadius, keyRepeatGuard, touchSlack, textScale, longPressMs].map { $0.key }
         for l in [false, true] {
             keys += [height(l), width(l), bottomPadding(l), splitGap(l), tilt(l), spaceTilt(l)].map { $0.key }
@@ -102,6 +108,8 @@ final class KeyboardSettings {
     private let tablet: Bool
     /// Only the app preview overrides the orientation being displayed.
     var previewOrientation: Bool?
+    var previewSplit: Bool?
+    private var trialSplitCache: (json: String, split: Bool?)?
 
     init(tablet: Bool, store: UserDefaults = .standard) {
         self.tablet = tablet
@@ -222,8 +230,16 @@ final class KeyboardSettings {
 
     func profile(_ landscape: Bool) -> SizeProfile {
         let l = previewOrientation ?? landscape
+        var trialSplit: Bool?
+        if d.string(forKey: Prefs.layoutTrialPrevious) != nil, let json = d.string(forKey: Prefs.layout) {
+            if trialSplitCache?.json != json {
+                trialSplitCache = (json, KeyGrid.fromJSON(json).flatMap { LayoutLibrary.matchingPreset($0)?.split })
+            }
+            trialSplit = trialSplitCache?.split
+        }
         return SizeProfile(heightPercent: int(Prefs.height(l)), widthPercent: int(Prefs.width(l)), align: align(l),
-                    bottomPadding: int(Prefs.bottomPadding(l)), split: split(l), gap: int(Prefs.splitGap(l)), tilt: int(Prefs.tilt(l)), spaceTilt: int(Prefs.spaceTilt(l)))
+                    bottomPadding: int(Prefs.bottomPadding(l)), split: previewSplit ?? trialSplit ?? split(l),
+                    gap: int(Prefs.splitGap(l)), tilt: int(Prefs.tilt(l)), spaceTilt: int(Prefs.spaceTilt(l)))
     }
 
     var theme: ThemeName {
