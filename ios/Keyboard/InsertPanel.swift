@@ -306,7 +306,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
     private func updateEditor() {
         if mode == "Note" {
             titleLabel?.setTitle("Title: \(titleFocused ? withCaret(draftTitle) : draftTitle)  \(draftTitle.count)/40", for: .normal)
-            textLabel?.setTitle("Text: \(!titleFocused ? withCaret(draftText) : draftText)  \(draftText.count)/500", for: .normal)
+            textLabel?.setTitle("Text: \(!titleFocused ? withCaret(draftText) : draftText)  \(draftText.count)/\(ClipboardStore.noteMax)", for: .normal)
             titleLabel?.layer.borderWidth = titleFocused ? 2 : 0; titleLabel?.layer.borderColor = palette.accent.cgColor
             textLabel?.layer.borderWidth = titleFocused ? 0 : 2; textLabel?.layer.borderColor = palette.accent.cgColor
             titleLabel?.accessibilityValue = draftTitle; textLabel?.accessibilityValue = draftText; return
@@ -330,7 +330,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         guard acceptsText else { return false }
         var value = mode == "Search" ? query : titleFocused ? draftTitle : draftText
         let index = value.index(value.startIndex, offsetBy: min(caret, value.count)); value.insert(contentsOf: text, at: index); caret += text.count
-        if mode == "Search" { query = value } else if titleFocused { draftTitle = String(value.prefix(40)) } else { draftText = String(value.prefix(500)) }
+        if mode == "Search" { query = value } else if titleFocused { draftTitle = String(value.prefix(ClipboardStore.titleMax)) } else { draftText = String(value.prefix(ClipboardStore.noteMax)) }
         caret = min(caret, (mode == "Search" ? query : titleFocused ? draftTitle : draftText).count); updateEditor(); return true
     }
     private func withCaret(_ text: String) -> String { var result = text; result.insert("│", at: result.index(result.startIndex, offsetBy: min(caret, result.count))); return result }

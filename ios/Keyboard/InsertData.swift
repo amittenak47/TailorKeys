@@ -66,6 +66,10 @@ struct ClipItem: Codable, Equatable, Identifiable {
 }
 
 final class ClipboardStore {
+    /// One limit for notes everywhere they are written: the panel editor, the settings sheet and the store.
+    static let noteMax = 2_000
+    static let titleMax = 40
+    static let clipMax = 20_000
     private var items: [ClipItem]
     private var deleted: (ClipItem, TimeInterval)?
     private let now: () -> TimeInterval
@@ -76,16 +80,16 @@ final class ClipboardStore {
     func expire(_ keep: ClipKeep) { items.removeAll { !$0.note && !$0.pinned && now() - $0.at >= keep.seconds } }
     @discardableResult func capture(_ text: String, enabled: Bool, sensitive: Bool, password: Bool, fullAccess: Bool = true) -> Bool {
         guard enabled, !sensitive, !password, fullAccess, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-        let safe = String(text.prefix(20_000))
+        let safe = String(text.prefix(Self.clipMax))
         if items.contains(where: { !$0.note && $0.pinned && $0.text == safe }) { return false }
         items.removeAll { !$0.note && !$0.pinned && $0.text == safe }
         items.append(ClipItem(text: safe, at: now()))
         let excess = Set(clips.filter { !$0.pinned }.dropFirst(100).map(\.id)); items.removeAll { excess.contains($0.id) }; return true
     }
     func pin(_ id: String) { if let i = items.firstIndex(where: { $0.id == id }) { items[i].pinned.toggle() } }
-    func edit(_ id: String, text: String, title: String) { if let i = items.firstIndex(where: { $0.id == id }) { items[i].text = String(text.prefix(20_000)); items[i].title = String(title.prefix(40)) } }
-    @discardableResult func note(_ title: String, _ text: String) -> ClipItem { let item = ClipItem(text: String(text.prefix(20_000)), at: now(), note: true, title: String(title.prefix(40))); items.append(item); return item }
-    func saveAsNote(_ id: String) { if let item = items.first(where: { $0.id == id }) { note(String(item.text.prefix(40)), item.text) } }
+    func edit(_ id: String, text: String, title: String) { if let i = items.firstIndex(where: { $0.id == id }) { items[i].text = String(text.prefix(items[i].note ? Self.noteMax : Self.clipMax)); items[i].title = String(title.prefix(Self.titleMax)) } }
+    @discardableResult func note(_ title: String, _ text: String) -> ClipItem { let item = ClipItem(text: String(text.prefix(Self.noteMax)), at: now(), note: true, title: String(title.prefix(Self.titleMax))); items.append(item); return item }
+    func saveAsNote(_ id: String) { if let item = items.first(where: { $0.id == id }) { note(String(item.text.prefix(Self.titleMax)), item.text) } }
     func delete(_ id: String) { if let item = items.first(where: { $0.id == id }) { deleted = (item, now()); items.removeAll { $0.id == id } } }
     @discardableResult func undo() -> Bool { guard let saved = deleted else { return false }; deleted = nil; guard now() - saved.1 <= 6 else { return false }; restore(saved.0); return true }
     func restore(_ item: ClipItem) { if !items.contains(where: { $0.id == item.id }) { items.append(item) } }

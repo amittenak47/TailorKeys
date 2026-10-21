@@ -134,4 +134,15 @@ class InsertDataTest {
         store.capture("clip109", true, false, false)
         assertEquals("clip109", store.clips().first { !it.pinned }.text)
     }
+    @Test fun notesShareOneLengthLimitButClipsKeepTheirs() {
+        val store = ClipboardStore(clock = { 1L })
+        val note = store.note("t".repeat(60), "n".repeat(5_000))
+        assertEquals(ClipboardStore.NOTE_MAX, store.notes().single().text.length)
+        assertEquals(ClipboardStore.TITLE_MAX, store.notes().single().title.length)
+        assertTrue(store.capture("c".repeat(5_000), enabled = true, sensitive = false, password = false))
+        val clip = store.clips().single()
+        store.edit(clip.id, "e".repeat(5_000)); store.edit(note.id, "e".repeat(5_000))
+        assertEquals(5_000, store.clips().single().text.length)
+        assertEquals(ClipboardStore.NOTE_MAX, store.notes().single().text.length)
+    }
 }

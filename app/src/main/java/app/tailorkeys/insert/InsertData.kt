@@ -56,7 +56,7 @@ class ClipboardStore(initial: List<ClipItem> = emptyList(), private val clock: (
     fun expire(keep: ClipKeep) { if (keep != ClipKeep.FOREVER) items.removeAll { !it.note && !it.pinned && clock() - it.at >= keep.millis } }
     fun capture(text: String, enabled: Boolean, sensitive: Boolean, password: Boolean): Boolean {
         if (!enabled || sensitive || password || text.isBlank()) return false
-        val safe = text.take(20_000)
+        val safe = text.take(CLIP_MAX)
         if (items.any { !it.note && it.pinned && it.text == safe }) return false
         items.removeAll { !it.note && !it.pinned && it.text == safe }
         items.add(ClipItem(UUID.randomUUID().toString(), safe, clock()))
@@ -67,9 +67,9 @@ class ClipboardStore(initial: List<ClipItem> = emptyList(), private val clock: (
     fun clips() = items.filter { !it.note }.sortedWith(compareByDescending<ClipItem> { it.pinned }.thenByDescending { it.at })
     fun notes() = items.filter { it.note }.sortedWith(compareByDescending<ClipItem> { it.pinned }.thenByDescending { it.at })
     fun pin(id: String) { replace(id) { it.copy(pinned = !it.pinned) } }
-    fun edit(id: String, text: String, title: String = "") { replace(id) { it.copy(text = text.take(20_000), title = title.take(40)) } }
-    fun note(title: String, text: String): ClipItem = ClipItem(UUID.randomUUID().toString(), text.take(20_000), clock(), note = true, title = title.take(40)).also { items.add(it) }
-    fun saveAsNote(id: String): ClipItem? = items.firstOrNull { it.id == id }?.let { note(it.text.take(40), it.text) }
+    fun edit(id: String, text: String, title: String = "") { replace(id) { it.copy(text = text.take(if (it.note) NOTE_MAX else CLIP_MAX), title = title.take(TITLE_MAX)) } }
+    fun note(title: String, text: String): ClipItem = ClipItem(UUID.randomUUID().toString(), text.take(NOTE_MAX), clock(), note = true, title = title.take(TITLE_MAX)).also { items.add(it) }
+    fun saveAsNote(id: String): ClipItem? = items.firstOrNull { it.id == id }?.let { note(it.text.take(TITLE_MAX), it.text) }
     fun delete(id: String) { items.firstOrNull { it.id == id }?.let { deleted = it to clock(); items.remove(it) } }
     fun undo(): Boolean { val d = deleted ?: return false; deleted = null; if (clock() - d.second > 6_000) return false; items.add(d.first); return true }
     fun clear() { items.removeAll { !it.note && !it.pinned }; deleted = null }
@@ -77,6 +77,10 @@ class ClipboardStore(initial: List<ClipItem> = emptyList(), private val clock: (
     private fun replace(id: String, change: (ClipItem) -> ClipItem) { val i = items.indexOfFirst { it.id == id }; if (i >= 0) items[i] = change(items[i]) }
     fun encode() = JSONArray().apply { items.forEach { put(JSONObject().put("id", it.id).put("text", it.text).put("at", it.at).put("pinned", it.pinned).put("note", it.note).put("title", it.title)) } }.toString()
     companion object {
+        /** One limit for notes everywhere they are written: the panel editor, the settings dialog and the store. */
+        const val NOTE_MAX = 2_000
+        const val TITLE_MAX = 40
+        const val CLIP_MAX = 20_000
         fun decode(json: String, clock: () -> Long = System::currentTimeMillis) = ClipboardStore(runCatching {
             val a = JSONArray(json); (0 until a.length()).map { val o = a.getJSONObject(it); ClipItem(o.getString("id"), o.getString("text"), o.getLong("at"), o.optBoolean("pinned"), o.optBoolean("note"), o.optString("title")) }
         }.getOrDefault(emptyList()), clock)

@@ -116,8 +116,8 @@ private struct InsertNoteEditor: View {
         NavigationView {
             Form {
                 TextField("Title", text: $title).accessibilityLabel("Note title").onChange(of: title) { title = String($0.prefix(40)) }
-                TextEditor(text: $text).frame(minHeight: 180).accessibilityLabel("Note text").onChange(of: text) { text = String($0.prefix(20_000)) }
-                Text("\(title.count)/40 · \(text.count)/20000").font(.caption).foregroundColor(.secondary)
+                TextEditor(text: $text).frame(minHeight: 180).accessibilityLabel("Note text").onChange(of: text) { text = String($0.prefix(ClipboardStore.noteMax)) }
+                Text("\(title.count)/\(ClipboardStore.titleMax) · \(text.count)/\(ClipboardStore.noteMax)").font(.caption).foregroundColor(.secondary)
             }.navigationTitle(item == nil ? "New note" : "Edit note")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }

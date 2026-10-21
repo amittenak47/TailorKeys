@@ -172,7 +172,7 @@ private fun NotesManager(repository: InsertRepository, close: () -> Unit) {
         }
     }, confirmButton = { TextButton(close) { Text("Done") } })
     if (writing) AlertDialog(onDismissRequest = { writing = false }, title = { Text(if (edit == null) "New note" else "Edit note") },
-        text = { Column { OutlinedTextField(title, { title = it.take(40) }, label = { Text("Title") }); OutlinedTextField(text, { text = it.take(20_000) }, label = { Text("Text") }, modifier = Modifier.heightIn(min = 120.dp, max = 320.dp)) } },
+        text = { Column { OutlinedTextField(title, { title = it.take(app.tailorkeys.insert.ClipboardStore.TITLE_MAX) }, label = { Text("Title") }, supportingText = { Text("${title.length}/${app.tailorkeys.insert.ClipboardStore.TITLE_MAX}") }); OutlinedTextField(text, { text = it.take(app.tailorkeys.insert.ClipboardStore.NOTE_MAX) }, label = { Text("Text") }, supportingText = { Text("${text.length}/${app.tailorkeys.insert.ClipboardStore.NOTE_MAX}") }, modifier = Modifier.heightIn(min = 120.dp, max = 320.dp)) } },
         confirmButton = { TextButton({ repository.change { store -> edit?.let { store.edit(it.id, text, title) } ?: store.note(title, text) }; writing = false; notes = repository.store().notes() }) { Text("Save") } },
         dismissButton = { TextButton({ writing = false }) { Text("Cancel") } })
 }

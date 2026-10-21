@@ -48,6 +48,11 @@ clips.delete(insertNote.id); insertNow += 7; check(!clips.undo(), "expired undo 
 clips.note("stay", "note"); clips.clear()
 check(clips.notes.count == 1 && clips.clips.count == 1, "clear removed notes/pins")
 check(ClipboardStore.decode(clips.encode()).notes == clips.notes, "clipboard serialization failed")
+let limits = ClipboardStore(now: { insertNow })
+let longNote = limits.note(String(repeating: "t", count: 60), String(repeating: "n", count: 5_000))
+limits.capture(String(repeating: "c", count: 5_000), enabled: true, sensitive: false, password: false)
+limits.edit(longNote.id, text: String(repeating: "e", count: 5_000), title: "x"); limits.edit(limits.clips[0].id, text: String(repeating: "e", count: 5_000), title: "")
+check(limits.notes[0].text.count == ClipboardStore.noteMax && limits.clips[0].text.count == 5_000, "note and clip length limits disagree")
 for template in Template.allCases {
     let grid = KeyGrid.template(template)
     check(grid.isSound && !grid.addInsert(), "preset Insert key missing/duplicated")

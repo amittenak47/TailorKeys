@@ -933,7 +933,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
         guard insertPanel == nil else { return }
         let p = InsertPanel(settings: settings, state: state)
         p.fullAccess = { [weak self] in self?.hasFullAccess == true }
-        p.password = { [weak self] in guard let proxy = self?.textDocumentProxy else { return true }; return proxy.documentContextBeforeInput == nil && proxy.documentContextAfterInput == nil }
+        p.password = { [weak self] in self?.textDocumentProxy.isSecureTextEntry ?? true }
         p.onClose = { [weak self] in self?.closeInsert() }
         p.onBackspace = { [weak self] in self?.keyTapped(Keys.backspace) }
         p.onInsert = { [weak self] text in

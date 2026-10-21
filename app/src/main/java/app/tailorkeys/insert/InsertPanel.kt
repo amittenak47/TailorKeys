@@ -105,6 +105,8 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         isFocusable = false; setPadding(dp(8), dp(4), dp(8), 0)
         addView(body, LayoutParams(-1, -1)); addView(toneLayer, LayoutParams(-2, -2))
         grid.adapter = adapter
+        // Parse the emoji file and run the glyph checks off the UI thread, so the first Emoji open does not stall.
+        Thread({ runCatching { cachedEmoji; emojiByText } }, "insert-emoji-warmup").apply { isDaemon = true; priority = Thread.MIN_PRIORITY }.start()
         grid.setOnScrollListener(object : AbsListView.OnScrollListener {
             override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) = Unit
             override fun onScroll(view: AbsListView?, first: Int, visible: Int, total: Int) {
@@ -115,7 +117,8 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
             }
         })
     }
-    private fun supported(text: String) = glyphs.getOrPut(text) { glyph.hasGlyph(text) }
+    // Paint and the HashMap are shared with the warm-up thread, so checks are serialised on the Paint.
+    private fun supported(text: String) = synchronized(glyph) { glyphs.getOrPut(text) { glyph.hasGlyph(text) } }
     private fun defaultSymbol(entry: InsertSymbol): InsertSymbol {
         if (entry.text.codePoints().anyMatch { it in 0x1F3FB..0x1F3FF }) return entry
         val toned = emoji.toned(entry, repository.prefs.getInt(InsertPrefs.TONE, 0))
@@ -307,8 +310,8 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
                 retainDraft(); repository.change { s -> val item = editingItem; if (item != null) s.edit(item.id, draftText, draftTitle) else s.note(draftTitle, draftText) }
                 noteDrafts.remove(editingItem?.id ?: "new"); draftText = ""; draftTitle = ""; editingItem = null; restoreKeys(); editor = null; field = null; typing(false, 0); renderPanel()
             }, LinearLayout.LayoutParams(dp(80), dp(48)))
-            titleField = input(draftTitle, "Title (40 characters)") { draftTitle = it.take(40) }.apply { filters = arrayOf(android.text.InputFilter.LengthFilter(40)); contentDescription = "Note title"; isSingleLine = true }
-            textField = input(draftText, "Text (500 characters)") { draftText = it }.apply { filters = arrayOf(android.text.InputFilter.LengthFilter(500)); contentDescription = "Note text" }
+            titleField = input(draftTitle, "Title (${ClipboardStore.TITLE_MAX} characters)") { draftTitle = it.take(ClipboardStore.TITLE_MAX) }.apply { filters = arrayOf(android.text.InputFilter.LengthFilter(ClipboardStore.TITLE_MAX)); contentDescription = "Note title"; isSingleLine = true }
+            textField = input(draftText, "Text (%,d characters)".format(ClipboardStore.NOTE_MAX)) { draftText = it }.apply { filters = arrayOf(android.text.InputFilter.LengthFilter(ClipboardStore.NOTE_MAX)); contentDescription = "Note text" }
             if (tablet) {
                 val fields = LinearLayout(context)
                 fields.addView(titleField, LinearLayout.LayoutParams(0, dp(56), 1f).apply { marginEnd = dp(4) })
