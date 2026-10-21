@@ -58,6 +58,7 @@ tasks.withType<Test>().configureEach {
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
     // Last stable Compose line compatible with compileSdk 36 / AGP 8.11.
     val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
     implementation(composeBom)

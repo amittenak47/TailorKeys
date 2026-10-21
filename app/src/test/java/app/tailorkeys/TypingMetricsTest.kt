@@ -1,0 +1,65 @@
+package app.tailorkeys
+
+import app.tailorkeys.settings.*
+import org.junit.Assert.*
+import org.junit.Test
+
+class TypingMetricsTest {
+    @Test fun wpmUsesFiveCharactersAndElapsedMinutes() {
+        assertEquals(60.0, TypingSession.wpm(300, 60_000), 0.0)
+        assertEquals(60.0, TypingSession.wpm(75, 15_000), 0.0)
+        assertEquals(0.0, TypingSession.wpm(75, 0), 0.0)
+    }
+    @Test fun freeModeCountsDeletedAndReplacedCharactersAsCorrections() {
+        val s = TypingSession(TypingMode.FREE)
+        s.update("hellp", 1_000); s.update("hello", 2_000)
+        assertEquals(6, s.inserted)
+        assertEquals(1, s.metrics(3_000).mistakes)
+        assertEquals(5.0 / 6, s.metrics(3_000).accuracy, .0001)
+        s.update("hel", 4_000)
+        assertEquals(3, s.metrics(5_000).mistakes)
+        assertEquals(.5, s.metrics(5_000).accuracy, .0001)
+    }
+    @Test fun testAccuracyComparesCurrentTextAndMistakesIncludeCorrectedErrors() {
+        val s = TypingSession(TypingMode.TEST, "hello world")
+        s.update("hellp", 1_000)
+        assertEquals(.8, s.metrics(2_000).accuracy, .0001)
+        s.update("hello", 2_000)
+        assertEquals(1.0, s.metrics(3_000).accuracy, 0.0)
+        assertEquals(1, s.metrics(3_000).mistakes)
+        s.update("hellp", 3_000)
+        assertEquals(2, s.metrics(4_000).mistakes)
+        s.update("hello world", 5_000)
+        assertTrue(s.complete)
+        assertEquals(4_000, s.metrics(8_000).elapsed)
+        assertEquals(33.0, s.metrics(8_000).wpm, .0001)
+    }
+    @Test fun replacementsInMiddleAndMultiCharacterCommitsCountOnlyTheEdit() {
+        val s = TypingSession(TypingMode.FREE)
+        s.update("one bat", 0); s.update("one cat", 1_000)
+        assertEquals(8, s.inserted)
+        assertEquals(1, s.corrections)
+        assertTrue(s.samples.last().mistake)
+    }
+    @Test fun emptyAndSelectionOnlyChangesDoNotStartTimer() {
+        val s = TypingSession(TypingMode.FREE)
+        s.update("", 5_000)
+        assertNull(s.startedAt)
+        assertEquals(1.0, s.metrics(10_000).accuracy, 0.0)
+        s.update("a", 10_000); s.update("a", 20_000)
+        assertEquals(1, s.inserted)
+    }
+    @Test fun imeCompositionStartsTimeBeforeTheWordIsCommitted() {
+        val s = TypingSession(TypingMode.FREE)
+        s.startTyping(1_000)
+        s.startTyping(2_000)
+        s.update("hello", 3_000)
+        assertEquals(2_000L, s.metrics(3_000).elapsed)
+        assertEquals(30.0, s.metrics(3_000).wpm, 0.0)
+    }
+    @Test fun sentenceBankHasFortyUniqueOriginalShortSentences() {
+        assertEquals(40, SentenceBank.sentences.size)
+        assertEquals(40, SentenceBank.sentences.map { it.lowercase() }.toSet().size)
+        SentenceBank.sentences.forEach { sentence -> assertTrue("Wrong word count: $sentence", sentence.split(Regex("\\s+")).size in 8..14) }
+    }
+}
