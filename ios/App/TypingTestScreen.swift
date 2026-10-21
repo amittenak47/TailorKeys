@@ -217,7 +217,7 @@ struct TypingTestScreen: View {
                 }
             }
             if wide { SpeedChart(samples: session.samples, mistakeTimes: [], average: average).frame(height: 40) }
-            Text(average.map { "avg \(Int($0.rounded())) · peak \(Int((session.samples.map(\.wpm).max() ?? 0).rounded()))" }
+            Text(average.map { "avg \(Int($0.rounded())) · peak \(Int(session.peakWpm.rounded()))" }
                  ?? (session.startedAt == nil ? "starts when you type" : "live average"))
                 .font(.caption).foregroundColor(LayoutStyle.secondary)
         }

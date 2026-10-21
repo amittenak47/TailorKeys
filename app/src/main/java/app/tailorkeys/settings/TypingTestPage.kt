@@ -235,10 +235,10 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
                         BoxWithConstraints {
                             val wide = maxWidth >= 480.dp
                             if (wide) Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                                SpeedMetric(metrics, session.samples.toList(), average, mode, Modifier.weight(1.3f))
+                                SpeedMetric(metrics, session.samples.toList(), session.peakWpm, average, mode, Modifier.weight(1.3f))
                                 MetricRow(metrics, session.text.length, if (mode == TypingMode.TEST) session.sentence.length else null, Modifier.weight(2f))
                             } else Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                SpeedMetric(metrics, session.samples.toList(), average, mode, Modifier.fillMaxWidth())
+                                SpeedMetric(metrics, session.samples.toList(), session.peakWpm, average, mode, Modifier.fillMaxWidth())
                                 HorizontalDivider()
                                 MetricRow(metrics, session.text.length, if (mode == TypingMode.TEST) session.sentence.length else null)
                             }
@@ -294,7 +294,7 @@ private fun KeyboardComparison(averages: List<KeyboardAverage>, label: (String) 
 }
 
 @Composable
-private fun SpeedMetric(metrics: TypingMetrics, samples: List<SpeedSample>, average: Double?, mode: TypingMode, modifier: Modifier) {
+private fun SpeedMetric(metrics: TypingMetrics, samples: List<SpeedSample>, peak: Double, average: Double?, mode: TypingMode, modifier: Modifier) {
     Column(modifier.semantics(mergeDescendants = true) { contentDescription = "${metrics.wpm.roundToInt()} words per minute, average ${average?.roundToInt() ?: 0}" }) {
         Text(if (mode == TypingMode.FREE) "SPEED NOW" else "WORDS PER MINUTE", style = MaterialTheme.typography.labelMedium)
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -302,7 +302,7 @@ private fun SpeedMetric(metrics: TypingMetrics, samples: List<SpeedSample>, aver
             Text("wpm", style = MaterialTheme.typography.bodyMedium)
             SpeedChart(samples, average, Modifier.weight(1f).height(36.dp))
         }
-        Text(if (average == null) "Average appears after your first result" else "avg ${average.roundToInt()} · peak ${(samples.maxOfOrNull { it.wpm } ?: 0.0).roundToInt()}", style = MaterialTheme.typography.labelMedium)
+        Text(if (average == null) "Average appears after your first result" else "avg ${average.roundToInt()} · peak ${peak.roundToInt()}", style = MaterialTheme.typography.labelMedium)
     }
 }
 

@@ -10,15 +10,15 @@ class TypingMetricsTest {
         assertEquals(60.0, TypingSession.wpm(75, 15_000), 0.0)
         assertEquals(0.0, TypingSession.wpm(75, 0), 0.0)
     }
-    @Test fun freeModeCountsDeletedAndReplacedCharactersAsCorrections() {
+    @Test fun freeModeCountsOnlyExplicitDeletionsAsCorrections() {
         val s = TypingSession(TypingMode.FREE)
         s.update("hellp", 1_000); s.update("hello", 2_000)
         assertEquals(6, s.inserted)
-        assertEquals(1, s.metrics(3_000).mistakes)
-        assertEquals(5.0 / 6, s.metrics(3_000).accuracy, .0001)
+        assertEquals(0, s.metrics(3_000).mistakes)
+        assertEquals(1.0, s.metrics(3_000).accuracy, .0001)
         s.update("hel", 4_000)
-        assertEquals(3, s.metrics(5_000).mistakes)
-        assertEquals(.5, s.metrics(5_000).accuracy, .0001)
+        assertEquals(2, s.metrics(5_000).mistakes)
+        assertEquals(4.0 / 6, s.metrics(5_000).accuracy, .0001)
     }
     @Test fun testAccuracyComparesCurrentTextAndMistakesIncludeCorrectedErrors() {
         val s = TypingSession(TypingMode.TEST, "hello world")
@@ -38,8 +38,37 @@ class TypingMetricsTest {
         val s = TypingSession(TypingMode.FREE)
         s.update("one bat", 0); s.update("one cat", 1_000)
         assertEquals(8, s.inserted)
-        assertEquals(1, s.corrections)
-        assertTrue(s.samples.last().mistake)
+        assertEquals(0, s.corrections)
+        assertFalse(s.samples.last().mistake)
+    }
+    @Test fun autocorrectSuggestionSwipeAndUndoAreNormalTyping() {
+        val s = TypingSession(TypingMode.FREE)
+        listOf("teh", "the ", "teh ", "the ", "the keyboard ", "the keyboard swiping ").forEachIndexed { i, text -> s.update(text, i * 1_000L) }
+        assertEquals(0, s.metrics(6_000).mistakes)
+        assertEquals(1.0, s.metrics(6_000).accuracy, 0.0)
+        assertTrue(s.samples.none { it.mistake })
+        s.update("the keyboard swipin ", 7_000) // Backspace within the word, retaining a suffix.
+        assertEquals(1, s.metrics(7_000).mistakes)
+        val punctuation = TypingSession(TypingMode.FREE)
+        punctuation.update("dont ", 0); punctuation.update("don't ", 1_000); punctuation.update("dont ", 2_000)
+        assertEquals(0, punctuation.corrections)
+    }
+    @Test fun peakWaitsForFiveSecondsAndTenCharactersAndUsesARollingWindow() {
+        val commit = TypingSession(TypingMode.FREE)
+        commit.startTyping(0); commit.update("keyboardword", 100)
+        assertEquals(0.0, commit.peakWpm, 0.0)
+        commit.sample(4_999); assertEquals(0.0, commit.peakWpm, 0.0)
+        commit.sample(5_000); assertEquals(28.8, commit.peakWpm, .0001)
+        val slow = TypingSession(TypingMode.FREE)
+        slow.update("hello", 0); slow.sample(10_000)
+        assertEquals(0.0, slow.peakWpm, 0.0)
+        slow.update("hello worl", 20_000)
+        assertEquals(6.0, slow.peakWpm, .0001) // Expand beyond five seconds to reach ten characters.
+        slow.sample(60_000); slow.update("hello worl more text", 65_000)
+        assertEquals(24.0, slow.samples.last().wpm, .0001) // Ten new characters in five seconds, after an idle period.
+        assertEquals(24.0, slow.peakWpm, .0001)
+        repeat(700) { slow.sample(70_000 + it * 1_000L) }
+        assertEquals(24.0, slow.peakWpm, .0001) // Capping chart history does not erase the peak.
     }
     @Test fun emptyAndSelectionOnlyChangesDoNotStartTimer() {
         val s = TypingSession(TypingMode.FREE)
