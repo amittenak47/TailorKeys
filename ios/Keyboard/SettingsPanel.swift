@@ -214,7 +214,7 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
     }
 
     private func buildLookTab() {
-        stack.addArrangedSubview(menuRow("Theme", current: settings.theme.title, options: ThemeName.allCases.map { $0.title }) { [weak self] title in
+        stack.addArrangedSubview(menuRow("Theme", current: settings.customThemes.first(where: { $0.selection == settings.themeID })?.name ?? settings.theme.title, options: ThemeName.allCases.map { $0.title }) { [weak self] title in
             guard let self = self, let t = ThemeName.allCases.first(where: { $0.title == title }) else { return }
             self.settings.theme = t
             self.changed(rebuild: true)
@@ -233,7 +233,7 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
             button.layer.borderWidth = 2
             button.layer.borderColor = (theme == .highContrast ? UIColor.white : palette.accent).cgColor
             button.accessibilityLabel = theme.title
-            button.accessibilityTraits = settings.theme == theme ? [.button, .selected] : [.button]
+            button.accessibilityTraits = !settings.themeID.hasPrefix("custom:") && settings.theme == theme ? [.button, .selected] : [.button]
             button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
             button.addAction(UIAction { [weak self] _ in
                 self?.settings.theme = theme; self?.changed(rebuild: true)

@@ -59,6 +59,7 @@ enum Prefs {
     static let lockSize = "lock_size"
     static let sameOrientations = "same_orientations"
     static let theme = "theme"
+    static let themesCustom = "themes_custom"
     static let layout = "layout"
     static let layoutsSaved = "layouts_saved"
     static let layoutDraft = "layout_draft"
@@ -82,7 +83,7 @@ enum Prefs {
     ]
     /// Registry for reset; device-dependent defaults are still resolved by their getters.
     static var settingKeys: [String] {
-        var keys = Array(booleanDefaults.keys) + [cursorControl, theme, layout, languages, currentLanguage,
+        var keys = Array(booleanDefaults.keys) + [cursorControl, theme, themesCustom, layout, languages, currentLanguage,
                                                  layoutsSaved, layoutDraft, layoutDraftSplit, layoutSelected, layoutTrialPrevious, layoutTrialSplit, layoutTrialSettings, typingResults]
         keys += [curve, keyGap, cornerRadius, keyRepeatGuard, touchSlack, textScale, longPressMs, autocorrect].map { $0.key }
         for l in [false, true] {
@@ -205,7 +206,7 @@ final class KeyboardSettings {
         var values: [String: Any] = [:]
         for pref in layoutInts { values[pref.key] = int(pref) }
         for key in layoutBools { values[key] = bool(key, false) }
-        values[Prefs.theme] = Self.wireTheme(theme)
+        values[Prefs.theme] = themeID
         for l in [false, true] { values[Prefs.alignKey(l)] = align(l).rawValue.uppercased(); values[Prefs.splitKey(l)] = split(l) }
         return values
     }
@@ -219,8 +220,8 @@ final class KeyboardSettings {
         for key in layoutBools {
             if let n = values[key] as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() { d.set(n.boolValue, forKey: key) }
         }
-        if let name = values[Prefs.theme] as? String, let value = ThemeName.allCases.first(where: { Self.wireTheme($0) == name }) {
-            d.set(value.rawValue, forKey: Prefs.theme)
+        if let name = values[Prefs.theme] as? String, name.hasPrefix("custom:") || ThemeName.allCases.contains(where: { Self.wireTheme($0) == name }) {
+            d.set(resolvedThemeID(name), forKey: Prefs.theme)
         }
         for l in [false, true] {
             if let name = values[Prefs.alignKey(l)] as? String, let value = Align(rawValue: name.lowercased()) { d.set(value.rawValue, forKey: Prefs.alignKey(l)) }
@@ -296,8 +297,8 @@ final class KeyboardSettings {
     func adjustQuickHeight(_ l: Bool, _ delta: Int) { setFor(l, Prefs.height, int(Prefs.height(l)) + delta) }
 
     func cycleQuickTheme() {
-        let themes = ThemeName.allCases // every theme, Warm and Midnight included
-        theme = themes[((themes.firstIndex(of: theme) ?? -1) + 1) % themes.count]
+        let themes = ThemeName.allCases.map { Self.wireTheme($0) } + customThemes.map { $0.selection }
+        themeID = themes[((themes.firstIndex(of: themeID) ?? -1) + 1) % themes.count]
     }
 
     func cycleLanguage(_ direction: Int) {
@@ -328,10 +329,33 @@ final class KeyboardSettings {
                     gap: int(Prefs.splitGap(l)), tilt: int(Prefs.tilt(l)))
     }
 
-    var theme: ThemeName {
-        get { ThemeName(rawValue: d.string(forKey: Prefs.theme) ?? "") ?? .system }
-        set { d.set(newValue.rawValue, forKey: Prefs.theme); syncAppearance(Prefs.theme) }
+    var customThemes: [CustomTheme] { CustomTheme.decode(d.string(forKey: Prefs.themesCustom)) }
+    private func resolvedThemeID(_ id: String) -> String {
+        if id.hasPrefix("custom:") { return customThemes.contains(where: { $0.selection == id }) ? id : "WARM" }
+        return ThemeName.allCases.first(where: { Self.wireTheme($0) == id || $0.rawValue == id }).map { Self.wireTheme($0) } ?? "SYSTEM"
     }
+    var themeID: String {
+        get { resolvedThemeID(d.string(forKey: Prefs.theme) ?? "SYSTEM") }
+        set { d.set(resolvedThemeID(newValue), forKey: Prefs.theme); syncAppearance(Prefs.theme) }
+    }
+    var theme: ThemeName {
+        get { ThemeName.allCases.first(where: { Self.wireTheme($0) == themeID }) ?? .warm }
+        set { themeID = Self.wireTheme(newValue) }
+    }
+    func saveTheme(_ theme: CustomTheme) {
+        guard theme.colors.isValid else { return }
+        var theme = theme
+        theme.name = String(theme.name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(24))
+        if theme.name.isEmpty { theme.name = "Custom" }
+        d.set(CustomTheme.encode(customThemes.filter { $0.id != theme.id } + [theme]), forKey: Prefs.themesCustom)
+        themeID = theme.selection
+    }
+    func deleteTheme(_ id: String) {
+        let selected = themeID == "custom:" + id
+        d.set(CustomTheme.encode(customThemes.filter { $0.id != id }), forKey: Prefs.themesCustom)
+        if selected { themeID = "WARM" }
+    }
+
 
     func loadGrid() -> KeyGrid {
         if let g = KeyGrid.fromJSON(d.string(forKey: Prefs.layout)) { return g.languageVariant(currentLanguage) }

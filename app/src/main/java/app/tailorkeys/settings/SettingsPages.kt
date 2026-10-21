@@ -1,30 +1,20 @@
 package app.tailorkeys.settings
 
 import android.content.Intent
-import android.content.res.Configuration
 import android.widget.Toast
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -36,7 +26,6 @@ import app.tailorkeys.RejectedCorrection
 import app.tailorkeys.PersonalStore
 import app.tailorkeys.Prefs
 import app.tailorkeys.R
-import app.tailorkeys.ThemeName
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -148,70 +137,6 @@ internal fun LazyListScope.lookOptions(state: SettingsState) {
                 if (!state.setNumberRow(it)) Toast.makeText(context, "Move your keys out of the number row first", Toast.LENGTH_SHORT).show()
             }
             ToggleRow("Key hints", state.bool(Prefs.SHOW_HINTS)) { state.set(Prefs.SHOW_HINTS, it) }
-        }
-    }
-}
-
-@Composable
-private fun ThemeControl(state: SettingsState) {
-    val selected = state.theme()
-    var expanded by remember { mutableStateOf(false) }
-    OptionGroup {
-        Box {
-            TextButton({ expanded = true }, Modifier.fillMaxWidth().heightIn(min = 56.dp),
-                contentPadding = PaddingValues(start = 20.dp, end = 16.dp),
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurface)) {
-                Text("Theme", Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-                Text(selected.title, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.width(16.dp)); SettingsIcon(R.drawable.ic_settings_expand)
-            }
-            DropdownMenu(expanded, { expanded = false }) {
-                ThemeName.entries.forEach { theme ->
-                    DropdownMenuItem(text = { Text(theme.title) }, onClick = { expanded = false; state.settings.setTheme(theme) },
-                        trailingIcon = if (theme == selected) { { SettingsIcon(R.drawable.ic_settings_check) } } else null)
-                }
-            }
-        }
-        Row(Modifier.fillMaxWidth().selectableGroup().padding(start = 8.dp, end = 8.dp, bottom = 8.dp)) {
-            ThemeName.entries.forEach { theme ->
-                Column(Modifier.weight(1f).heightIn(min = 76.dp)
-                    .selectable(theme == selected, role = Role.RadioButton, onClick = { state.settings.setTheme(theme) })
-                    .padding(vertical = 2.dp), horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically)) {
-                    val swatch = Modifier.size(52.dp).then(if (theme == selected) Modifier
-                        .border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(18.dp)) else Modifier).padding(4.dp)
-                    ThemeSwatch(theme, swatch)
-                    Text(if (theme == ThemeName.SYSTEM) "System" else theme.title,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = if (theme == selected) FontWeight.Bold else FontWeight.Medium)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ThemeSwatch(theme: ThemeName, modifier: Modifier) {
-    val background = when (theme) {
-        ThemeName.SYSTEM -> Color(0xFFF7F4EC); ThemeName.LIGHT -> Color(0xFFCFCABD)
-        ThemeName.DARK -> Color(0xFF2B2B2E); ThemeName.MIDNIGHT -> Color(0xFF0B1230); ThemeName.WARM -> Color(0xFFDDD2BC); ThemeName.HIGH_CONTRAST -> Color.Black
-    }
-    val key = when (theme) {
-        ThemeName.DARK -> Color(0xFF4A4A4F); ThemeName.MIDNIGHT -> Color(0xFF26367A)
-        ThemeName.HIGH_CONTRAST -> Color.Black
-        ThemeName.WARM -> Color(0xFFFFFCF5); else -> Color.White
-    }
-    Canvas(modifier.clip(RoundedCornerShape(14.dp)).background(background)) {
-        if (theme == ThemeName.SYSTEM) {
-            drawPath(Path().apply { moveTo(size.width, 0f); lineTo(size.width, size.height); lineTo(0f, size.height); close() }, Color(0xFF2B2B2E))
-        } else {
-            val w = size.width * 14 / 44; val h = size.height * 16 / 44
-            for (i in 0..1) {
-                val offset = Offset(size.width * (6 + i * 18) / 44, (size.height - h) / 2)
-                drawRoundRect(key, offset, Size(w, h), CornerRadius(3.dp.toPx()))
-                if (theme == ThemeName.HIGH_CONTRAST) drawRoundRect(if (i == 0) Color.White else Color(0xFFFFD400),
-                    offset, Size(w, h), CornerRadius(3.dp.toPx()), style = Stroke(2.dp.toPx()))
-            }
         }
     }
 }

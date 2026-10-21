@@ -73,6 +73,7 @@ object Prefs {
 
     const val CURSOR_CONTROL = "cursor_control"
     const val THEME = "theme"
+    const val THEMES_CUSTOM = "themes_custom"
     const val LAYOUT = "layout"
     const val LANGUAGES = "languages"
     const val CURRENT_LANGUAGE = "current_language"
@@ -134,7 +135,7 @@ class KeyboardSettings internal constructor(
     internal fun layoutSettings(): String = JSONObject().apply {
         layoutInts.forEach { put(it.key, int(it)) }
         layoutBools.forEach { put(it.key, bool(it)) }
-        put(Prefs.THEME, theme().name)
+        put(Prefs.THEME, themeId())
         for (l in listOf(false, true)) { put(Prefs.alignKey(l), align(l).name); put(Prefs.splitKey(l), split(l)) }
     }.toString()
 
@@ -144,7 +145,7 @@ class KeyboardSettings internal constructor(
         val e = prefs.edit()
         layoutInts.forEach { p -> (o.opt(p.key) as? Number)?.toDouble()?.takeIf { it.isFinite() }?.let { e.putInt(p.key, it.coerceIn(p.min.toDouble(), p.max.toDouble()).toInt()) } }
         layoutBools.forEach { p -> (o.opt(p.key) as? Boolean)?.let { e.putBoolean(p.key, it) } }
-        (o.opt(Prefs.THEME) as? String)?.takeIf { name -> ThemeName.entries.any { it.name == name } }?.let { e.putString(Prefs.THEME, it) }
+        (o.opt(Prefs.THEME) as? String)?.takeIf { name -> name.startsWith("custom:") || ThemeName.entries.any { it.name == name } }?.let { e.putString(Prefs.THEME, resolvedThemeId(it)) }
         for (l in listOf(false, true)) {
             (o.opt(Prefs.alignKey(l)) as? String)?.takeIf { name -> Align.entries.any { it.name == name } }?.let { e.putString(Prefs.alignKey(l), it) }
             (o.opt(Prefs.splitKey(l)) as? Boolean)?.let { e.putBoolean(Prefs.splitKey(l), it) }
@@ -239,8 +240,8 @@ class KeyboardSettings internal constructor(
         setFor(landscape, Prefs::height, int(Prefs.height(landscape)) + delta)
 
     fun cycleQuickTheme() {
-        val themes = ThemeName.entries // every theme, Warm and Midnight included
-        setTheme(themes[(themes.indexOf(theme()) + 1) % themes.size])
+        val themes = ThemeName.entries.map { it.name } + customThemes().map { it.selection }
+        setThemeId(themes[(themes.indexOf(themeId()) + 1) % themes.size])
     }
 
     fun cycleLanguage(direction: Int) {
@@ -261,12 +262,29 @@ class KeyboardSettings internal constructor(
         syncAppearance(landscape = from)
     }
 
-    fun theme(): ThemeName {
-        val name = prefs.getString(Prefs.THEME, null)
-        return ThemeName.entries.firstOrNull { it.name == name } ?: ThemeName.SYSTEM
+    private var cachedThemesJson: String? = null
+    private var cachedThemes = emptyList<CustomTheme>()
+    fun customThemes(): List<CustomTheme> {
+        val json = prefs.getString(Prefs.THEMES_CUSTOM, null)
+        if (json != cachedThemesJson) { cachedThemesJson = json; cachedThemes = CustomTheme.decode(json) }
+        return cachedThemes
     }
-
-    fun setTheme(theme: ThemeName) { prefs.edit().putString(Prefs.THEME, theme.name).apply(); syncAppearance(Prefs.THEME) }
+    private fun resolvedThemeId(id: String): String = if (id.startsWith("custom:") && customThemes().none { it.selection == id }) ThemeName.WARM.name else id
+    fun themeId(): String = resolvedThemeId(prefs.getString(Prefs.THEME, ThemeName.SYSTEM.name) ?: ThemeName.SYSTEM.name)
+    fun theme(): ThemeName = ThemeName.entries.firstOrNull { it.name == themeId() } ?: ThemeName.WARM
+    fun setTheme(theme: ThemeName) = setThemeId(theme.name)
+    fun setThemeId(id: String) { prefs.edit().putString(Prefs.THEME, resolvedThemeId(id)).apply(); syncAppearance(Prefs.THEME) }
+    fun saveTheme(theme: CustomTheme) {
+        val themes = customThemes().filterNot { it.id == theme.id } + theme.copy(name = theme.name.trim().take(24).ifEmpty { "Custom" })
+        prefs.edit().putString(Prefs.THEMES_CUSTOM, CustomTheme.encode(themes)).apply()
+        setThemeId(theme.selection)
+    }
+    fun deleteTheme(id: String) {
+        val selected = themeId() == "custom:$id"
+        prefs.edit().putString(Prefs.THEMES_CUSTOM, CustomTheme.encode(customThemes().filterNot { it.id == id }))
+            .apply { if (selected) putString(Prefs.THEME, ThemeName.WARM.name) }.apply()
+        if (selected) syncAppearance(Prefs.THEME)
+    }
 
     fun loadGrid(): KeyGrid = KeyGrid.savedOrDefault(KeyGrid.fromJson(prefs.getString(Prefs.LAYOUT, null)),
         currentLanguage(), bool(Prefs.NUMBER_ROW))

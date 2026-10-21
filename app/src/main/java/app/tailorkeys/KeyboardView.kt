@@ -209,7 +209,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private var builtWidth = -1
     private var restoreWidth: Int? = null
 
-    private var palette = Palette.of(context, settings.theme())
+    var previewPressed = false
+        set(value) { if (field != value) { field = value; invalidate() } }
+    var previewPalette: Palette? = null
+        set(value) { if (field != value) { field = value; reloadSettings(); invalidate() } }
+    private var palette = previewPalette ?: Palette.of(context, settings)
     private val density = resources.displayMetrics.density
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
@@ -245,7 +249,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val isLandscape get() = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     private var reducedMotion = false
-    private var highContrast = settings.theme() == ThemeName.HIGH_CONTRAST
+    private var highContrast = previewPalette == null && settings.theme() == ThemeName.HIGH_CONTRAST
     private val systemTextScale get() = if (settings.bool(Prefs.FOLLOW_SYSTEM_TEXT)) resources.configuration.fontScale.coerceIn(0.85f, 1.6f) else 1f
     private var labelScale = settings.int(Prefs.TEXT_SCALE) / 100f * systemTextScale
     private var iconScale = settings.int(Prefs.TEXT_SCALE) / 100f
@@ -255,6 +259,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val chordsAllowed get() = settings.bool(Prefs.CHORDING) && !settings.bool(Prefs.TYPE_ON_PRESS)
 
     /** A selected layout previews its own split without changing the Size preferences. */
+    var previewTargetHeight: Int? = null
+        set(value) { if (field != value) { field = value; relayout() } }
     var previewSplit: Boolean? = null
         set(value) { if (field != value) { field = value; relayout() } }
     private fun displayProfile() = settings.profile(isLandscape).let { p -> previewSplit?.let { p.copy(split = it) } ?: p }
@@ -271,10 +277,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private var builtGeometry: GeometrySettings? = null
 
     private data class DrawingSettings(
-        val theme: ThemeName, val night: Int, val language: String, val multipleLanguages: Boolean,
+        val theme: String, val customThemes: String?, val preview: Palette?, val night: Int, val language: String, val multipleLanguages: Boolean,
         val textScale: Int, val labelScale: Float, val radius: Int, val tint: Boolean, val hints: Boolean,
     )
-    private fun drawingSettings() = DrawingSettings(settings.theme(), resources.configuration.uiMode,
+    private fun drawingSettings() = DrawingSettings(settings.themeId(), settings.prefs.getString(Prefs.THEMES_CUSTOM, null), previewPalette, resources.configuration.uiMode,
         state.language, settings.languages().size > 1, settings.int(Prefs.TEXT_SCALE), labelScale,
         settings.int(Prefs.CORNER_RADIUS), settings.bool(Prefs.KEY_TINT), settings.bool(Prefs.SHOW_HINTS))
     private var builtDrawing: DrawingSettings? = null
@@ -302,8 +308,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         refreshMotion()
         state.language = settings.currentLanguage()
         dismissPopup()
-        palette = Palette.of(context, settings.theme())
-        highContrast = settings.theme() == ThemeName.HIGH_CONTRAST
+        palette = previewPalette ?: Palette.of(context, settings)
+        highContrast = previewPalette == null && settings.theme() == ThemeName.HIGH_CONTRAST
         labelScale = settings.int(Prefs.TEXT_SCALE) / 100f * systemTextScale
         multipleLanguages = settings.languages().size > 1
         languageLabel = state.language.uppercase()
@@ -380,7 +386,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val sameScale = landscape && settings.bool(Prefs.SAME_ORIENTATIONS)
         val portraitW = min(dm.widthPixels, dm.heightPixels).toFloat()
         val portraitH = max(dm.widthPixels, dm.heightPixels).toFloat()
-        val target = min((if (sameScale) portraitH else screenH) * p.heightPercent / 100f, screenH * 0.72f)
+        val target = previewTargetHeight?.toFloat() ?: min((if (sameScale) portraitH else screenH) * p.heightPercent / 100f, screenH * 0.72f)
         val areaW = if (sameScale && !split) min(width.toFloat(), portraitW * p.widthPercent / 100f) else width * p.widthPercent / 100f
         val areaLeft = when (p.align) { Align.LEFT -> 0f; Align.CENTER -> (width - areaW) / 2f; Align.RIGHT -> width - areaW }
         val innerW = areaW - 2 * pad
@@ -580,7 +586,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         cornerRadius = settings.int(Prefs.CORNER_RADIUS) * density
         tintKeys = settings.bool(Prefs.KEY_TINT)
         showHints = settings.bool(Prefs.SHOW_HINTS)
-        highContrast = settings.theme() == ThemeName.HIGH_CONTRAST
+        highContrast = previewPalette == null && settings.theme() == ThemeName.HIGH_CONTRAST
         multipleLanguages = settings.languages().size > 1
         languageLabel = state.language.uppercase()
         faceLabels.clear(); faceHints.clear()
@@ -967,7 +973,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             canvas.save()
             canvas.concat(pk.matrix)
             if (editMode && !reducedMotion) canvas.rotate(wiggle(pk.item, now), pk.rect.centerX(), pk.rect.centerY())
-            drawKey(canvas, pk.item, pk.rect, radius, pk.presses > 0, if (drag?.item === pk.item) 0.3f else 1f)
+            drawKey(canvas, pk.item, pk.rect, radius, pk.presses > 0 || (previewPressed && pk.item === placed.firstOrNull()?.item), if (drag?.item === pk.item) 0.3f else 1f)
             drawDropMark(canvas, pk)
             canvas.restore()
         }

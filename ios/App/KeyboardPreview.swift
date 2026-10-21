@@ -6,12 +6,15 @@ struct KeyboardPreview: View {
     let landscape: Bool?
     let permitsEditing: Bool
     var previewsSelection = false
+    var palette: Palette? = nil
+    var maximumHeight: CGFloat? = nil
+    var showsPressed = false
     @State private var height: CGFloat = 260
 
     var body: some View {
         GeometryReader { proxy in
             KeyboardPreviewView(model: model, landscape: landscape, permitsEditing: permitsEditing,
-                                previewsSelection: previewsSelection, width: proxy.size.width, height: $height)
+                                previewsSelection: previewsSelection, palette: palette, maximumHeight: maximumHeight, showsPressed: showsPressed, width: proxy.size.width, height: $height)
         }
         .frame(height: height)
         .clipShape(RoundedRectangle(cornerRadius: 24))
@@ -24,6 +27,9 @@ private struct KeyboardPreviewView: UIViewRepresentable {
     let landscape: Bool?
     let permitsEditing: Bool
     let previewsSelection: Bool
+    let palette: Palette?
+    let maximumHeight: CGFloat?
+    let showsPressed: Bool
     let width: CGFloat
     @Binding var height: CGFloat
 
@@ -59,6 +65,9 @@ private struct KeyboardPreviewView: UIViewRepresentable {
         // Normal keyboard gestures can change width/alignment internally. Only editing accepts touches here.
         view.isUserInteractionEnabled = view.editMode
         context.coordinator.configureScrolling(editing: view.editMode)
+        view.previewPalette = palette
+        view.previewTargetHeight = maximumHeight
+        view.previewPressed = showsPressed
         view.reloadSettings()
         context.coordinator.reportHeight(view.height(forWidth: max(1, width)))
     }

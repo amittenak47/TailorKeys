@@ -31,6 +31,13 @@ struct Palette {
         return accent
     }
 
+    static func of(_ settings: KeyboardSettings, dark: Bool) -> Palette {
+        if settings.themeID.hasPrefix("custom:"), let custom = settings.customThemes.first(where: { $0.selection == settings.themeID }) {
+            return custom.colors.palette
+        }
+        return of(settings.theme, dark: dark)
+    }
+
     static func of(_ name: ThemeName, dark: Bool) -> Palette {
         let resolved: ThemeName = name == .system ? (dark ? .dark : .light) : name
         switch resolved {
@@ -42,11 +49,30 @@ struct Palette {
         }
     }
 
-    private init(_ bg: UIColor, _ key: UIColor, _ fn: UIColor, _ pressed: UIColor, _ text: UIColor, _ hint: UIColor, _ accent: UIColor, _ on: UIColor) {
+    init(_ bg: UIColor, _ key: UIColor, _ fn: UIColor, _ pressed: UIColor, _ text: UIColor, _ hint: UIColor, _ accent: UIColor, _ on: UIColor) {
         background = bg; self.key = key; functionKey = fn; self.pressed = pressed; self.text = text; self.hint = hint; self.accent = accent; onAccent = on
     }
 
-    private static func hex(_ v: UInt32) -> UIColor {
+    static func hex(_ v: UInt32) -> UIColor {
         UIColor(red: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255, blue: CGFloat(v & 0xFF) / 255, alpha: 1)
+    }
+}
+
+
+extension ThemeColors {
+    init(_ palette: Palette) {
+        func hex(_ color: UIColor) -> String {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            color.getRed(&r, green: &g, blue: &b, alpha: &a)
+            return String(format: "#%02X%02X%02X", Int((r * 255).rounded()), Int((g * 255).rounded()), Int((b * 255).rounded()))
+        }
+        background = hex(palette.background); key = hex(palette.key); functionKey = hex(palette.functionKey)
+        text = hex(palette.text); accent = hex(palette.accent); pressed = hex(palette.pressed)
+    }
+    static func uiColor(_ value: String) -> UIColor { Palette.hex(parse(value) ?? 0) }
+    var palette: Palette {
+        let ink = Self.uiColor(text), accentColor = Self.uiColor(accent)
+        let onAccent = Self.contrast("#000000", accent) >= Self.contrast("#FFFFFF", accent) ? UIColor.black : UIColor.white
+        return Palette(Self.uiColor(background), Self.uiColor(key), Self.uiColor(functionKey), Self.uiColor(pressed), ink, ink, accentColor, onAccent)
     }
 }

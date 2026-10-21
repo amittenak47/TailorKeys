@@ -189,23 +189,7 @@ struct SettingsScreen: View {
 
     private var lookOptions: some View {
         Group {
-            Section {
-                MenuRow(title: "Theme", value: themeTitle(prefs.theme)) {
-                    ForEach(ThemeName.allCases, id: \.self) { theme in
-                        Button { setTheme(theme) } label: {
-                            if prefs.theme == theme { Label(themeTitle(theme), systemImage: "checkmark") }
-                            else { Text(themeTitle(theme)) }
-                        }
-                    }
-                }
-                .listRowSeparator(.hidden)
-                HStack(spacing: 4) {
-                    ForEach(ThemeName.allCases, id: \.self) { theme in
-                        ThemeSwatch(theme: theme, selected: prefs.theme == theme) { setTheme(theme) }
-                    }
-                }
-                .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 8, trailing: 8))
-            }
+            CustomThemeSection(model: model)
             Section {
                 SettingSlider(title: "Key spacing", pref: Prefs.keyGap, value: model.integer(Prefs.keyGap))
                 SettingSlider(title: "Corner radius", pref: Prefs.cornerRadius, value: model.integer(Prefs.cornerRadius))
@@ -218,12 +202,6 @@ struct SettingsScreen: View {
             }
         }
         .disabled(!model.fullAccessConfirmed)
-    }
-
-    private func setTheme(_ theme: ThemeName) {
-        guard model.fullAccessConfirmed else { return }
-        prefs.theme = theme
-        model.changed()
     }
 
     private var typingOptions: some View {
@@ -334,39 +312,6 @@ struct SettingsScreen: View {
         }
     }
 }
-
-private func themeTitle(_ theme: ThemeName) -> String { theme == .system ? "System" : theme.title }
-
-private struct ThemeSwatch: View {
-    @Environment(\.colorScheme) private var colorScheme
-    let theme: ThemeName
-    let selected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        let palette = Palette.of(theme, dark: colorScheme == .dark)
-        Button(action: action) {
-            VStack(spacing: 5) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10).fill(Color(palette.background))
-                    RoundedRectangle(cornerRadius: 5).fill(Color(palette.key)).padding(8)
-                    if theme == .highContrast {
-                        RoundedRectangle(cornerRadius: 5).stroke(Color.white, lineWidth: 2).padding(8)
-                    }
-                    Text("A").font(.system(size: 15, weight: theme == .highContrast ? .bold : .regular)).foregroundColor(Color(palette.text))
-                }
-                .frame(width: 44, height: 44)
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? AppStyle.accent : .clear, lineWidth: 2))
-                Text(themeTitle(theme)).font(.system(size: 11)).multilineTextAlignment(.center).foregroundColor(selected ? AppStyle.accent : .secondary)
-            }
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.borderless)
-        .accessibilityLabel(themeTitle(theme))
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-}
-
 
 private struct LearningControls: View {
     let settings: KeyboardSettings

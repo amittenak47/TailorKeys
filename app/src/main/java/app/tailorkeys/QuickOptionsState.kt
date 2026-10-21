@@ -12,6 +12,7 @@ internal data class QuickOptionsState(
     val multipleLanguages: Boolean,
     val swipe: Boolean,
     val learning: Boolean = true,
+    val themeContent: String = "",
 ) {
     fun tiles(): List<QuickTileState> = listOf(
         QuickTileState("Split", if (split) "On" else "Off", on = split),
