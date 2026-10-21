@@ -58,6 +58,8 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
     private var draftText = ""
     private val noteDrafts = HashMap<String, Pair<String, String>>()
     private var query = ""
+    private var gridPosition = 0
+    private var gridOffset = 0
     private var field: EditText? = null
     private var titleField: EditText? = null
     private var textField: EditText? = null
@@ -339,7 +341,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         savedLayer?.let { inputState.layer = it; inputState.shift = savedShift; inputState.capsLock = savedCaps }
         savedLayer = null; session++
     }
-    private fun startSearch() { prepareKeys(); editor = "Search"; session++; renderEditor() }
+    private fun startSearch() { if (section == "Emoji") { gridPosition = grid.firstVisiblePosition; gridOffset = grid.getChildAt(0)?.top ?: 0 }; prepareKeys(); editor = "Search"; session++; renderEditor() }
     private fun edit(item: ClipItem? = null, asNote: Boolean = true) {
         prepareKeys(); editingItem = item; editor = "Note"; session++
         val draft = noteDrafts[item?.id ?: "new"]
@@ -357,16 +359,26 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         renderedEditor = true
         isClickable = false
         clearBody(); setBackgroundColor(android.graphics.Color.TRANSPARENT); body.layoutParams.height = -2
-        val stripHeight = if (editor == "Note") (if (tablet) 104 else 152) else if (tablet) 56 else 104
+        val stripHeight = if (editor == "Note") (if (tablet) 104 else 152) else 94
         typing(true, stripHeight)
         val sheet = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(palette.background) }
         body.addView(sheet, LinearLayout.LayoutParams(-1, dp(stripHeight)))
-        val row = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }; sheet.addView(row, LinearLayout.LayoutParams(-1, dp(48)))
-        row.addView(button(if (editor == "Search") "‹" else "Cancel", "Back to ${section.lowercase()}") { if (editor == "Note") retainDraft(); restoreKeys(); editor = null; field = null; typing(false, 0); renderPanel() }, LinearLayout.LayoutParams(dp(if (editor == "Search") 48 else 72), dp(48)))
+        val row = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }; sheet.addView(row, LinearLayout.LayoutParams(-1, dp(44)))
+        row.addView(button("Cancel", "Back to ${section.lowercase()}") {
+            val search = editor == "Search"
+            if (editor == "Note") retainDraft(); restoreKeys(); editor = null; field = null; typing(false, 0); renderPanel()
+            if (search && section == "Emoji") grid.post { grid.setSelectionFromTop(gridPosition, gridOffset) }
+        }.apply { setTextColor(palette.smallAccent) }, LinearLayout.LayoutParams(dp(72), dp(44)))
         if (editor == "Search") {
-            val search = input(query, "Search ${section.lowercase()}") { query = it; renderResults(sheet) }.apply { isSingleLine = true; contentDescription = "Search ${section.lowercase()}" }
-            row.addView(search, LinearLayout.LayoutParams(0, dp(48), 1f)); field = search
-            row.addView(button("×", "Clear search") { search.setText("") }, LinearLayout.LayoutParams(dp(48), dp(48)))
+            val pill = FrameLayout(context).apply { background = shape(fill) }
+            val search = input(query, "Search ${section.lowercase()}") { query = it; renderResults(sheet) }.apply {
+                isSingleLine = true; contentDescription = "Search ${section.lowercase()}"; background = null; minimumHeight = dp(44); setPadding(dp(36),0,dp(44),0)
+                if (android.os.Build.VERSION.SDK_INT >= 29) textCursorDrawable?.setTint(palette.accent)
+            }
+            pill.addView(search, LayoutParams(-1, dp(44)))
+            pill.addView(label("?", 20f).apply { gravity = Gravity.CENTER; setTextColor(sub); importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }, LayoutParams(dp(36), dp(44), Gravity.START))
+            pill.addView(button("?", "Clear search") { search.setText("") }, LayoutParams(dp(44), dp(44), Gravity.END))
+            row.addView(pill, LinearLayout.LayoutParams(0, dp(44), 1f)); field = search
             renderResults(sheet); search.requestFocus()
         } else {
             row.addView(label(if (editingItem == null) "New note" else "Edit ${if (editingItem?.note == true) "note" else "clip"}"), LinearLayout.LayoutParams(0, -1, 1f))
@@ -394,12 +406,12 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         val result = when (section) { "Emoji" -> emoji?.search(query).orEmpty().filter { supported(it.text) }; "Kaomoji" -> kaomoji.filter { (it.name + it.category).contains(query, true) }; else -> emptyList() }.take(40)
         if (section == "Clipboard") {
             repository.searchableItems().filter { (it.title + it.text).contains(query, true) }.take(20).forEach { clip -> row.addView(button(clip.title.ifBlank { clip.text.take(30) }, clip.text) { insert(clip.text) }) }
-        } else result.forEach { e -> val shown = if (section == "Emoji") defaultSymbol(e) else e; row.addView(button(shown.text, shown.name) { use(shown) }.apply { textSize = if (section == "Emoji") 28f else 16f }, LinearLayout.LayoutParams(if (section == "Emoji") dp(48) else -2, dp(48))) }
-        if (row.childCount == 0) row.addView(label("No ${section.lowercase()} for “$query”", 13f))
+        } else result.forEach { e -> val shown = if (section == "Emoji") defaultSymbol(e) else e; row.addView(button(shown.text, shown.name) { use(shown) }.apply { textSize = if (section == "Emoji") 28f else 16f }, LinearLayout.LayoutParams(if (section == "Emoji") dp(48) else -2, dp(44))) }
+        if (row.childCount == 0) {
+            sheet.addView(label("No ${section.lowercase()} for ?$query?", 14f).apply { gravity = Gravity.CENTER; setTextColor(sub) }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) }); return
+        }
         val scroll = HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(row) }
-        // Tablets share one row; phones place results beneath the field.
-        if (tablet && editor == "Search") { val header = sheet.getChildAt(0) as LinearLayout; if (header.childCount > 3) header.removeViewAt(3); header.addView(scroll, LinearLayout.LayoutParams(0, dp(48), 2f)) }
-        else sheet.addView(scroll, LinearLayout.LayoutParams(-1, dp(48)))
+        sheet.addView(scroll, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) })
     }
     fun acceptsText() = editor != null && visibility == VISIBLE
     fun cursor(steps: Int, select: Boolean): Boolean {

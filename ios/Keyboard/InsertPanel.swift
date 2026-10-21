@@ -58,6 +58,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
     private var notes = false
     private var mode: String?
     private var query = ""
+    private var emojiScrollOffset = CGPoint.zero
     private var editItem: ClipItem?
     private var draftTitle = "", draftText = ""
     private var noteDrafts: [String: (String, String)] = [:]
@@ -349,7 +350,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
     private func restoreKeys() {
         if let saved = savedKeys { inputState.layer = saved.0; inputState.shift = saved.1; inputState.capsLock = saved.2 }; savedKeys = nil; session += 1
     }
-    private func search() { prepareKeys(); mode = "Search"; caret = query.count; session += 1; renderEditor() }
+    private func search() { if section == "Emoji" { emojiScrollOffset = collection.contentOffset }; prepareKeys(); mode = "Search"; caret = query.count; session += 1; renderEditor() }
     private func edit(_ item: ClipItem? = nil) {
         prepareKeys()
         editItem = item; let draft = noteDrafts[item?.id ?? "new"]
@@ -360,15 +361,20 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
     private func renderEditor() {
         renderedEditor = true
         reset(); backgroundColor = .clear; main.backgroundColor = palette.background
-        let height: CGFloat = mode == "Note" ? (tablet ? 104 : 152) : tablet ? 56 : 104; onTyping?(true, height)
-        let row = stack(); row.heightAnchor.constraint(equalToConstant: 48).isActive = true
-        row.addArrangedSubview(button(mode == "Search" ? "‹" : "Cancel", label: "Back to \(section.lowercased())") { [weak self] in guard let self = self else { return }; self.retainDraft(); self.restoreKeys(); self.mode = nil; self.session += 1; self.onTyping?(false, 0); self.main.backgroundColor = .clear; self.render() })
+        let height: CGFloat = mode == "Note" ? (tablet ? 104 : 152) : 94; onTyping?(true, height)
+        let row = stack(); row.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        let cancel = button("Cancel", label: "Back to " + section.lowercased()) { [weak self] in
+            guard let self = self else { return }; let wasSearch = self.mode == "Search"
+            self.retainDraft(); self.restoreKeys(); self.mode = nil; self.session += 1; self.onTyping?(false, 0); self.main.backgroundColor = .clear; self.render()
+            if wasSearch && self.section == "Emoji" { self.layoutIfNeeded(); self.collection.layoutIfNeeded(); self.collection.setContentOffset(self.emojiScrollOffset, animated: false) }
+        }; cancel.setTitleColor(palette.smallAccent, for: .normal); cancel.widthAnchor.constraint(equalToConstant: 72).isActive = true; row.addArrangedSubview(cancel)
         main.addArrangedSubview(row)
         if mode == "Search" {
-            searchLabel = button("⌕  \(query)│", label: "Search \(section.lowercased()), \(query)", selected: true) {}
-            row.addArrangedSubview(searchLabel!); row.addArrangedSubview(button("×", label: "Clear search") { [weak self] in self?.query = ""; self?.caret = 0; self?.updateEditor() })
-            let results = UIScrollView(); resultScroll = results
-            if tablet { row.addArrangedSubview(results) } else { main.addArrangedSubview(results); results.heightAnchor.constraint(equalToConstant: 48).isActive = true }
+            let pill = stack(); pill.spacing = 0; pill.backgroundColor = fill; pill.layer.cornerRadius = 12; pill.layer.borderWidth = 1; pill.layer.borderColor = palette.keyOutline.cgColor
+            searchLabel = button("", label: "Search " + section.lowercased()) {}; searchLabel?.contentHorizontalAlignment = .leading
+            pill.addArrangedSubview(searchLabel!)
+            let clear = button("?", label: "Clear search") { [weak self] in self?.query = ""; self?.caret = 0; self?.updateEditor() }; clear.widthAnchor.constraint(equalToConstant: 44).isActive = true; pill.addArrangedSubview(clear); row.addArrangedSubview(pill)
+            let results = UIScrollView(); resultScroll = results; main.addArrangedSubview(results); main.setCustomSpacing(6, after: row); results.heightAnchor.constraint(equalToConstant: 44).isActive = true
             updateEditor()
         } else {
             row.addArrangedSubview(label(editItem == nil ? "New note" : "Edit note"))
@@ -401,9 +407,9 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
             }
         } else { for entry in entries.prefix(40) {
             let e = section == "Emoji" ? shown(entry) : entry
-            let b = button(e.text, label: e.name) { [weak self] in self?.use(e) }; b.titleLabel?.font = .systemFont(ofSize: section == "Emoji" ? (tablet ? 32 : 28) : (tablet ? 17 : 16)); row.addArrangedSubview(b)
+            let b = button(e.text, label: e.name) { [weak self] in self?.use(e) }; b.titleLabel?.font = .systemFont(ofSize: section == "Emoji" ? (tablet ? 32 : 28) : (tablet ? 17 : 16)); if section == "Emoji" { b.widthAnchor.constraint(equalToConstant: 48).isActive = true }; row.addArrangedSubview(b)
         } }
-        if row.arrangedSubviews.isEmpty { row.addArrangedSubview(label("No \(section.lowercased()) for “\(query)”", size: 12)) }
+        if row.arrangedSubviews.isEmpty { let empty = label("No \(section.lowercased()) for “\(query)”", size: 14); empty.textColor = sub; empty.textAlignment = .center; row.addArrangedSubview(empty); row.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor).isActive = true }
         scroll.addSubview(row); row.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([row.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor), row.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor), row.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor), row.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor), row.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor)])
     }
