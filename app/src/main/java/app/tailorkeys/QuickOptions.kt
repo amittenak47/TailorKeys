@@ -111,7 +111,9 @@ class QuickOptions(
     private val rearrange: (String, String) -> Unit,
     private val language: () -> Unit,
     private val allSettings: () -> Unit,
+    private val tidy: () -> Unit,
 ) : LinearLayout(context) {
+    private var review: View? = null
     private val d = resources.displayMetrics.density
     private fun dp(n: Int) = (n * d).toInt()
     private val library = LayoutLibrary(settings, landscape).also { it.migrate(recoverTrial = false) }
@@ -301,9 +303,9 @@ class QuickOptions(
         size.box.addView(smaller, FrameLayout.LayoutParams(dp(48), -1, Gravity.START))
         size.box.addView(larger, FrameLayout.LayoutParams(dp(48), -1, Gravity.END))
         val second = row()
-        tile(second, "Theme", R.drawable.ic_settings_look) { settings.cycleQuickTheme() }
+        tile(second, "Learning", R.drawable.ic_settings_look) { settings.set(Prefs.LEARNING, !settings.bool(Prefs.LEARNING)) }
         tile(second, "Language", null) { language() }
-        tile(second, "Swipe", R.drawable.ic_settings_typing) { settings.set(Prefs.SWIPE_TYPING, !settings.bool(Prefs.SWIPE_TYPING)) }
+        tile(second, "Tidy", R.drawable.ic_settings_typing) { tidy() }
         tile(second, "Settings", R.drawable.ic_settings_tune) { allSettings() }
         confirmBox.addView(confirmTitle); confirmBox.addView(confirmText)
         val buttons = LinearLayout(context)
@@ -314,6 +316,26 @@ class QuickOptions(
         confirm.addView(confirmScroll, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER).apply { setMargins(dp(16), dp(4), dp(16), dp(4)) })
         pages.addView(confirm, FrameLayout.LayoutParams(-1, -1))
         refresh()
+    }
+
+    internal fun showTidy(fixes: List<TidyFix>, apply: (List<TidyFix>) -> Unit) {
+        review?.let { pages.removeView(it) }
+        val palette = palette ?: Palette.of(context, settings.theme())
+        val content = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8)); setBackgroundColor(palette.background) }
+        val checks = fixes.map { fix -> android.widget.CheckBox(context).apply {
+            text = "${fix.original} \u2192 ${fix.replacement}"; isChecked = true; setTextColor(palette.text)
+            content.addView(this, LayoutParams(-1, -2))
+        } }
+        content.addView(TextView(context).apply {
+            text = if (fixes.isEmpty()) "No fixes found. Tap to return." else "Apply selected fixes"
+            setTextColor(palette.smallAccent); setPadding(dp(8), dp(12), dp(8), dp(12))
+            setOnClickListener {
+                apply(fixes.filterIndexed { index, _ -> checks[index].isChecked })
+                review?.let { pages.removeView(it) }; review = null
+            }
+        })
+        review = ScrollView(context).apply { addView(content) }
+        pages.addView(review, FrameLayout.LayoutParams(-1, -1))
     }
 
     private fun rounded(color: Int, radius: Float) = GradientDrawable().apply { setColor(color); cornerRadius = radius }
@@ -388,6 +410,7 @@ class QuickOptions(
     fun refresh(resetScroll: Boolean = false) {
         updateStripHeight()
         if (resetScroll) {
+            review?.let { pages.removeView(it) }; review = null
             showAll(false, animate = false); hideConfirm(); message.visibility = View.GONE
             tileScroll.scrollTo(0, 0)
             // Done can have just added a draft. Reveal it after its first measure, before drawing.
@@ -397,7 +420,7 @@ class QuickOptions(
         val l = landscape()
         val next = QuickOptionsState(settings.theme(), resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK,
             settings.int(Prefs.CORNER_RADIUS), settings.split(l), settings.quickOneHand(l), settings.int(Prefs.height(l)),
-            settings.currentLanguage(), settings.languages().size > 1, settings.bool(Prefs.SWIPE_TYPING))
+            settings.currentLanguage(), settings.languages().size > 1, settings.bool(Prefs.SWIPE_TYPING), settings.bool(Prefs.LEARNING))
         val entries = library.entries()
         val geometry = "${settings.profile(l)}|${settings.int(Prefs.CURVE)}|${settings.int(Prefs.KEY_GAP)}|${settings.bool(Prefs.SAME_ORIENTATIONS)}|${resources.displayMetrics}"
         if (rendered == next && renderedEntries == entries && renderedSelection == library.inUse && renderedGeometry == geometry) return
