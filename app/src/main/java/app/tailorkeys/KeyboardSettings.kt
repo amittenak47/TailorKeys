@@ -65,7 +65,6 @@ object Prefs {
     val ONBOARDED = BoolPref("onboarded", false)
 
     const val CURSOR_CONTROL = "cursor_control"
-    const val EMPTY_SIDE = "empty_side"
     const val THEME = "theme"
     const val LAYOUT = "layout"
     const val LANGUAGES = "languages"
@@ -118,8 +117,6 @@ class KeyboardSettings internal constructor(
 
     fun cursorControl() = CursorControl.entries.firstOrNull { it.name == prefs.getString(Prefs.CURSOR_CONTROL, null) } ?: CursorControl.AUTO
     fun setCursorControl(value: CursorControl) = prefs.edit().putString(Prefs.CURSOR_CONTROL, value.name).apply()
-    fun emptySide() = EmptySide.entries.firstOrNull { it.name == prefs.getString(Prefs.EMPTY_SIDE, null) } ?: EmptySide.SLIDE_ARROW
-    fun setEmptySide(value: EmptySide) = prefs.edit().putString(Prefs.EMPTY_SIDE, value.name).apply()
 
     fun align(landscape: Boolean): Align {
         val name = prefs.getString(Prefs.alignKey(landscape), null)

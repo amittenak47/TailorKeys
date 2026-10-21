@@ -16,14 +16,66 @@ class CursorZonesTest {
         assertEquals(CursorZoneKind.CENTER, cursorZoneKind(CursorControl.AUTO, listOf(enough[0]), 32f))
     }
 
-    @Test fun modesFallbackAndEmptySideOverride() {
+    @Test fun modesRespectOuterPaddingAndOff() {
         val narrow = listOf(zone(0f, 10f), zone(290f, 300f))
+        val enough = listOf(zone(0f, 40f), zone(260f, 300f))
         assertEquals(CursorZoneKind.CENTER, cursorZoneKind(CursorControl.OUTER_EDGES, narrow, 32f))
-        assertEquals(CursorZoneKind.OUTER, cursorZoneKind(CursorControl.OUTER_EDGES, listOf(zone(0f, 40f), zone(260f, 300f)), 32f))
-        assertEquals(CursorZoneKind.OUTER, cursorZoneKind(CursorControl.AUTO, narrow, 32f, hasEmptySide = true))
-        assertEquals(CursorZoneKind.CENTER, cursorZoneKind(CursorControl.CENTER_GAP, narrow, 32f, hasEmptySide = true))
-        for (emptySide in listOf(false, true)) {
-            assertEquals(CursorZoneKind.NONE, cursorZoneKind(CursorControl.OFF, narrow, 32f, emptySide))
+        assertEquals(CursorZoneKind.OUTER, cursorZoneKind(CursorControl.OUTER_EDGES, enough, 32f))
+        assertEquals(CursorZoneKind.CENTER, cursorZoneKind(CursorControl.CENTER_GAP, enough, 32f))
+        assertEquals(CursorZoneKind.NONE, cursorZoneKind(CursorControl.OFF, enough, 32f))
+    }
+
+    @Test fun oneHandSplitUsesOnlyEmptySideForEveryEnabledMode() {
+        val enough = listOf(zone(0f, 40f), zone(260f, 300f))
+        for (control in listOf(CursorControl.AUTO, CursorControl.CENTER_GAP, CursorControl.OUTER_EDGES)) {
+            for (split in listOf(false, true)) {
+                val plan = cursorZonePlan(oneHand = true, split = split, control = control, outer = enough, minWidth = 32f)
+                assertEquals(CursorZoneKind.EMPTY, plan.kind)
+                assertTrue(plan.showSwitch)
+            }
+        }
+    }
+
+    @Test fun oneHandOffKeepsSwitchWithoutCursorZones() {
+        for (split in listOf(false, true)) {
+            val plan = cursorZonePlan(oneHand = true, split = split, control = CursorControl.OFF, outer = emptyList(), minWidth = 32f)
+            assertEquals(CursorZoneKind.NONE, plan.kind)
+            assertTrue(plan.showSwitch)
+        }
+    }
+
+    @Test fun fullWidthSplitUsesCenterWithoutSwitch() {
+        val padding = listOf(zone(0f, 4f), zone(296f, 300f))
+        val plan = cursorZonePlan(oneHand = false, split = true, control = CursorControl.AUTO, outer = padding, minWidth = 32f)
+        assertEquals(CursorZoneKind.CENTER, plan.kind)
+        assertFalse(plan.showSwitch)
+    }
+
+    @Test fun centeredNarrowNeedsSplitWhenOuterPaddingIsTooSmall() {
+        // The margins outside the keyboard area do not count as outer padding.
+        val padding = listOf(zone(60f, 70f), zone(230f, 240f))
+        for (control in listOf(CursorControl.AUTO, CursorControl.CENTER_GAP, CursorControl.OUTER_EDGES)) {
+            for (split in listOf(false, true)) {
+                val plan = cursorZonePlan(oneHand = false, split = split, control = control, outer = padding, minWidth = 32f)
+                assertEquals(if (split) CursorZoneKind.CENTER else CursorZoneKind.NONE, plan.kind)
+                assertFalse(plan.showSwitch)
+            }
+        }
+    }
+
+    @Test fun outerPaddingOfAtLeast32OnBothSidesUsesOuterZones() {
+        val padding = listOf(zone(60f, 92f), zone(208f, 240f))
+        for (control in listOf(CursorControl.AUTO, CursorControl.OUTER_EDGES)) {
+            for (split in listOf(false, true)) {
+                val plan = cursorZonePlan(oneHand = false, split = split, control = control, outer = padding, minWidth = 32f)
+                assertEquals(CursorZoneKind.OUTER, plan.kind)
+                assertFalse(plan.showSwitch)
+            }
+        }
+        for (split in listOf(false, true)) {
+            val plan = cursorZonePlan(oneHand = false, split = split, control = CursorControl.OFF, outer = padding, minWidth = 32f)
+            assertEquals(CursorZoneKind.NONE, plan.kind)
+            assertFalse(plan.showSwitch)
         }
     }
 

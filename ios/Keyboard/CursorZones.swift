@@ -45,7 +45,7 @@ struct CursorZone {
     }
 }
 
-enum CursorZoneKind { case center, outer, none }
+enum CursorZoneKind { case center, outer, empty, none }
 
 /// Visual state only, independent of joystick speed. Mirrors Android's tested CursorPointer helper.
 final class CursorPointer {
@@ -129,13 +129,26 @@ final class CursorPointer {
     }
 }
 
-func cursorZoneKind(_ control: CursorControl, outer: [CursorZone], hasEmptySide: Bool) -> CursorZoneKind {
+/// Selects the center gap or outer padding for layouts that are not in one-hand mode.
+func cursorZoneKind(_ control: CursorControl, outer: [CursorZone]) -> CursorZoneKind {
     switch control {
     case .off: return .none
     case .centerGap: return .center
     case .auto, .outerEdges:
-        return hasEmptySide || (outer.count == 2 && outer.allSatisfy { $0.hasRoom(32) }) ? .outer : .center
+        return outer.count == 2 && outer.allSatisfy { $0.hasRoom(32) } ? .outer : .center
     }
+}
+
+struct CursorZonePlan {
+    let kind: CursorZoneKind
+    let showSwitch: Bool
+}
+
+/// One-hand mode reserves only the big empty side; its switch remains available with cursor control off.
+func cursorZonePlan(oneHand: Bool, split: Bool, control: CursorControl, outer: [CursorZone]) -> CursorZonePlan {
+    if oneHand { return CursorZonePlan(kind: control == .off ? .none : .empty, showSwitch: true) }
+    let kind = cursorZoneKind(control, outer: outer)
+    return CursorZonePlan(kind: kind == .center && !split ? .none : kind, showSwitch: false)
 }
 
 /// Cubic ease-out, in points and monotonic seconds. Layout is computed only at the destination.

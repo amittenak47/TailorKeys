@@ -106,15 +106,6 @@ struct SettingsScreen: View {
                     .disabled(true)
                 }
             }
-            if prefs.profile(UIScreen.main.bounds.width > UIScreen.main.bounds.height).widthPercent < 100 {
-                Section(footer: Text("Use the space beside a one-hand keyboard to switch sides, or to move the cursor.")) {
-                    Picker("Empty side", selection: Binding(get: { prefs.emptySide }, set: { value in
-                        prefs.emptySide = value; model.changed()
-                    })) {
-                        ForEach(EmptySide.allCases, id: \.self) { value in Text(value.title).tag(value) }
-                    }
-                }
-            }
             Section {
                 Button { model.editing.toggle() } label: {
                     Label(model.editing ? "Done" : "Edit layout", systemImage: model.editing ? "checkmark" : "pencil")

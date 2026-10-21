@@ -287,7 +287,6 @@ final class KeyboardView: UIView {
         var languages = 1
         var labelScale: CGFloat = 1, textScale: CGFloat = 1, radius: CGFloat = 8, baseSlack: CGFloat = 3.5, tapSlack: CGFloat = 3.5
         var repeatGuard: TimeInterval = 0, longPress: TimeInterval = 0.35
-        var emptySide: EmptySide = .slideArrow
     }
     private func refreshPreferences() {
         cursorGlow = settings.cursorGlow
@@ -296,7 +295,7 @@ final class KeyboardView: UIView {
         viewPrefs.smartTargets = settings.smartTargets; viewPrefs.swipeTyping = settings.swipeTyping
         viewPrefs.chording = settings.chording; viewPrefs.typeOnPress = settings.typeOnPress
         viewPrefs.clicks = settings.clicks; viewPrefs.spaceAccepts = settings.spaceAccepts
-        viewPrefs.languages = settings.languages.count; viewPrefs.emptySide = settings.emptySide
+        viewPrefs.languages = settings.languages.count
         viewPrefs.textScale = CGFloat(settings.int(Prefs.textScale)) / 100
         let system = settings.followSystemText ? min(1.6, max(0.85, UIFontMetrics(forTextStyle: .body)
             .scaledValue(for: 15, compatibleWith: traitCollection) / 15)) : 1
@@ -705,31 +704,29 @@ final class KeyboardView: UIView {
         centerZone = split && !editMode ? zone(keyEdge(true, inner: true), keyEdge(false, inner: true)) : nil
         let outer: [CursorZone] = editMode ? [] : [zone(vertical(areaLeft), keyEdge(true, inner: false)),
             zone(keyEdge(false, inner: false), vertical(areaLeft + areaW))].compactMap { $0 }
-        let emptyCursor = viewPrefs.emptySide == .cursor
-        let minSpace: CGFloat = emptyCursor ? 0 : 40
-        leftSpace = areaLeft > 0 && areaLeft >= minSpace ? CGRect(x: 0, y: strip, width: areaLeft, height: y0 + hc - strip) : nil
-        rightSpace = width - (areaLeft + areaW) > 0 && width - (areaLeft + areaW) >= minSpace ? CGRect(x: areaLeft + areaW, y: strip, width: width - areaLeft - areaW, height: y0 + hc - strip) : nil
+        let oneHand = p.widthPercent < 100 && p.align != .center
+        let plan = cursorZonePlan(oneHand: oneHand, split: split, control: settings.cursorControl, outer: outer)
+        leftSpace = areaLeft > 0 ? CGRect(x: 0, y: strip, width: areaLeft, height: y0 + hc - strip) : nil
+        rightSpace = width - (areaLeft + areaW) > 0 ? CGRect(x: areaLeft + areaW, y: strip, width: width - areaLeft - areaW, height: y0 + hc - strip) : nil
         var emptyZones: [CursorZone] = []
         switchRect = nil
-        if emptyCursor && !editMode {
+        if plan.showSwitch && !editMode {
             // The switch hugs the keys, leaving the greatest possible distance from the screen's back-gesture edge.
-            if let space = [leftSpace, rightSpace].compactMap({ $0 }).max(by: { $0.width < $1.width }) {
+            if let space = p.align == .right ? leftSpace : rightSpace {
                 switchToLeft = leftSpace == space
                 let inset = Swift.min(8, space.width / 4)
                 let size = Swift.max(1, Swift.min(Swift.min(unit - gap, 48), space.width - 2 * inset))
                 let x = switchToLeft ? space.maxX - inset - size : space.minX + inset
                 switchRect = CGRect(x: x, y: space.maxY - inset - size, width: size, height: size)
-            }
-            for space in [leftSpace, rightSpace].compactMap({ $0 }) {
                 let excluded = switchRect.flatMap { space.contains($0) ? $0 : nil }
                 if let z = zone(vertical(space.minX), vertical(space.maxX), excluded: excluded) { emptyZones.append(z) }
             }
         }
-        let kind = cursorZoneKind(settings.cursorControl, outer: outer, hasEmptySide: !emptyZones.isEmpty)
         if editMode { cursorZones = [] }
         else {
-            switch kind {
-            case .outer: cursorZones = outer + emptyZones
+            switch plan.kind {
+            case .empty: cursorZones = emptyZones
+            case .outer: cursorZones = outer
             case .center: cursorZones = [centerZone].compactMap { $0 }
             case .none: cursorZones = []
             }
@@ -1006,10 +1003,7 @@ final class KeyboardView: UIView {
         drawPopup()
         ctx.restoreGState()
         if !editMode && !isSliding {
-            if viewPrefs.emptySide == .slideArrow {
-                if let l = leftSpace { drawArrow(l, pointsLeft: true) }
-                if let r = rightSpace { drawArrow(r, pointsLeft: false) }
-            } else if let button = switchRect {
+            if let button = switchRect {
                 palette.key.setFill()
                 ctx.fillEllipse(in: button)
                 drawArrow(button, pointsLeft: switchToLeft)
@@ -1725,8 +1719,7 @@ final class KeyboardView: UIView {
             let t = Tracker(kind: .handle, pk: nil); t.x0 = p.x; t.lastX = p.x; trackers[id] = t
             return
         }
-        if switchRect?.contains(p) == true || (viewPrefs.emptySide == .slideArrow &&
-            (leftSpace?.contains(p) == true || rightSpace?.contains(p) == true)) { moveToward(p); return }
+        if switchRect?.contains(p) == true { moveToward(p); return }
         let hit = findKey(p, strict: true)
         if hit == nil, let zone = zone {
             guard !trackers.values.contains(where: { $0.kind == .cursor }) else { return }

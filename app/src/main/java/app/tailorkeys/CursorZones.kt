@@ -4,8 +4,6 @@ enum class CursorControl(val title: String) {
     AUTO("Auto"), CENTER_GAP("Center gap"), OUTER_EDGES("Outer edges"), OFF("Off")
 }
 
-enum class EmptySide(val title: String) { SLIDE_ARROW("Slide arrow"), CURSOR("Cursor") }
-
 internal data class ZonePoint(val x: Float, val y: Float)
 internal data class ZoneRect(val left: Float, val top: Float, val right: Float, val bottom: Float) {
     fun contains(x: Float, y: Float) = x >= left && x < right && y >= top && y < bottom
@@ -41,14 +39,24 @@ internal data class CursorZone(
     }
 }
 
-internal enum class CursorZoneKind { CENTER, OUTER, NONE }
+internal enum class CursorZoneKind { CENTER, OUTER, EMPTY, NONE }
 
-internal fun cursorZoneKind(control: CursorControl, outer: List<CursorZone>, minWidth: Float,
-    hasEmptySide: Boolean = false): CursorZoneKind = when (control) {
+/** Selects the center gap or outer padding for layouts that are not in one-hand mode. */
+internal fun cursorZoneKind(control: CursorControl, outer: List<CursorZone>, minWidth: Float): CursorZoneKind = when (control) {
     CursorControl.OFF -> CursorZoneKind.NONE
     CursorControl.CENTER_GAP -> CursorZoneKind.CENTER
     CursorControl.AUTO, CursorControl.OUTER_EDGES ->
-        if (hasEmptySide || outer.size == 2 && outer.all { it.hasRoom(minWidth) }) CursorZoneKind.OUTER else CursorZoneKind.CENTER
+        if (outer.size == 2 && outer.all { it.hasRoom(minWidth) }) CursorZoneKind.OUTER else CursorZoneKind.CENTER
+}
+
+internal data class CursorZonePlan(val kind: CursorZoneKind, val showSwitch: Boolean)
+
+/** One-hand mode reserves only the big empty side; its switch remains available with cursor control off. */
+internal fun cursorZonePlan(oneHand: Boolean, split: Boolean, control: CursorControl,
+    outer: List<CursorZone>, minWidth: Float): CursorZonePlan {
+    if (oneHand) return CursorZonePlan(if (control == CursorControl.OFF) CursorZoneKind.NONE else CursorZoneKind.EMPTY, true)
+    val kind = cursorZoneKind(control, outer, minWidth)
+    return CursorZonePlan(if (kind == CursorZoneKind.CENTER && !split) CursorZoneKind.NONE else kind, false)
 }
 
 /** Cubic ease-out: the remaining translation starts at the full distance and settles in 250 ms. */

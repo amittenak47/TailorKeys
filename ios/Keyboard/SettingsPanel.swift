@@ -126,14 +126,6 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
     }
 
     private func buildLayoutTab() {
-        let landscape = UIScreen.main.bounds.width > UIScreen.main.bounds.height
-        if settings.int(Prefs.width(landscape)) < 100 {
-            stack.addArrangedSubview(menuRow("Empty side", current: settings.emptySide.title, options: EmptySide.allCases.map { $0.title }) { [weak self] title in
-                guard let self = self, let value = EmptySide.allCases.first(where: { $0.title == title }) else { return }
-                self.settings.emptySide = value; self.changed(rebuild: true)
-            })
-            addNote("Use the space beside a one-hand keyboard to switch sides, or to move the cursor.")
-        }
         // Templates and sharing. Codes go through the text field because the keyboard has no clipboard access.
         stack.addArrangedSubview(menuRow("Start from", current: "Choose", options: Template.allCases.map { $0.title }) { [weak self] title in
             guard let t = Template.allCases.first(where: { $0.title == title }) else { return }

@@ -213,7 +213,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val faceHints = HashMap<String, String?>()
     private var languageLabel = "EN"
     private var multipleLanguages = false
-    private var emptySide = EmptySide.SLIDE_ARROW
     private var waveShaders = emptyArray<Shader>()
     private data class WaveAppearance(val color: Int, val top: Float, val bottom: Float)
     private var waveAppearance: WaveAppearance? = null
@@ -245,23 +244,22 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     private data class GeometrySettings(
         val profile: SizeProfile, val curve: Int, val gap: Int, val labelScale: Float,
-        val sameOrientations: Boolean, val cursor: CursorControl, val emptySide: EmptySide,
+        val sameOrientations: Boolean, val cursor: CursorControl,
         val landscape: Boolean, val screenWidth: Int, val screenHeight: Int,
     )
     private fun geometrySettings() = GeometrySettings(settings.profile(isLandscape),
         settings.int(Prefs.CURVE), settings.int(Prefs.KEY_GAP), labelScale,
-        settings.bool(Prefs.SAME_ORIENTATIONS), settings.cursorControl(), settings.emptySide(),
+        settings.bool(Prefs.SAME_ORIENTATIONS), settings.cursorControl(),
         isLandscape, resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
     private var builtGeometry: GeometrySettings? = null
 
     private data class DrawingSettings(
         val theme: ThemeName, val night: Int, val language: String, val multipleLanguages: Boolean,
         val textScale: Int, val labelScale: Float, val radius: Int, val tint: Boolean, val hints: Boolean,
-        val emptySide: EmptySide,
     )
     private fun drawingSettings() = DrawingSettings(settings.theme(), resources.configuration.uiMode,
         state.language, settings.languages().size > 1, settings.int(Prefs.TEXT_SCALE), labelScale,
-        settings.int(Prefs.CORNER_RADIUS), settings.bool(Prefs.KEY_TINT), settings.bool(Prefs.SHOW_HINTS), settings.emptySide())
+        settings.int(Prefs.CORNER_RADIUS), settings.bool(Prefs.KEY_TINT), settings.bool(Prefs.SHOW_HINTS))
     private var builtDrawing: DrawingSettings? = null
 
     private fun refreshMotion() {
@@ -292,7 +290,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         labelScale = settings.int(Prefs.TEXT_SCALE) / 100f * systemTextScale
         multipleLanguages = settings.languages().size > 1
         languageLabel = state.language.uppercase()
-        emptySide = settings.emptySide()
         cursorGlow = settings.bool(Prefs.CURSOR_GLOW)
         if (builtGeometry != geometrySettings()) relayout()
         else {
@@ -508,31 +505,29 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         centerZone = if (split && !editMode) zone(keyEdge(true, true), keyEdge(false, true)) else null
         val outer = if (!editMode) listOfNotNull(zone(vertical(areaLeft), keyEdge(true, false)),
             zone(keyEdge(false, false), vertical(areaLeft + areaW))) else emptyList()
-        val emptyCursor = settings.emptySide() == EmptySide.CURSOR
-        val minSpace = if (emptyCursor) 0f else 40 * d
-        leftSpace = if (areaLeft > 0f && areaLeft >= minSpace) RectF(0f, stripH, areaLeft, y0 + hc) else null
-        rightSpace = if (width - (areaLeft + areaW) > 0f && width - (areaLeft + areaW) >= minSpace) RectF(areaLeft + areaW, stripH, width.toFloat(), y0 + hc) else null
+        val oneHand = p.widthPercent < 100 && p.align != Align.CENTER
+        val plan = cursorZonePlan(oneHand, split, settings.cursorControl(), outer, 32 * d)
+        leftSpace = if (areaLeft > 0f) RectF(0f, stripH, areaLeft, y0 + hc) else null
+        rightSpace = if (width - (areaLeft + areaW) > 0f) RectF(areaLeft + areaW, stripH, width.toFloat(), y0 + hc) else null
         val emptyZones = ArrayList<CursorZone>()
         switchRect = null
-        if (emptyCursor && !editMode) {
+        if (plan.showSwitch && !editMode) {
             // Keep the switch next to the keys, as far from the system back-gesture edge as the space permits.
-            val space = listOfNotNull(leftSpace, rightSpace).maxByOrNull { it.width() }
+            val space = if (p.align == Align.RIGHT) leftSpace else rightSpace
             if (space != null) {
                 switchToLeft = space === leftSpace
                 val inset = min(8 * d, space.width() / 4)
                 val size = min(min(unit - gap, 48 * d), space.width() - 2 * inset).coerceAtLeast(1f)
                 val x = if (switchToLeft) space.right - inset - size else space.left + inset
                 switchRect = RectF(x, space.bottom - inset - size, x + size, space.bottom - inset)
-            }
-            for (space in listOfNotNull(leftSpace, rightSpace)) {
                 val excluded = switchRect?.takeIf { space.contains(it) }?.let { ZoneRect(it.left, it.top, it.right, it.bottom) }
                 zone(vertical(space.left), vertical(space.right), excluded)?.let(emptyZones::add)
             }
         }
-        val kind = cursorZoneKind(settings.cursorControl(), outer, 32 * d, emptyZones.isNotEmpty())
-        outerCursorActive = !editMode && kind == CursorZoneKind.OUTER
-        cursorZones = if (editMode) emptyList() else when (kind) {
-            CursorZoneKind.OUTER -> outer + emptyZones
+        outerCursorActive = !editMode && (plan.kind == CursorZoneKind.OUTER || plan.kind == CursorZoneKind.EMPTY)
+        cursorZones = if (editMode) emptyList() else when (plan.kind) {
+            CursorZoneKind.EMPTY -> emptyZones
+            CursorZoneKind.OUTER -> outer
             CursorZoneKind.CENTER -> listOfNotNull(centerZone)
             CursorZoneKind.NONE -> emptyList()
         }
@@ -571,7 +566,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         highContrast = settings.theme() == ThemeName.HIGH_CONTRAST
         multipleLanguages = settings.languages().size > 1
         languageLabel = state.language.uppercase()
-        emptySide = settings.emptySide()
         faceLabels.clear(); faceHints.clear()
         val sample = InputState().apply { language = state.language }
         for (item in grid.items) for (code in item.keys) {
@@ -965,10 +959,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         canvas.restore()
         if (offset != 0f && !optionsCovered) postInvalidateOnAnimation()
         else if (!editMode) {
-            if (emptySide == EmptySide.SLIDE_ARROW) {
-                leftSpace?.let { drawMoveArrow(canvas, it, pointsLeft = true) }
-                rightSpace?.let { drawMoveArrow(canvas, it, pointsLeft = false) }
-            } else switchRect?.let {
+            switchRect?.let {
                 fill.color = palette.key
                 canvas.drawOval(it, fill)
                 drawMoveArrow(canvas, it, pointsLeft = switchToLeft)
@@ -1635,8 +1626,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             trackers[id] = Tracker(K_HANDLE, null).also { it.x0 = x; it.lastX = x }
             return
         }
-        if (switchRect?.contains(x, y) == true || settings.emptySide() == EmptySide.SLIDE_ARROW &&
-            (leftSpace?.contains(x, y) == true || rightSpace?.contains(x, y) == true)) {
+        if (switchRect?.contains(x, y) == true) {
             moveKeyboardToward(x, y)
             return
         }

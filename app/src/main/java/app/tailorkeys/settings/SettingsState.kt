@@ -67,7 +67,6 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         return settings.profile(page)
     }
     fun cursorControl() = run { revisions.read(Prefs.CURSOR_CONTROL); settings.cursorControl() }
-    fun emptySide() = run { revisions.read(Prefs.EMPTY_SIDE); settings.emptySide() }
     fun theme() = run { revisions.read(Prefs.THEME); settings.theme() }
     fun set(pref: IntPref, value: Int) = settings.set(pref, value)
     fun set(pref: BoolPref, value: Boolean) = settings.set(pref, value)

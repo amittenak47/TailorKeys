@@ -8,10 +8,6 @@ enum CursorControl: String, CaseIterable {
         switch self { case .auto: return "Auto"; case .centerGap: return "Center gap"; case .outerEdges: return "Outer edges"; case .off: return "Off" }
     }
 }
-enum EmptySide: String, CaseIterable {
-    case slideArrow = "SLIDE_ARROW", cursor = "CURSOR"
-    var title: String { self == .slideArrow ? "Slide arrow" : "Cursor" }
-}
 
 struct IntPref {
     let key: String
@@ -46,7 +42,6 @@ enum Prefs {
     static let showHints = "show_hints"
     static let cursorControl = "cursor_control"
     static let cursorGlow = "cursor_glow"
-    static let emptySide = "empty_side"
     static let spaceAccepts = "space_accepts"
     static let autoCap = "auto_cap"
     static let doubleSpace = "double_space_period"
@@ -72,7 +67,7 @@ enum Prefs {
     ]
     /// Registry for reset; device-dependent defaults are still resolved by their getters.
     static var settingKeys: [String] {
-        var keys = Array(booleanDefaults.keys) + [cursorControl, emptySide, theme, layout, languages, currentLanguage]
+        var keys = Array(booleanDefaults.keys) + [cursorControl, theme, layout, languages, currentLanguage]
         keys += [curve, keyGap, cornerRadius, keyRepeatGuard, touchSlack, textScale, longPressMs].map { $0.key }
         for l in [false, true] {
             keys += [height(l), width(l), bottomPadding(l), splitGap(l), tilt(l), spaceTilt(l)].map { $0.key }
@@ -166,10 +161,6 @@ final class KeyboardSettings {
     var cursorControl: CursorControl {
         get { CursorControl(rawValue: d.string(forKey: Prefs.cursorControl) ?? "") ?? .auto }
         set { d.set(newValue.rawValue, forKey: Prefs.cursorControl) }
-    }
-    var emptySide: EmptySide {
-        get { EmptySide(rawValue: d.string(forKey: Prefs.emptySide) ?? "") ?? .slideArrow }
-        set { d.set(newValue.rawValue, forKey: Prefs.emptySide) }
     }
     var spaceAccepts: Bool { bool(Prefs.spaceAccepts, true) }
     var autoCap: Bool { bool(Prefs.autoCap, true) }

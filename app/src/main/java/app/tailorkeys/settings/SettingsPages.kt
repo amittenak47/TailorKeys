@@ -30,7 +30,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.tailorkeys.CursorControl
-import app.tailorkeys.EmptySide
 import app.tailorkeys.Align
 import app.tailorkeys.OnboardingActivity
 import app.tailorkeys.Prefs
@@ -48,18 +47,6 @@ internal fun LazyListScope.layoutOptions(state: SettingsState, editing: Boolean,
         val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
         SettingsDropdown("Preset", state.templateName(), Template.entries.map { it.title } + "Custom") { index ->
             Template.entries.getOrNull(index)?.let { state.applyTemplate(it, landscape) }
-        }
-    }
-    item("emptySide") {
-        val land = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-        if (state.profile(land).widthPercent < 100) {
-            Column {
-                SettingsDropdown("Empty side", state.emptySide().title, EmptySide.entries.map { it.title }) {
-                    state.settings.setEmptySide(EmptySide.entries[it])
-                }
-                Text("Use the space beside a one-hand keyboard to switch sides, or to move the cursor.",
-                    Modifier.padding(16.dp, 8.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
         }
     }
     item("edit") {
