@@ -483,3 +483,55 @@ withLayoutStore { prefs, defaults in
 }
 
 print("Tablet layout and typing checks passed")
+
+
+check(CorrectionRules.eligible("teh"), "plain typo excluded")
+check(!CorrectionRules.eligible("teH") && !CorrectionRules.eligible("teh2"), "protected token accepted")
+check(CorrectionRules.smallEdit("hte", "the"), "initial transposition missed")
+check(CorrectionRules.smallEdit("recieve", "receive"), "internal transposition missed")
+let tidySource = "teh cat.  hello there"
+let tidyFixes = TidyText.propose(tidySource) { word, _ in word == "teh" ? "the" : nil }
+check(TidyText.apply(tidySource, fixes: tidyFixes) == "The cat. Hello there", "tidy proposal apply")
+check(TidyText.apply(tidySource, fixes: []) == tidySource, "tidy unchecked fixes changed text")
+let learningSuite = "app.tailorkeys.tests.learning." + UUID().uuidString
+let learningStore = UserDefaults(suiteName: learningSuite)!
+learningStore.set(["zorbles": 2, "hello": 3], forKey: "user_words")
+learningStore.set(["say": ["zorbles": 2], "zorbles": ["hello": 1]], forKey: "user_bigrams")
+learningStore.set(["please\tsay": ["zorbles": 2]], forKey: "user_trigrams")
+LearningStore.forget(learningStore, language: "en", word: "zorbles")
+check(LearningStore.words(learningStore).map { $0.word } == ["hello"], "individual forgetting")
+check((LearningStore.data(learningStore, "en")["trigrams"] as? [String: [String: Int]])?["please\tsay"]?["zorbles"] == nil, "triple not forgotten")
+LearningStore.forget(learningStore)
+check(LearningStore.words(learningStore).isEmpty, "forget all languages")
+learningStore.removePersistentDomain(forName: learningSuite)
+
+check(TextInputRules.punctuation(".", "swipe ", "", automaticSpace: true, enabled: true, trailingSpace: false)?.insert == ".", "disabled automatic space leaked through punctuation")
+check(TidyText.cursor(8, fixes: [TidyFix(start: 5, end: 7, original: "  ", replacement: " ")]) == 7, "tidy cursor mapping")
+
+for width in [CGFloat(50), CGFloat(100)] {
+    var board: [Character: CGPoint] = [:]
+    for (row, letters) in ["qwertyuiop", "asdfghjkl", "zxcvbnm"].enumerated() {
+        for (column, letter) in letters.enumerated() { board[letter] = CGPoint(x: (CGFloat(column) + CGFloat(row) * 0.35) * width, y: CGFloat(row) * width) }
+    }
+    for word in ["hello", "quick", "type", "keyboard"] {
+        let trace = SwipeTrace(board, width), letters = Array(word)
+        var time: TimeInterval = 0, index = 0
+        var previous = board[letters[0]]!
+        trace.sample(previous, time, index); index += 1
+        for i in 1..<letters.count {
+            let point = board[letters[i]]!
+            if letters[i] == letters[i - 1] {
+                time += 0.220; trace.sample(point, time, index); index += 1
+            } else {
+                for step in 1...20 {
+                    time += 0.002
+                    let fraction = CGFloat(step) / 20
+                    trace.sample(CGPoint(x: previous.x + (point.x - previous.x) * fraction, y: previous.y + (point.y - previous.y) * fraction), time, index); index += 1
+                }
+                if i < letters.count - 1 { time += 0.120; trace.sample(point, time, index); index += 1 }
+            }
+            previous = point
+        }
+        check(trace.text() == word, "intended letters lost: " + word)
+    }
+}

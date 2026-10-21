@@ -6,6 +6,8 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
     var onClose: (() -> Void)?
     var onEdit: ((String, String) -> Void)?
     var onLanguage: (() -> Void)?
+    var onTidy: (() -> Void)?
+    private var review: UIView?
     var onChange: (() -> Void)?
     private let settings: KeyboardSettings
     private var library: LayoutLibrary
@@ -184,10 +186,10 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
                 self.settings.adjustQuickHeight(self.landscape, delta); self.onChange?(); self.refresh()
             }
         }
-        _ = tile("Theme", "circle.lefthalf.filled") { $0.settings.cycleQuickTheme() }
+        _ = tile("Learning", "brain") { s in s.settings.set(Prefs.learning, !s.settings.learning) }
         let language = tile("Language", nil)
         language.action = { [weak self] in self?.onLanguage?(); self?.refresh() }
-        _ = tile("Swipe", "scribble") { s in s.settings.set(Prefs.swipeTyping, !s.settings.bool(Prefs.swipeTyping, true)) }
+        _ = tile("Tidy", "text.badge.checkmark") { $0.onTidy?() }
         let settingsTile = tile("Settings", "slider.horizontal.3")
         // SwiftUI Link handles app URLs in a keyboard extension without UIApplication.shared.
         let link = UIHostingController(rootView: QuickSettingsLink())
@@ -227,6 +229,40 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
         button.addAction(UIAction { _ in action() }, for: .touchUpInside)
     }
 
+    func showTidy(_ fixes: [TidyFix], apply: @escaping ([TidyFix]) -> Void) {
+        review?.removeFromSuperview()
+        let scroll = UIScrollView(frame: pages.bounds); scroll.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        scroll.backgroundColor = Palette.of(settings.theme, dark: traitCollection.userInterfaceStyle == .dark).background
+        let stack = UIStackView(); stack.axis = .vertical; stack.spacing = 6
+        var checked = [Bool](repeating: true, count: fixes.count)
+        for (index, fix) in fixes.enumerated() {
+            let button = UIButton(type: .system)
+            button.setTitle("\u{2611} \(fix.original) \u{2192} \(fix.replacement)", for: .normal)
+            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+            button.addAction(UIAction { [weak button] _ in
+                checked[index].toggle()
+                button?.setTitle("\(checked[index] ? "\u{2611}" : "\u{2610}") \(fix.original) \u{2192} \(fix.replacement)", for: .normal)
+            }, for: .touchUpInside)
+            stack.addArrangedSubview(button)
+        }
+        let button = UIButton(type: .system)
+        button.setTitle(fixes.isEmpty ? "No fixes found. Back" : "Apply selected fixes", for: .normal)
+        button.heightAnchor.constraint(equalToConstant: 48).isActive = true
+        button.addAction(UIAction { [weak self] _ in
+            apply(fixes.enumerated().filter { checked[$0.offset] }.map { $0.element })
+            self?.review?.removeFromSuperview(); self?.review = nil
+        }, for: .touchUpInside)
+        stack.addArrangedSubview(button)
+        scroll.addSubview(stack); stack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 8),
+            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -8),
+            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 12),
+            stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -24)
+        ])
+        review = scroll; pages.addSubview(scroll)
+    }
+
     func reloadStore() {
         library = settings.makeLayoutLibrary()
         renderedSignature = ""
@@ -235,10 +271,10 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
 
     func refresh(resetScroll: Bool = false) {
         library.reload()
-        if resetScroll { showAll(false, animated: false); hideConfirm(); message.isHidden = true; tileScroll.contentOffset = .zero; scrollToApplied = true }
+        if resetScroll { review?.removeFromSuperview(); review = nil; showAll(false, animated: false); hideConfirm(); message.isHidden = true; tileScroll.contentOffset = .zero; scrollToApplied = true }
         let p = Palette.of(settings.theme, dark: traitCollection.userInterfaceStyle == .dark)
         let choices = library.quickTiles
-        let signature = "\(choices.map { $0.choice.id + $0.choice.name + $0.choice.gridJSON })|\(library.appliedKey)|\(settings.theme)|\(traitCollection.userInterfaceStyle.rawValue)|\(settings.profile(landscape))|\(settings.currentLanguage)|\(settings.languages)|\(settings.bool(Prefs.swipeTyping, true))|\(settings.int(Prefs.curve))|\(settings.int(Prefs.keyGap))|\(settings.int(Prefs.cornerRadius))|\(settings.int(Prefs.textScale))|\(settings.followSystemText)|\(UITraitCollection.current.preferredContentSizeCategory.rawValue)|\(UIScreen.main.bounds.size)"
+        let signature = "\(choices.map { $0.choice.id + $0.choice.name + $0.choice.gridJSON })|\(library.appliedKey)|\(settings.theme)|\(traitCollection.userInterfaceStyle.rawValue)|\(settings.profile(landscape))|\(settings.currentLanguage)|\(settings.languages)|\(settings.learning)|\(settings.int(Prefs.curve))|\(settings.int(Prefs.keyGap))|\(settings.int(Prefs.cornerRadius))|\(settings.int(Prefs.textScale))|\(settings.followSystemText)|\(UITraitCollection.current.preferredContentSizeCategory.rawValue)|\(UIScreen.main.bounds.size)"
         guard signature != renderedSignature else { if resetScroll { setNeedsLayout() }; return }
         renderedSignature = signature
         backgroundColor = p.background
@@ -301,12 +337,12 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
         let hand: String
         switch settings.quickOneHand(landscape) { case .center: hand = "Off"; case .left: hand = "Left"; case .right: hand = "Right" }
         let height = settings.int(Prefs.height(landscape))
-        let split = settings.split(landscape), swipe = settings.bool(Prefs.swipeTyping, true)
-        let values = [split ? "On" : "Off", hand, "\(height)%", settings.theme == .system ? "System" : settings.theme.title,
-                      settings.languages.count > 1 ? "Tap to switch" : "Only one", swipe ? "On" : "Off", "All"]
+        let split = settings.split(landscape), learning = settings.learning
+        let values = [split ? "On" : "Off", hand, "\(height)%", learning ? "On" : "Paused",
+                      settings.languages.count > 1 ? "Tap to switch" : "Only one", "Review text", "All"]
         for (index, tile) in tiles.enumerated() {
             tile.state.text = values[index]
-            let on = index == 0 ? split : index == 1 ? hand != "Off" : index == 5 ? swipe : false
+            let on = index == 0 ? split : index == 1 ? hand != "Off" : index == 3 ? learning : false
             let ink = on ? p.smallAccent : p.text
             tile.icon.tintColor = ink; tile.title.textColor = ink; tile.glyph.textColor = ink
             tile.state.textColor = on ? p.smallAccent : p.hint

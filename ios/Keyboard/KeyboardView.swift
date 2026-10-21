@@ -65,6 +65,7 @@ protocol KeyboardViewDelegate: AnyObject {
     func stackFace(_ code: String)
     func wheelChosen()
     func choiceInterrupted()
+    func forgetWord(_ text: String)
     func suggestionPicked(_ text: String)
     func switchLanguage(_ direction: Int)
     /// The globe in the suggestion bar (only on iPhones that need one).
@@ -81,6 +82,7 @@ protocol KeyboardViewDelegate: AnyObject {
 }
 
 extension KeyboardViewDelegate {
+    func forgetWord(_ text: String) {}
     func forwardDelete() {}
     func editDone() {}
     func keyTapped(_ code: String, distances: [Float]) { keyTapped(code) }
@@ -345,6 +347,7 @@ final class KeyboardView: UIView {
         palette = Palette.of(settings.theme, dark: false)
         super.init(frame: .zero)
         isMultipleTouchEnabled = true
+        addInteraction(UIContextMenuInteraction(delegate: self))
         isAccessibilityElement = false
         isOpaque = true
         contentMode = .redraw
@@ -2066,6 +2069,7 @@ final class KeyboardView: UIView {
 
     private func emitKey(_ code: String, _ tap: CGPoint? = nil) {
         if code == Keys.backspace && state.layer == .abc && trackers.values.contains(where: { $0.pk?.item.keys.contains(Keys.abc) == true }) {
+            for held in trackers.values where held.pk?.item.keys.contains(Keys.abc) == true { held.consumed = true; held.stop() }
             delegate?.forwardDelete(); return
         }
         let output = KeyText.output(code, state)
@@ -2435,3 +2439,15 @@ private final class CursorJoystick {
     }
 }
 
+
+
+extension KeyboardView: UIContextMenuInteractionDelegate {
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction, configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+        guard !editMode, let wheel = wheels.first(where: { $0.rect.contains(location) }), !words(wheel).isEmpty else { return nil }
+        let list = words(wheel)
+        let word = wordAt(list, wheelTapIndex(wheel, location.x))
+        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
+            UIMenu(children: [UIAction(title: "Forget word", image: UIImage(systemName: "trash")) { _ in self?.delegate?.forgetWord(word) }])
+        }
+    }
+}

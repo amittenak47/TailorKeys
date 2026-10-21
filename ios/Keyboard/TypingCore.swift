@@ -55,9 +55,9 @@ enum TidyText {
         if start > 0 { while start < chars.count && !chars[start].isWhitespace { start += 1 } }
         return String(chars[start...])
     }
-    static func propose(_ text: String, correct: (String, String) -> String?) -> [TidyFix] {
+    static func propose(_ text: String, startsSentence: Bool = true, correct: (String, String) -> String?) -> [TidyFix] {
         let chars = Array(text)
-        var fixes: [TidyFix] = [], i = 0, sentenceStart = true
+        var fixes: [TidyFix] = [], i = 0, sentenceStart = startsSentence
         while i < chars.count {
             if chars[i] == " " {
                 let start = i

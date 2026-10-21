@@ -22,9 +22,10 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
     /// The orientation being edited.
     private var page: Bool
     private var ratio: CGFloat = 1
-    /// Which tab is showing: 0 Layout, 1 Size, 2 Look, 3 Typing.
+    /// Which tab is showing: 0 Layout, 1 Size, 2 Look, 3 Settings.
+    private var forgetConfirm = false
     private var tab = 0
-    private static let tabNames = ["Layout", "Size", "Look", "Typing"]
+    private static let tabNames = ["Layout", "Size", "Look", "Settings"]
 
     init(settings: KeyboardSettings, landscape: Bool) {
         self.settings = settings
@@ -253,6 +254,37 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
         stack.addArrangedSubview(switchRow("Long-press hints", settings.showHints) { [weak self] on in self?.settings.set(Prefs.showHints, on); self?.changed() })
     }
 
+    private func populateLearnedWords(_ rows: UIStackView, _ search: UISearchTextField, _ title: UILabel) {
+        rows.arrangedSubviews.forEach { rows.removeArrangedSubview($0); $0.removeFromSuperview() }
+        let all = LearningStore.words(settings.learningStore)
+        let words = all.filter { search.text?.isEmpty != false || $0.word.localizedCaseInsensitiveContains(search.text ?? "") }
+        title.text = "Learned words (\(all.count))"
+        for entry in words.prefix(100) {
+            rows.addArrangedSubview(linkButton("\(entry.word) (\(entry.language)) - Remove") { [weak self, weak rows, weak search, weak title] in
+                guard let self = self, let rows = rows, let search = search, let title = title else { return }
+                LearningStore.forget(self.settings.learningStore, language: entry.language, word: entry.word)
+                self.onChange?(); self.populateLearnedWords(rows, search, title)
+            })
+        }
+        if words.isEmpty { rows.addArrangedSubview(label("No learned words")) }
+        if words.count > 100 { rows.addArrangedSubview(label("Search to narrow \(words.count) words.")) }
+    }
+
+    private func learnedWordList() -> UIView {
+        let container = UIStackView(); container.axis = .vertical; container.spacing = 6
+        let title = label("Learned words"); title.font = .boldSystemFont(ofSize: 15)
+        let search = UISearchTextField(); search.placeholder = "Search learned words"; search.autocorrectionType = .no; search.autocapitalizationType = .none
+        let rows = UIStackView(); rows.axis = .vertical
+        search.addAction(UIAction { [weak self, weak rows, weak search, weak title] _ in
+            guard let rows = rows, let search = search, let title = title else { return }
+            self?.populateLearnedWords(rows, search, title)
+        }, for: .editingChanged)
+        [title, search, rows].forEach { container.addArrangedSubview($0) }
+        search.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        populateLearnedWords(rows, search, title)
+        return container
+    }
+
     private func buildTypingTab() {
         let languages = label("Languages")
         languages.font = .boldSystemFont(ofSize: 15)
@@ -274,6 +306,21 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
             self.onLanguageChange?()
             self.build()
         })
+        stack.addArrangedSubview(menuRow("Autocorrect", current: ["Off", "Confident", "Aggressive"][settings.int(Prefs.autocorrect)], options: ["Off", "Confident", "Aggressive"]) { [weak self] value in
+            self?.settings.set(Prefs.autocorrect, ["Off", "Confident", "Aggressive"].firstIndex(of: value) ?? 1); self?.changed(rebuild: true)
+        })
+        addNote("Fix typos when you press space. Backspace right after undoes it.")
+        stack.addArrangedSubview(switchRow("Learn from my typing", settings.learning) { [weak self] value in self?.settings.set(Prefs.learning, value); self?.changed() })
+        stack.addArrangedSubview(linkButton("Forget learned words") { [weak self] in self?.forgetConfirm = true; self?.build() })
+        if forgetConfirm {
+            addNote("Forget learned words and word sequences in every language?")
+            stack.addArrangedSubview(linkButton("Cancel") { [weak self] in self?.forgetConfirm = false; self?.build() })
+            stack.addArrangedSubview(linkButton("Forget all") { [weak self] in
+                guard let self = self else { return }
+                LearningStore.forget(self.settings.learningStore); self.forgetConfirm = false; self.changed(rebuild: true)
+            })
+        }
+        stack.addArrangedSubview(learnedWordList())
         stack.addArrangedSubview(switchRow("Capitalize sentences", settings.autoCap) { [weak self] on in self?.settings.set(Prefs.autoCap, on) })
         stack.addArrangedSubview(switchRow("Automatic space", settings.automaticSpace) { [weak self] on in self?.settings.set(Prefs.automaticSpace, on); self?.changed() })
         addNote("Add a space after swiped and picked words.")

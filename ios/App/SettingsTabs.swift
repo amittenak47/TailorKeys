@@ -241,6 +241,10 @@ struct SettingsScreen: View {
                 .disabled(!model.fullAccessConfirmed)
             }
             Section {
+                Picker("Autocorrect", selection: Binding(get: { prefs.int(Prefs.autocorrect) }, set: { prefs.set(Prefs.autocorrect, $0); model.changed() })) {
+                    Text("Off").tag(0); Text("Confident").tag(1); Text("Aggressive").tag(2)
+                }
+                Text("Fix typos when you press space. Backspace right after undoes it.").font(.footnote).foregroundColor(.secondary)
                 Toggle("Auto-capitalize", isOn: model.bool(Prefs.autoCap, default: true))
                 VStack(alignment: .leading, spacing: 4) {
                     Toggle("Automatic space", isOn: model.bool(Prefs.automaticSpace, default: true))
@@ -258,6 +262,8 @@ struct SettingsScreen: View {
                               value: model.integer(Prefs.longPressMs), suffix: " ms")
             }
             .disabled(!model.fullAccessConfirmed)
+            Section { LearningControls(settings: prefs) { model.changed() } }
+                .disabled(!model.fullAccessConfirmed)
             Section(footer: Text("Hold and push in the empty space to move the cursor.")) {
                 Picker("Cursor control", selection: Binding(get: { prefs.cursorControl }, set: { value in
                     prefs.cursorControl = value; model.changed()
@@ -360,4 +366,43 @@ private struct ThemeSwatch: View {
         .accessibilityLabel(themeTitle(theme))
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
+}
+
+
+private struct LearningControls: View {
+    let settings: KeyboardSettings
+    let changed: () -> Void
+    @State private var confirm = false
+    @State private var query = ""
+    @State private var words: [String] = []
+    private var matches: [String] { words.filter { query.isEmpty || $0.localizedCaseInsensitiveContains(query) } }
+    var body: some View {
+        Group {
+            Toggle("Learn from my typing", isOn: Binding(get: { settings.learning }, set: { settings.set(Prefs.learning, $0); changed() }))
+            Button("Forget learned words", role: .destructive) { confirm = true }
+            if confirm {
+                Text("Forget learned words and word sequences in every language?").font(.footnote)
+                HStack {
+                    Button("Cancel") { confirm = false }
+                    Spacer()
+                    Button("Forget all", role: .destructive) { LearningStore.forget(settings.learningStore); confirm = false; reload(); changed() }
+                }
+            }
+            Text("Learned words (\(words.count))").font(.headline)
+            TextField("Search learned words", text: $query).autocapitalization(.none)
+            ForEach(Array(matches.prefix(100)), id: \.self) { entry in
+                HStack {
+                    Text(entry.components(separatedBy: "\t").last ?? entry)
+                    Spacer()
+                    Button("Remove") {
+                        let parts = entry.components(separatedBy: "\t")
+                        LearningStore.forget(settings.learningStore, language: parts[0], word: parts[1]); reload(); changed()
+                    }.buttonStyle(.borderless)
+                }
+            }
+            if matches.count > 100 { Text("Search to narrow \(matches.count) words.").font(.footnote) }
+            if words.isEmpty { Text("No learned words").foregroundColor(.secondary) }
+        }.onAppear(perform: reload)
+    }
+    private func reload() { words = LearningStore.words(settings.learningStore).map { $0.language + "\t" + $0.word } }
 }
