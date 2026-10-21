@@ -65,10 +65,18 @@ data class ThemeColors(val background: Int, val key: Int, val functionKey: Int, 
         val v = values().toMutableList().apply { this[index] = value }
         return ThemeColors(v[0], v[1], v[2], v[3], v[4], v[5], v[6])
     }
-    fun checks() = listOf("Text on keys" to contrastRatio(text, key), "Text on background" to contrastRatio(text, background),
-        "Text on function keys" to contrastRatio(text, functionKey), "Accent on keys" to contrastRatio(accent, key))
-    val keysBlend: Boolean get() = contrastRatio(key, background) < 1.5 &&
-        contrastRatio(compositeOn(keyOutline, background), background) < 3.0
+    fun checks(): List<ThemeCheck> {
+        val outline = contrastRatio(compositeOn(keyOutline, background), background)
+        val outlinePasses = contrastRatio(key, background) < 1.2 && outline >= 3.0
+        return listOf(
+            ThemeCheck("Text on keys", contrastRatio(text, key), 4.5, listOf(3, 1), 3, key),
+            ThemeCheck("Text on function keys", contrastRatio(text, functionKey), 4.5, listOf(3, 2), 3, functionKey),
+            ThemeCheck("Enter key label", contrastRatio(palette().onAccent, accent), 4.5, listOf(4), 4, palette().onAccent),
+            ThemeCheck(if (outlinePasses) "Keys against background (outline)" else "Keys against background",
+                if (outlinePasses) outline else contrastRatio(key, background), if (outlinePasses) 3.0 else 1.2, listOf(1, 0, 6), 1, background),
+            ThemeCheck("Pressed against keys", contrastRatio(pressed, key), 1.2, listOf(5, 1), 5, key))
+    }
+    val keysBlend: Boolean get() = !checks()[3].passes
     companion object {
         val labels = listOf("Background", "Keys", "Function keys", "Text", "Accent", "Pressed", "Key outline")
         val keys = listOf("background", "key", "functionKey", "text", "accent", "pressed", "keyOutline")
@@ -81,6 +89,45 @@ data class ThemeColors(val background: Int, val key: Int, val functionKey: Int, 
         fun hex(value: Int) = if (value ushr 24 == 255) "#%06X".format(java.util.Locale.ROOT, value and 0xFFFFFF)
             else "#%08X".format(java.util.Locale.ROOT, value)
     }
+}
+
+data class ThemeCheck(val label: String, val ratio: Double, val target: Double, val channels: List<Int>, val fixChannel: Int, val background: Int) {
+    val passes get() = ratio >= target
+    val warning get() = when {
+        target == 4.5 -> "Hard to read. Aim for 4.5 : 1 or more."
+        fixChannel == 5 -> "Pressed keys look the same. Aim for 1.2 : 1 or more."
+        else -> "Keys blend into the background. Aim for 1.2 : 1, or a 3 : 1 outline."
+    }
+}
+
+/** HSL hue in degrees, saturation and lightness. Pure sRGB math for portable suggestions. */
+fun themeHsl(color: Int): DoubleArray {
+    val r = ((color ushr 16) and 255) / 255.0; val g = ((color ushr 8) and 255) / 255.0; val b = (color and 255) / 255.0
+    val high = maxOf(r, g, b); val low = minOf(r, g, b); val delta = high - low; val light = (high + low) / 2
+    val hue = if (delta == 0.0) 0.0 else when (high) { r -> ((g - b) / delta + 6) % 6; g -> (b - r) / delta + 2; else -> (r - g) / delta + 4 } * 60
+    return doubleArrayOf(hue, if (delta == 0.0) 0.0 else delta / (1 - kotlin.math.abs(2 * light - 1)), light)
+}
+
+private fun themeRgb(hue: Double, saturation: Double, light: Double): Int {
+    val chroma = (1 - kotlin.math.abs(2 * light - 1)) * saturation
+    val x = chroma * (1 - kotlin.math.abs((hue / 60) % 2 - 1)); val m = light - chroma / 2
+    val rgb = when ((hue / 60).toInt()) { 0 -> doubleArrayOf(chroma, x, 0.0); 1 -> doubleArrayOf(x, chroma, 0.0); 2 -> doubleArrayOf(0.0, chroma, x); 3 -> doubleArrayOf(0.0, x, chroma); 4 -> doubleArrayOf(x, 0.0, chroma); else -> doubleArrayOf(chroma, 0.0, x) }
+    fun channel(i: Int) = kotlin.math.floor((rgb[i] + m) * 255 + .5).toInt().coerceIn(0, 255)
+    return 0xFF000000.toInt() or (channel(0) shl 16) or (channel(1) shl 8) or channel(2)
+}
+
+/** Nearest lightness step meeting the target without shifting the quantized hue. */
+fun closestReadable(fg: Int, bg: Int, target: Double): Int {
+    if (contrastRatio(fg, bg) >= target) return fg
+    val hsl = themeHsl(fg)
+    for (step in 1..10_000) for (direction in listOf(-1, 1)) {
+        val light = hsl[2] + direction * step / 10_000.0
+        if (light !in 0.0..1.0) continue
+        val candidate = themeRgb(hsl[0], hsl[1], light)
+        val diff = kotlin.math.abs(themeHsl(candidate)[0] - hsl[0])
+        if (contrastRatio(candidate, bg) >= target && minOf(diff, 360 - diff) <= 1) return candidate
+    }
+    return listOf(0xFF000000.toInt(), 0xFFFFFFFF.toInt()).maxBy { contrastRatio(it, bg) }
 }
 
 data class CustomTheme(val id: String, val name: String, val colors: ThemeColors) {

@@ -348,7 +348,9 @@ final class KeyboardSettings {
         var theme = theme
         theme.name = String(theme.name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(24))
         if theme.name.isEmpty { theme.name = "Custom" }
-        d.set(CustomTheme.encode(customThemes.filter { $0.id != theme.id } + [theme]), forKey: Prefs.themesCustom)
+        var themes = customThemes
+        if let index = themes.firstIndex(where: { $0.id == theme.id }) { themes[index] = theme } else { themes.append(theme) }
+        d.set(CustomTheme.encode(themes), forKey: Prefs.themesCustom)
         themeID = theme.selection
     }
     func deleteTheme(_ id: String) {

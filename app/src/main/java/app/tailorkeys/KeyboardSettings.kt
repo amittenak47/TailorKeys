@@ -275,7 +275,10 @@ class KeyboardSettings internal constructor(
     fun setTheme(theme: ThemeName) = setThemeId(theme.name)
     fun setThemeId(id: String) { prefs.edit().putString(Prefs.THEME, resolvedThemeId(id)).apply(); syncAppearance(Prefs.THEME) }
     fun saveTheme(theme: CustomTheme) {
-        val themes = customThemes().filterNot { it.id == theme.id } + theme.copy(name = theme.name.trim().take(24).ifEmpty { "Custom" })
+        val themes = customThemes().toMutableList()
+        val saved = theme.copy(name = theme.name.trim().take(24).ifEmpty { "Custom" })
+        val index = themes.indexOfFirst { it.id == theme.id }
+        if (index >= 0) themes[index] = saved else themes.add(saved)
         prefs.edit().putString(Prefs.THEMES_CUSTOM, CustomTheme.encode(themes)).apply()
         setThemeId(theme.selection)
     }

@@ -5,6 +5,24 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TypingMetricsTest {
+    @Test fun nextKeyFindsLettersSpacePunctuationAndStackFaces() {
+        val grid = app.tailorkeys.layout.KeyGrid.template(app.tailorkeys.layout.Template.STANDARD)
+        val sentence = "A p,.'?!"
+        sentence.forEachIndexed { index, char ->
+            val key = requireNotNull(nextTypingKey(grid, sentence, index))
+            val expected = when (char) { ' ' -> "space"; ',' -> "v"; '.' -> "b"; '?' -> "x"; '!' -> "z"; else -> char.lowercaseChar().toString() }
+            assertTrue("$char", expected in key.keys)
+        }
+        assertNull(nextTypingKey(grid, sentence, sentence.length))
+        assertNull(nextTypingKey(grid, sentence, -1))
+        val key = grid.items.first { "a" in it.keys }; key.keys.add("Ω")
+        // Case-insensitive letter lookup uses the stored lower-case face.
+        key.keys[key.keys.lastIndex] = "ω"
+        assertSame(key, nextTypingKey(grid, "Ω", 0))
+        key.keys.add(",")
+        assertSame(key, nextTypingKey(grid, ",", 0))
+        assertNull(nextTypingKey(grid, "🙂", 0))
+    }
     @Test fun wpmUsesFiveCharactersAndElapsedMinutes() {
         assertEquals(60.0, TypingSession.wpm(300, 60_000), 0.0)
         assertEquals(60.0, TypingSession.wpm(75, 15_000), 0.0)

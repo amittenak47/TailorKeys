@@ -13,14 +13,14 @@ struct InsertSettingsOptions: View {
             Section { Button("‹  \(page)", action: back).frame(minHeight: 48) }
             if page == "Emoji" {
                 Section(footer: Text("Applies to hands and people. Hold an emoji in the panel to pick another.")) {
-                    Text("Default skin tone")
+                    HStack { Text("Default skin tone"); Spacer(); Text(InsertPrefs.toneNames[tone]).foregroundColor(.secondary) }
                     HStack(spacing: 0) {
                         ForEach(0..<6, id: \.self) { index in
                             Button { prefs.set(index, forKey: InsertPrefs.tone); model.changed() } label: {
                                 VStack(spacing: 6) {
                                     ZStack {
                                         Circle().fill(toneColors[index]).frame(width: 32, height: 32)
-                                        if prefs.integer(forKey: InsertPrefs.tone) == index { Image(systemName: "checkmark").foregroundColor(.black) }
+                                        if tone == index { Image(systemName: "checkmark").font(.caption.bold()).foregroundColor(.white).frame(width: 22, height: 22).background(Circle().fill(Color(white: 0.14))) }
                                     }
                                     Text(InsertPrefs.toneNames[index]).font(.caption2).lineLimit(1).minimumScaleFactor(0.65)
                                 }.frame(maxWidth: .infinity, minHeight: 76)
@@ -28,24 +28,33 @@ struct InsertSettingsOptions: View {
                                 .accessibilityValue(prefs.integer(forKey: InsertPrefs.tone) == index ? "Selected" : "")
                         }
                     }
-                    Text(["👍", "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿"][min(max(prefs.integer(forKey: InsertPrefs.tone), 0), 5)]).font(.system(size: 32)).accessibilityLabel("Skin tone preview")
+                    HStack {
+                        Text("Preview").font(.caption)
+                        ForEach(Array(["👋", "👍", "🙌", "🤝", "💪"].enumerated()), id: \.offset) { _, base in
+                            Text(base + (tone == 0 ? "" : String(UnicodeScalar(0x1F3FA + tone)!))).font(.system(size: 28))
+                        }
+                    }.accessibilityLabel("Skin tone preview, \(InsertPrefs.toneNames[tone])")
                 }
                 Section {
-                    Toggle("Show recents", isOn: flag(InsertPrefs.recents, true))
-                    Button("Clear emoji and kaomoji recents", role: .destructive) { repository.clearRecents(); model.changed() }
+                    Toggle(isOn: flag(InsertPrefs.recents, true)) { settingsLabel("Show recent emoji", "Recents come first in the panel") }
+                    clearRow("Clear recent emoji", "Removes \(prefs.stringArray(forKey: "insert_recent_Emoji")?.count ?? 0) recents") { prefs.removeObject(forKey: "insert_recent_Emoji"); model.changed() }
+                    Toggle(isOn: flag(InsertPrefs.kaomoji, true)) { settingsLabel("Show Kaomoji tab", "Faces such as (^_^) next to emoji") }
                 }
             } else if page == "Clipboard and notes" {
-                Section { Toggle("Clipboard history", isOn: flag(InsertPrefs.history, false)) }
+                Section { Toggle(isOn: flag(InsertPrefs.history, false)) { settingsLabel("Clipboard history", "Keep what you copy so you can paste it again.") } }
                 Section(header: Text("Keep items for").textCase(nil)) {
                     Picker("Keep items for", selection: Binding(get: { repository.keep.rawValue }, set: { prefs.set($0, forKey: InsertPrefs.keep); repository.change { _ in }; model.changed() })) {
                         ForEach(ClipKeep.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
                     }.pickerStyle(.inline)
                 }
-                Section(footer: Text("Pinned items and notes stay until you delete them.")) {
-                    Button("Clear clipboard history now", role: .destructive) { repository.change { $0.clear() }; model.changed() }
+                Section {
+                    clearRow("Clear clipboard history now", "Removes \(repository.store().clips.filter { !$0.pinned }.count) items. Pinned items stay.") { repository.change { $0.clear() }; model.changed() }
                     Button("Manage notes · \(repository.store().notes.count)") { managing = true }
                 }
-                Section { Text("Items stay on this device and clear after \(repository.keep.title). Clipboard history in the keyboard needs Full Access. The keyboard reads the pasteboard only when you tap Read clipboard; iOS may ask permission. Notes still work without Full Access.").font(.footnote).foregroundColor(.secondary) }
+                Section {
+                    Text("Private by design").font(.subheadline.weight(.semibold))
+                    Text("Items stay on this device and clear after \(repository.keep.title). Clipboard history in the keyboard needs Full Access. The keyboard reads the pasteboard only when you tap Read clipboard; iOS may ask permission. Notes still work without Full Access.").font(.footnote).foregroundColor(.secondary)
+                }
             } else {
                 Section(header: Text("Dictation").textCase(nil)) {
                     Label("Dictation is built into iPhone and iPad", systemImage: "mic")
@@ -55,6 +64,18 @@ struct InsertSettingsOptions: View {
             }
         }
         .sheet(isPresented: $managing) { InsertNotesManager(model: model) }
+    }
+
+    private var tone: Int { min(max(prefs.integer(forKey: InsertPrefs.tone), 0), 5) }
+    private func settingsLabel(_ title: String, _ note: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) { Text(title); Text(note).font(.footnote).foregroundColor(.secondary) }
+    }
+    private func clearRow(_ title: String, _ note: String, clear: @escaping () -> Void) -> some View {
+        HStack {
+            settingsLabel(title, note)
+            Spacer()
+            Button("Clear", role: .destructive, action: clear).buttonStyle(.bordered).frame(minHeight: 44).accessibilityLabel(title)
+        }
     }
 
     private var toneColors: [Color] {

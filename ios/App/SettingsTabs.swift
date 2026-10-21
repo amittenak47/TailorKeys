@@ -243,13 +243,6 @@ struct SettingsScreen: View {
             .disabled(!model.fullAccessConfirmed)
             Section { LearningControls(settings: prefs) { model.changed() } }
                 .disabled(!model.fullAccessConfirmed)
-            Section(header: Text("Panels").textCase(nil)) {
-                let repository = InsertRepository(defaults: { prefs.insertDefaults })
-                let tone = min(max(prefs.insertDefaults.integer(forKey: InsertPrefs.tone), 0), 5)
-                insertLink("Emoji", "\(InsertPrefs.toneNames[tone]) skin tone, recents \(prefs.insertDefaults.boolDefault(InsertPrefs.recents, true) ? "on" : "off")", "face.smiling")
-                insertLink("Clipboard and notes", "History \(prefs.insertDefaults.bool(forKey: InsertPrefs.history) ? "on" : "off"), keeps \(repository.keep.title), \(repository.store().notes.count) notes", "doc.on.clipboard")
-                insertLink("Dictation", "Use the system microphone below the keyboard", "mic")
-            }
             Section(footer: Text("Hold and push in the empty space to move the cursor.")) {
                 Picker("Cursor control", selection: Binding(get: { prefs.cursorControl }, set: { value in
                     prefs.cursorControl = value; model.changed()
@@ -270,6 +263,13 @@ struct SettingsScreen: View {
                               value: model.integer(Prefs.touchSlack), suffix: " pt")
             }
             .disabled(!model.fullAccessConfirmed)
+            Section(header: Text("Panels").textCase(nil)) {
+                let repository = InsertRepository(defaults: { prefs.insertDefaults })
+                let tone = min(max(prefs.insertDefaults.integer(forKey: InsertPrefs.tone), 0), 5)
+                insertLink("Emoji", "\(InsertPrefs.toneNames[tone]) skin tone, recents \(prefs.insertDefaults.boolDefault(InsertPrefs.recents, true) ? "on" : "off")", "face.smiling")
+                insertLink("Clipboard and notes", "History \(prefs.insertDefaults.bool(forKey: InsertPrefs.history) ? "on" : "off"), keeps \(repository.keep.title), \(repository.store().notes.count) notes", "doc.on.clipboard")
+                insertLink("Dictation", "Use the system microphone below the keyboard", "mic")
+            }
             Section(header: Text("Assist").textCase(nil).font(.system(size: 15, weight: .semibold))) {
                 Toggle("Space accepts chosen word", isOn: model.bool(Prefs.spaceAccepts, default: true))
                 assistedToggle("Swipe typing", Prefs.swipeTyping, default: true)

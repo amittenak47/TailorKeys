@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -77,6 +78,7 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
     var fieldValue by remember(session) { mutableStateOf(TextFieldValue()) }
     var tick by remember(session) { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     var finished by remember(session) { mutableStateOf(false) }
+    var thisTest by remember(session) { mutableStateOf<TypingResult?>(null) }
     var applied by remember { mutableStateOf(entry.key == state.library.inUse) }
     fun keyboardLabel(id: String): String = if (isTailorKeysIme(id)) "TailorKeys" else
         context.getSystemService(InputMethodManager::class.java).inputMethodList.firstOrNull { it.id == id }?.loadLabel(context.packageManager)?.toString() ?: id.substringBefore('/').substringAfterLast('.').ifBlank { "Keyboard" }
@@ -146,16 +148,16 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
                         TextButton({ comparing = !comparing; if (comparing) keyboard?.hide() }) { Text(if (comparing) "Back to test" else "Compare") }
                     }
                     if (comparing) {
-                        KeyboardComparison(state.library.keyboardAverages(), ::keyboardLabel)
+                        KeyboardComparison(state.library.keyboardAverages(), ::keyboardLabel, thisTest)
                     } else if (finished) {
-                        Text("✓ Test complete", color = Color(0xFF8ED5BE), fontWeight = FontWeight.Medium,
+                        Text("✓ Test complete", color = Color(if (colors.background.luminance() < .5f) 0xFF8ED1B8 else 0xFF1E6B52), fontWeight = FontWeight.Medium,
                             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
                         Row(verticalAlignment = Alignment.Bottom) {
                             Text("${metrics.wpm.roundToInt()}", fontSize = 72.sp, lineHeight = 80.sp, fontWeight = FontWeight.SemiBold,
                                 modifier = Modifier.semantics { contentDescription = "${metrics.wpm.roundToInt()} words per minute" })
                             Column(Modifier.padding(start = 8.dp, bottom = 8.dp)) {
                                 Text("words per minute")
-                                average?.let { Text("${if (metrics.wpm >= it) "↑" else "↓"} ${kotlin.math.abs(metrics.wpm - it).roundToInt()} ${if (metrics.wpm >= it) "above" else "below"} your average (${it.roundToInt()})", style = MaterialTheme.typography.labelMedium) }
+                                average?.let { Text("${kotlin.math.abs(metrics.wpm - it).roundToInt()} ${if (metrics.wpm >= it) "above" else "below"} your $label average (${it.roundToInt()})", style = MaterialTheme.typography.labelMedium) }
                             }
                         }
                         SpeedChart(session.samples.toList(), average, Modifier.fillMaxWidth().height(80.dp))
@@ -173,7 +175,7 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
                                 }.toAnnotatedString())
                             }
                         }
-                        KeyboardComparison(state.library.keyboardAverages(), ::keyboardLabel)
+                        KeyboardComparison(state.library.keyboardAverages(), ::keyboardLabel, thisTest)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(::restart, Modifier.weight(1f)) { Text("New sentence") }
                             FilledTonalButton({ state.useLayout(entry); applied = true }, Modifier.weight(1f), enabled = tailorkeys && !applied) { Text(if (applied) "✓ In use" else "✓ Use layout") }
@@ -217,7 +219,7 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
                                         session.update(next.text, tick)
                                         if (session.complete) {
                                             finished = true
-                                            session.takeResult(System.currentTimeMillis())?.let { state.library.record(entry.key, it) }
+                                            session.takeResult(System.currentTimeMillis())?.let { thisTest = it; state.library.record(entry.key, it) }
                                         }
                                     }
                                 }, Modifier.fillMaxWidth().heightIn(min = 96.dp).focusRequester(focus)
@@ -256,30 +258,42 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
             }
         }
         // Hand the moving preview over to the real system IME when focus arrives.
-        if (tailorkeys && !imeVisible && !finished && !comparing) AndroidView(factory = { KeyboardView(context, state.settings).apply { previewSplit = entry.split; grid = entry.grid() } },
-            modifier = Modifier.fillMaxWidth().layoutMorph("keyboard-preview").wrapContentHeight(unbounded = true)
+        if (tailorkeys && !imeVisible) {
+            val preview = remember(entry.key) { KeyboardView(context, state.settings).apply { previewSplit = entry.split; grid = entry.grid(); setOnTouchListener { _, _ -> true } } }
+            val outline = remember(preview) { NextKeyOutline(preview, state.settings) }
+            AndroidView(factory = { preview.apply { overlay.add(outline) } }, update = {
+                outline.keyId = if (mode == TypingMode.TEST && !comparing) nextTypingKey(it.grid, session.sentence, session.text.length, state.settings.currentLanguage())?.id else null
+                outline.invalidateSelf()
+            }, modifier = Modifier.fillMaxWidth().layoutMorph("keyboard-preview").wrapContentHeight(unbounded = true)
                 .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)))
+        }
         if (!tailorkeys && !imeVisible) Surface(Modifier.fillMaxWidth().height(160.dp), color = colors.surfaceContainer) {
             Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 Text("$label keyboard area", fontWeight = FontWeight.Medium)
-                Text("Drawn by the system", style = MaterialTheme.typography.bodySmall)
+                Text("Drawn by the system. TailorKeys shows no keys, preview or key hints here.", style = MaterialTheme.typography.bodySmall)
             }
         }
     }
 }
 
 @Composable
-private fun KeyboardComparison(averages: List<KeyboardAverage>, label: (String) -> String) {
+private fun KeyboardComparison(averages: List<KeyboardAverage>, label: (String) -> String, thisTest: TypingResult?) {
     val colors = MaterialTheme.colorScheme
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Compare keyboards", style = MaterialTheme.typography.titleMedium)
-        Text("Saved Test sentence results", style = MaterialTheme.typography.labelSmall)
+        Text("All Test sentence results", style = MaterialTheme.typography.labelSmall)
         if (averages.isEmpty()) Text("Finish a test sentence to compare keyboards.")
         Row { Text("Keyboard", Modifier.weight(1.4f)); Text("Avg wpm", Modifier.weight(1f)); Text("Accuracy", Modifier.weight(1f)); Text("Tests", Modifier.weight(.6f)) }
         averages.forEach { row ->
             Surface(color = if (isTailorKeysIme(row.keyboard)) colors.secondaryContainer else colors.surfaceContainer, shape = RoundedCornerShape(12.dp)) {
                 Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(label(row.keyboard), Modifier.weight(1.4f), fontWeight = if (isTailorKeysIme(row.keyboard)) FontWeight.Bold else FontWeight.Normal)
+                    Column(Modifier.weight(1.4f)) {
+                        Text(label(row.keyboard), fontWeight = if (isTailorKeysIme(row.keyboard)) FontWeight.Bold else FontWeight.Normal)
+                        if (thisTest != null && keyboardGroup(row.keyboard) == keyboardGroup(thisTest.keyboard)) {
+                            Text("✓ This test", color = colors.onSecondaryContainer, style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.background(colors.secondaryContainer, RoundedCornerShape(8.dp)).padding(horizontal = 6.dp, vertical = 2.dp))
+                        }
+                    }
                     Column(Modifier.weight(1f).padding(end = 8.dp)) {
                         Text("${row.wpm.roundToInt()}")
                         LinearProgressIndicator(progress = { (row.wpm / (averages.maxOfOrNull { it.wpm } ?: 1.0).coerceAtLeast(1.0)).toFloat() },
@@ -290,7 +304,38 @@ private fun KeyboardComparison(averages: List<KeyboardAverage>, label: (String) 
                 }
             }
         }
+        val summaries = averages.comparisonSummaries()
+        summaries.forEach { summary ->
+            Text(summary.description() + if (summaries.size > 1) " than ${label(summary.other)}" else "", style = MaterialTheme.typography.bodySmall)
+        }
     }
+}
+
+/** Settings-only overlay, using the preview's public accessibility bounds for its actual layout. */
+private class NextKeyOutline(private val preview: KeyboardView, private val settings: KeyboardSettings) : android.graphics.drawable.Drawable() {
+    var keyId: Int? = null
+    private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = 2 * preview.resources.displayMetrics.density
+    }
+    init {
+        preview.addOnLayoutChangeListener { _, _, _, right, bottom, _, _, _, _ -> setBounds(0, 0, right, bottom); invalidateSelf() }
+    }
+    override fun draw(canvas: android.graphics.Canvas) {
+        val id = keyId ?: return
+        val index = preview.grid.items.filter { it.r < preview.grid.rows }.indexOfFirst { it.id == id }
+        if (index < 0) return
+        val node = preview.accessibilityNodeProvider?.createAccessibilityNodeInfo(index) ?: return
+        val bounds = android.graphics.Rect().also { node.getBoundsInParent(it) }
+        node.recycle()
+        val rect = android.graphics.RectF(bounds).apply { inset(paint.strokeWidth / 2, paint.strokeWidth / 2) }
+        paint.color = Palette.of(preview.context, settings).accent
+        val radius = settings.int(Prefs.CORNER_RADIUS) * preview.resources.displayMetrics.density
+        canvas.drawRoundRect(rect, radius, radius, paint)
+    }
+    override fun setAlpha(alpha: Int) { paint.alpha = alpha }
+    override fun setColorFilter(filter: android.graphics.ColorFilter?) { paint.colorFilter = filter }
+    @Deprecated("Deprecated in Android") override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
 }
 
 @Composable

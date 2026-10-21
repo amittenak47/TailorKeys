@@ -1,5 +1,14 @@
 import Foundation
 
+func nextTypingKey(_ grid: KeyGrid, sentence: String, typedLength: Int, language: String = "en") -> GridKey? {
+    let characters = Array(sentence)
+    guard characters.indices.contains(typedLength) else { return nil }
+    let next = characters[typedLength]
+    let code = next == " " ? Keys.space : String(next).lowercased()
+    let state = InputState(); state.language = language
+    return grid.items.first { $0.keys.contains(code) } ?? grid.items.first { key in key.keys.contains { KeyText.longPress($0, state) == code } }
+}
+
 enum TypingMode: String, CaseIterable { case free, test }
 
 struct SpeedSample {

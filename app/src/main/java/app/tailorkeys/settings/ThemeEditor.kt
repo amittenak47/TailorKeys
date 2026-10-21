@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -23,6 +24,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
@@ -67,11 +70,19 @@ internal fun ThemeControl(state: SettingsState) {
             customs.forEach { theme -> ThemeTile(theme.name, theme.colors.palette(), selected == theme.selection) {
                 state.settings.setThemeId(theme.selection); deleting = false
             } }
-            TextButton({ creating = true; editor = null }, Modifier.widthIn(min = 112.dp).heightIn(min = 88.dp)) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Box(Modifier.size(44.dp).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) { Text("+") }
-                    Text("Create theme", maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelMedium)
+            Column(Modifier.width(84.dp).heightIn(min = 88.dp)
+                .clickable(role = Role.Button) { creating = true; editor = null }
+                .semantics(mergeDescendants = true) { contentDescription = "Create theme" }.padding(4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                val outline = MaterialTheme.colorScheme.outline
+                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                    Canvas(Modifier.fillMaxSize().padding(1.dp)) {
+                        drawRoundRect(outline, cornerRadius = CornerRadius(14.dp.toPx()),
+                            style = Stroke(1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx()))))
+                    }
+                    Text("+", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
                 }
+                Text("Create", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
             }
         }
         if (custom != null) {
@@ -123,9 +134,10 @@ private fun ThemeEditor(state: SettingsState, existing: CustomTheme?, close: () 
     val context = LocalContext.current
     var name by remember { mutableStateOf(existing?.name ?: "") }
     var colors by remember { mutableStateOf(existing?.colors ?: ThemeColors.from(Palette.of(context, state.settings))) }
-    var preset by remember { mutableStateOf(state.settings.themeId()) }
+    var preset by remember { mutableStateOf(existing?.selection) }
     var channel by remember { mutableIntStateOf(3) }
     var picker by remember { mutableStateOf(false) }
+    var pickerOriginal by remember { mutableIntStateOf(colors.text) }
     val preview = remember { KeyboardView(context, state.settings).apply { grid = state.preview.grid; setOnTouchListener { _, _ -> true }
         setSuggestions(listOf("helpful", "helicopter", "helmet"), listOf("hello", "help", "held"), "hel") } }
     Dialog(close, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
@@ -148,33 +160,38 @@ private fun ThemeEditor(state: SettingsState, existing: CustomTheme?, close: () 
                             Text("Start from", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 (ThemeName.entries.map { it.name to it.title } + state.customThemes().map { it.selection to it.name }).forEach { (id, title) ->
-                                    FilterChip(preset == id, { preset = id; colors = ThemeColors.from(Palette.resolve(id, state.settings.customThemes(), context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES)) }, label = { Text(title) })
+                                    FilterChip(preset == id, { preset = id; colors = ThemeColors.from(Palette.resolve(id, state.settings.customThemes(), context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES)); pickerOriginal = colors.values()[channel] }, label = { Text(title) })
                                 }
                             }
                             Text("Colours", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
                             ThemeColors.labels.forEachIndexed { i, label ->
-                                Surface(onClick = { channel = i; picker = true }, shape = RoundedCornerShape(14.dp),
-                                    color = if (channel == i) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer) {
+                                val open = channel == i && (wide || picker)
+                                val low = colors.checks().any { !it.passes && i in it.channels }
+                                Surface(onClick = { if (!open) pickerOriginal = colors.values()[i]; channel = i; picker = true }, shape = RoundedCornerShape(14.dp),
+                                    color = if (open) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer) {
                                     Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                         Box(Modifier.size(28.dp).background(Color(colors.values()[i]), RoundedCornerShape(20.dp)).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(20.dp)))
-                                        Text(label, Modifier.weight(1f), fontWeight = if (channel == i) FontWeight.Bold else FontWeight.Normal)
+                                        Column(Modifier.weight(1f)) {
+                                            Text(label, fontWeight = if (open) FontWeight.Bold else FontWeight.Normal)
+                                            if (low) Text("⚠ Low contrast", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                                        }
                                         Text(ThemeColors.hex(colors.values()[i]), style = MaterialTheme.typography.labelMedium)
-                                        Text("›")
+                                        Text(if (open) "⌄" else "›")
                                     }
                                 }
                             }
-                            if (!wide) Readability(colors)
+                            if (!wide) Readability(colors) { colors = it }
                         }
                         if (wide) Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            key(channel) { ThemeColorPicker(ThemeColors.labels[channel], colors.values()[channel], channel == 6) { colors = colors.replacing(channel, it) } }
-                            Readability(colors)
+                            key(channel) { ThemeColorPicker(ThemeColors.labels[channel], colors.values()[channel], pickerOriginal, colors.pickerSuggestion(channel), channel == 6) { colors = colors.replacing(channel, it) } }
+                            Readability(colors) { colors = it }
                         }
                     }
                 }
                 if (picker && !wide) ModalBottomSheet(onDismissRequest = { picker = false }) {
                     Column(Modifier.heightIn(max = this@BoxWithConstraints.maxHeight * .65f).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        key(channel) { ThemeColorPicker(ThemeColors.labels[channel], colors.values()[channel], channel == 6) { colors = colors.replacing(channel, it) } }
-                        Readability(colors)
+                        key(channel) { ThemeColorPicker(ThemeColors.labels[channel], colors.values()[channel], pickerOriginal, colors.pickerSuggestion(channel), channel == 6) { colors = colors.replacing(channel, it) } }
+                        Readability(colors) { colors = it }
                         Button({ picker = false }, Modifier.align(Alignment.End)) { Text("✓ Done") }
                     }
                 }
@@ -184,19 +201,22 @@ private fun ThemeEditor(state: SettingsState, existing: CustomTheme?, close: () 
 }
 
 @Composable
-private fun Readability(colors: ThemeColors) {
+private fun Readability(colors: ThemeColors, change: (ThemeColors) -> Unit) {
     Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Readability", fontWeight = FontWeight.Bold)
-            if (colors.keysBlend) Text("Keys blend into the background", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelLarge)
-            colors.checks().forEach { (label, ratio) ->
+            colors.checks().forEach { check ->
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(if (ratio < 4.5) "⚠" else "✓")
+                    Text(if (check.passes) "✓" else "⚠", color = if (check.passes) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
                     Column(Modifier.weight(1f)) {
-                        Text(label, style = MaterialTheme.typography.labelLarge)
-                        if (ratio < 4.5) Text("Hard to read. Aim for 4.5 : 1 or more.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                        Text(check.label, style = MaterialTheme.typography.labelLarge)
+                        if (!check.passes) {
+                            Text(check.warning, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                            val suggestion = remember(colors, check) { closestReadable(colors.values()[check.fixChannel], check.background, check.target) }
+                            TextButton({ change(colors.replacing(check.fixChannel, suggestion)) }) { Text("Use ${ThemeColors.hex(suggestion)}") }
+                        }
                     }
-                    Text(String.format(Locale.ROOT, "%.1f : 1", ratio), style = MaterialTheme.typography.labelMedium)
+                    Text(String.format(Locale.ROOT, "%.1f : 1", check.ratio), style = MaterialTheme.typography.labelMedium)
                 }
             }
             Text("You can save with warnings. They are advice, not rules.", style = MaterialTheme.typography.labelSmall)
@@ -205,7 +225,7 @@ private fun Readability(colors: ThemeColors) {
 }
 
 @Composable
-private fun ThemeColorPicker(label: String, color: Int, allowTransparent: Boolean = false, change: (Int) -> Unit) {
+private fun ThemeColorPicker(label: String, color: Int, resetColor: Int, suggestion: Pair<Int, Double>?, allowTransparent: Boolean = false, change: (Int) -> Unit) {
     val initial = remember { FloatArray(3).also { AndroidColor.colorToHSV(color, it) } }
     var hue by remember { mutableFloatStateOf(initial[0]) }
     var saturation by remember { mutableFloatStateOf(initial[1]) }
@@ -242,5 +262,22 @@ private fun ThemeColorPicker(label: String, color: Int, allowTransparent: Boolea
             Slider(hsv[i], { value -> when (i) { 0 -> update(h = value); 1 -> update(s = value); else -> update(v = value) } },
                 valueRange = 0f..(if (i == 0) 360f else 1f), modifier = Modifier.semantics { contentDescription = title })
         }
+        suggestion?.let { (readable, ratio) ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Closest readable colour ${ThemeColors.hex(readable)} reads at ${String.format(Locale.ROOT, "%.1f", ratio)} : 1", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
+                TextButton({ change(readable) }) { Text("Use") }
+            }
+        }
+        TextButton({ change(resetColor) }, Modifier.align(Alignment.End)) { Text("↻ Reset") }
+    }
+}
+
+@Composable
+private fun ThemeColors.pickerSuggestion(channel: Int): Pair<Int, Double>? = remember(this, channel) {
+    checks().firstOrNull { !it.passes && channel in it.channels }?.let { check ->
+        val against = if (channel == check.fixChannel || channel == 6) check.background else values()[check.fixChannel]
+        val foreground = if (channel == 6) values()[channel] or 0xFF000000.toInt() else values()[channel]
+        val suggestion = closestReadable(foreground, against, if (channel == 6) 3.0 else check.target)
+        suggestion to contrastRatio(suggestion, against)
     }
 }

@@ -280,6 +280,20 @@ class LayoutLibraryTest {
         assertEquals(1, store.results("preset:STANDARD").count { isTailorKeysIme(it.keyboard) })
         assertEquals(20, store.results("preset:STANDARD").count { it.keyboard == "gboard/.Ime" })
     }
+    @Test fun comparisonsNeedTwoKeyboardsAndUsePercentagePoints() {
+        val tailor = KeyboardAverage(TAILORKEYS_IME, 52.0, .95, 14)
+        val other = KeyboardAverage("gboard/.Ime", 47.0, .93, 9)
+        assertTrue(emptyList<KeyboardAverage>().comparisonSummaries().isEmpty())
+        assertTrue(listOf(tailor).comparisonSummaries().isEmpty())
+        assertTrue(listOf(other).comparisonSummaries().isEmpty())
+        val summary = listOf(tailor, other).comparisonSummaries().single()
+        assertEquals(5.0, summary.wpmDifference, .00001)
+        assertEquals(2.0, summary.accuracyPoints, .00001)
+        assertEquals("TailorKeys is 5 wpm faster on average, 2 points more accurate", summary.description())
+        val slower = listOf(tailor.copy(wpm = 43.0, accuracy = .90), other).comparisonSummaries().single()
+        assertEquals("TailorKeys is 4 wpm slower on average, 3 points less accurate", slower.description())
+        assertEquals(2, listOf(tailor, other, other.copy(keyboard = "another/.Ime")).comparisonSummaries().size)
+    }
     @Test fun midSentenceKeyboardSwitchDiscardsPartialTimingAndMistakes() {
         var session = TypingSession(TypingMode.TEST, "hello")
         session.update("x", 1000); session.update("he", 2000)

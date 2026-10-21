@@ -6,6 +6,7 @@ import app.tailorkeys.layout.Template
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
+import kotlin.math.roundToInt
 
 /** The wire format is shared with iOS. Only the applied tile is persisted as layout_selected. */
 internal object LayoutKeys {
@@ -40,6 +41,19 @@ internal fun isTailorKeysIme(id: String) = id.substringBefore('/') == "app.tailo
 internal fun keyboardGroup(id: String) = if (isTailorKeysIme(id)) TAILORKEYS_IME else id
 internal data class TypingResult(val wpm: Double, val accuracy: Double, val at: Long, val keyboard: String = TAILORKEYS_IME)
 internal data class KeyboardAverage(val keyboard: String, val wpm: Double, val accuracy: Double, val tests: Int)
+internal data class KeyboardComparisonSummary(val other: String, val wpmDifference: Double, val accuracyPoints: Double) {
+    fun description(): String {
+        val speed = "${kotlin.math.abs(wpmDifference).roundToInt()} wpm ${if (wpmDifference >= 0) "faster" else "slower"} on average"
+        val accuracy = "${kotlin.math.abs(accuracyPoints).roundToInt()} points ${if (accuracyPoints >= 0) "more" else "less"} accurate"
+        return "TailorKeys is $speed, $accuracy"
+    }
+}
+internal fun List<KeyboardAverage>.comparisonSummaries(): List<KeyboardComparisonSummary> {
+    val tailor = firstOrNull { isTailorKeysIme(it.keyboard) } ?: return emptyList()
+    return filterNot { isTailorKeysIme(it.keyboard) }.map { other ->
+        KeyboardComparisonSummary(other.keyboard, tailor.wpm - other.wpm, (tailor.accuracy - other.accuracy) * 100)
+    }
+}
 internal fun Iterable<TypingResult>.keyboardAverages(): List<KeyboardAverage> = groupBy { keyboardGroup(it.keyboard) }.map { (id, results) ->
     KeyboardAverage(id, results.map { it.wpm }.average(), results.map { it.accuracy }.average(), results.size)
 }.sortedWith(compareBy({ !isTailorKeysIme(it.keyboard) }, { it.keyboard }))
