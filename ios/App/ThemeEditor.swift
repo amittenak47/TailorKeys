@@ -28,8 +28,8 @@ struct CustomThemeSection: View {
                     }
                 }
                 Button { editing = CustomTheme(id: UUID().uuidString, name: "", colors: ThemeColors(Palette.of(prefs, dark: scheme == .dark))) } label: {
-                    VStack { Image(systemName: "plus").frame(width: 44, height: 44).overlay(RoundedRectangle(cornerRadius: 14).stroke(style: StrokeStyle(lineWidth: 1, dash: [3]))); Text("Create theme").font(.caption).lineLimit(1).fixedSize(horizontal: true, vertical: false) }
-                }.buttonStyle(.plain).foregroundColor(AppStyle.accent).frame(minHeight: 76)
+                    VStack(spacing: 5) { Image(systemName: "plus").frame(width: 48, height: 48).overlay(RoundedRectangle(cornerRadius: 14).stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))); Text("Create").font(.caption) }.frame(maxWidth: .infinity, minHeight: 76)
+                }.buttonStyle(.plain).foregroundColor(AppStyle.accent).accessibilityLabel("Create theme")
             }.listRowSeparator(.hidden)
             if let selected = selected {
                 HStack {
@@ -56,7 +56,7 @@ struct CustomThemeSection: View {
                 HStack(spacing: 4) {
                     RoundedRectangle(cornerRadius: 3).fill(Color(palette.key)).frame(width: 14, height: 18).overlay(RoundedRectangle(cornerRadius: 3).stroke(Color(palette.keyOutline), lineWidth: 1))
                     RoundedRectangle(cornerRadius: 3).fill(Color(palette.functionKey)).frame(width: 14, height: 18).overlay(RoundedRectangle(cornerRadius: 3).stroke(Color(palette.keyOutline), lineWidth: 1))
-                }.frame(width: 46, height: 46).background(RoundedRectangle(cornerRadius: 14).fill(Color(palette.background)))
+                }.frame(width: 48, height: 48).background(RoundedRectangle(cornerRadius: 14).fill(Color(palette.background)))
                     .overlay(RoundedRectangle(cornerRadius: 14).stroke(LayoutStyle.outline, lineWidth: 1))
                     .overlay(RoundedRectangle(cornerRadius: 17).stroke(selected ? AppStyle.accent : Color.clear, lineWidth: 2).padding(-3))
                     .overlay(alignment: .topTrailing) { if selected { Image(systemName: "checkmark.circle.fill").font(.caption).foregroundColor(AppStyle.accent).background(Circle().fill(Color.white)) } }

@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -23,6 +24,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
@@ -67,11 +70,19 @@ internal fun ThemeControl(state: SettingsState) {
             customs.forEach { theme -> ThemeTile(theme.name, theme.colors.palette(), selected == theme.selection) {
                 state.settings.setThemeId(theme.selection); deleting = false
             } }
-            TextButton({ creating = true; editor = null }, Modifier.widthIn(min = 112.dp).heightIn(min = 88.dp)) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Box(Modifier.size(44.dp).border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) { Text("+") }
-                    Text("Create theme", maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelMedium)
+            Column(Modifier.width(84.dp).heightIn(min = 88.dp)
+                .clickable(role = Role.Button) { creating = true; editor = null }
+                .semantics(mergeDescendants = true) { contentDescription = "Create theme" }.padding(4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                val outline = MaterialTheme.colorScheme.outline
+                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                    Canvas(Modifier.fillMaxSize().padding(1.dp)) {
+                        drawRoundRect(outline, cornerRadius = CornerRadius(14.dp.toPx()),
+                            style = Stroke(1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx()))))
+                    }
+                    Text("+", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge)
                 }
+                Text("Create", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
             }
         }
         if (custom != null) {
