@@ -283,8 +283,13 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
     }
     item("typing") {
         OptionGroup {
-            for ((label, pref) in listOf("Auto-capitalize" to Prefs.AUTO_CAP, "Double-space period" to Prefs.DOUBLE_SPACE_PERIOD, "Vibrate on tap" to Prefs.HAPTICS)) {
+            for ((label, pref) in listOf("Auto-capitalize" to Prefs.AUTO_CAP, "Vibrate on tap" to Prefs.HAPTICS)) {
                 ToggleRow(label, state.bool(pref)) { state.set(pref, it) }
+            }
+            ToggleRow("Automatic space", state.bool(Prefs.AUTOMATIC_SPACE), note = "Add a space after swiped and picked words.") { state.set(Prefs.AUTOMATIC_SPACE, it) }
+            ToggleRow("Automatic punctuation", state.bool(Prefs.AUTOMATIC_PUNCTUATION), note = "Attach punctuation and close brackets and quotes.") { state.set(Prefs.AUTOMATIC_PUNCTUATION, it) }
+            if (state.bool(Prefs.AUTOMATIC_PUNCTUATION)) {
+                ToggleRow("Double-space period", state.bool(Prefs.DOUBLE_SPACE_PERIOD), note = "Tap space twice to end a sentence.") { state.set(Prefs.DOUBLE_SPACE_PERIOD, it) }
             }
         }
     }
@@ -340,6 +345,12 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
                     val blocked = state.bool(Prefs.TYPE_ON_PRESS) && (pref == Prefs.SWIPE_TYPING || pref == Prefs.CHORDING)
                     ToggleRow(label, !blocked && state.bool(pref), enabled = !blocked,
                         note = if (blocked) "Off while Type on press is on" else null) { state.set(pref, it) }
+                }
+                if (state.bool(Prefs.SWIPE_TYPING) && !state.bool(Prefs.TYPE_ON_PRESS)) {
+                    SettingsDropdown("Swipe style", if (state.bool(Prefs.SWIPE_LETTERS)) "Type the letters" else "Guess the word",
+                        listOf("Guess the word", "Type the letters")) { state.set(Prefs.SWIPE_LETTERS, it == 1) }
+                    Text("Choose word guessing or the letters at turns and pauses.", Modifier.padding(20.dp, 8.dp),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 ActionRow("Chord list") { open = true }
             }
