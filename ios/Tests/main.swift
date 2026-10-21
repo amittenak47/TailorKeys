@@ -242,6 +242,9 @@ withLayoutStore { prefs, defaults in
     check(library.appliedKey == savedDraft && library.average(savedDraft) == 42, "saving draft lost applied identity or results")
     check(library.results["draft"] == nil, "draft results leaked into the next draft")
     check(library.add(KeyGrid(rows: 0, items: [], nextId: 0), name: "Invalid") == nil, "invalid grid entered the library")
+    let oversized = KeyGrid.template(.standard)
+    for key in oversized.items { key.keys = Array(repeating: String(repeating: "x", count: 64), count: 64) }
+    check(oversized.isSound && library.add(oversized, name: "Too large") == nil, "unreadable oversized grid entered the library")
     library.delete(savedDraft)
     check(library.appliedKey == "preset:STANDARD", "deleting in-use custom did not switch to Standard")
     check(LayoutLibrary.matchingPreset(prefs.loadGrid()) == .standard, "deleting in-use custom left its applied grid")
@@ -358,9 +361,9 @@ check(wrongFinish.isComplete && wrongFinish.mistakes == 2 && abs(wrongFinish.acc
 var paste = TypingSession(mode: .test, sentence: "abc")
 paste.update("abc", at: 0)
 check(paste.wpm(at: 0) == 0 && paste.result(at: Date()) == nil, "instant paste saved infinite WPM")
-let spelling = "hello wrng final"
-let misspelled = TypingSession.misspelledRanges(spelling, dictionary: ["hello"])
-check(misspelled.map { String(spelling[$0]) } == ["wrng"], "dictionary underlines incomplete words or misses mistakes")
+let spelling = "hello cafe\u{301} wrng"
+let misspelled = TypingSession.misspelledRanges(spelling, dictionary: ["hello", "café"])
+check(misspelled.map { String(spelling[$0]) } == ["wrng"], "dictionary changed Unicode ranges or missed the final misspelt word")
 check(TypingSentences.all.count == 40 && Set(TypingSentences.all).count == 40, "sentence bank is not 40 original entries")
 check(TypingSentences.all.allSatisfy { (8...14).contains($0.split(separator: " ").count) }, "sentence length outside 8–14 words")
 check(TypingSentences.next(after: TypingSentences.all[0]) != TypingSentences.all[0], "New sentence repeated the same sentence")

@@ -63,6 +63,12 @@ final class LayoutLibrary {
         return String((clean.isEmpty ? fallback : clean).prefix(24))
     }
 
+    static func storedJSON(_ grid: KeyGrid) -> String? {
+        let json = grid.toJSON()
+        // Geometry can be sound while a large stack exceeds the bounded JSON format.
+        return grid.isSound && KeyGrid.fromJSON(json) != nil ? json : nil
+    }
+
     static func sameGrid(_ a: KeyGrid, _ b: KeyGrid, includingFaces: Bool = true) -> Bool {
         let left = a.items.sorted { $0.r == $1.r ? $0.c < $1.c : $0.r < $1.r }
         let right = b.items.sorted { $0.r == $1.r ? $0.c < $1.c : $0.r < $1.r }
@@ -106,11 +112,12 @@ final class LayoutLibrary {
                 guard let id = item["id"] as? String, UUID(uuidString: id) != nil, ids.insert(id).inserted,
                       let name = item["name"] as? String, let object = item["grid"] as? [String: Any],
                       let data = try? JSONSerialization.data(withJSONObject: object),
-                      let grid = KeyGrid.fromJSON(String(decoding: data, as: UTF8.self)) else { continue }
-                saved.append(SavedLayout(id: id, name: Self.name(name), gridJSON: grid.toJSON()))
+                      let grid = KeyGrid.fromJSON(String(decoding: data, as: UTF8.self)),
+                      let json = Self.storedJSON(grid) else { continue }
+                saved.append(SavedLayout(id: id, name: Self.name(name), gridJSON: json))
             }
         }
-        draft = KeyGrid.fromJSON(defaults.string(forKey: Prefs.layoutDraft))?.toJSON()
+        draft = KeyGrid.fromJSON(defaults.string(forKey: Prefs.layoutDraft)).flatMap { Self.storedJSON($0) }
         results = [:]
         if let text = defaults.string(forKey: Prefs.typingResults),
            let decoded = try? JSONDecoder().decode([String: [TypingResult]].self, from: Data(text.utf8)) {
@@ -158,8 +165,8 @@ final class LayoutLibrary {
     }
 
     @discardableResult func add(_ grid: KeyGrid, name: String) -> String? {
-        guard grid.isSound else { return nil }
-        let entry = SavedLayout(id: UUID().uuidString.lowercased(), name: Self.name(name, fallback: "Imported layout"), gridJSON: grid.toJSON())
+        guard let json = Self.storedJSON(grid) else { return nil }
+        let entry = SavedLayout(id: UUID().uuidString.lowercased(), name: Self.name(name, fallback: "Imported layout"), gridJSON: json)
         saved.append(entry)
         persistSaved()
         return entry.key
@@ -190,12 +197,12 @@ final class LayoutLibrary {
     }
 
     func update(_ key: String, grid: KeyGrid) {
-        guard grid.isSound else { return }
+        guard let json = Self.storedJSON(grid) else { return }
         if key == "draft" {
-            draft = grid.toJSON()
+            draft = json
             defaults.set(draft, forKey: Prefs.layoutDraft)
         } else if let index = saved.firstIndex(where: { $0.key == key }) {
-            saved[index].gridJSON = grid.toJSON()
+            saved[index].gridJSON = json
             persistSaved()
         } else { return }
         if appliedKey == key { settings.saveGrid(grid) }
@@ -206,6 +213,7 @@ final class LayoutLibrary {
         settings.saveGrid(layout.grid)
         setAppliedKey(key)
         defaults.removeObject(forKey: Prefs.layoutTrialPrevious)
+        defaults.synchronize()
     }
 
     func delete(_ key: String) {
@@ -259,7 +267,7 @@ enum LayoutCodeStatus {
 
     static func read(_ text: String) -> LayoutCodeStatus {
         if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return .empty }
-        if let grid = KeyGrid.fromCode(text) { return .valid(grid) }
+        if let grid = KeyGrid.fromCode(text), LayoutLibrary.storedJSON(grid) != nil { return .valid(grid) }
         if let range = text.range(of: #"TK[2-9][0-9]*-"#, options: .regularExpression)
             ?? text.range(of: #"TK1[0-9]+-"#, options: .regularExpression), !range.isEmpty {
             return .invalid("This code is from a newer version of TailorKeys")

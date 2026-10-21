@@ -385,6 +385,40 @@ final class KeyboardView: UIView {
 
     func height(forWidth w: CGFloat) -> CGFloat { builtWidth == w ? layoutHeight : layoutFor(w) }
 
+    /// Tile artwork uses the actual placed keys and transforms, including center keys,
+    /// wide spacebars, all rows, the split, tilt and individual fan rotations.
+    func layoutThumbnail(width: CGFloat) -> UIImage {
+        let height = height(forWidth: width)
+        // Normalise the full live layout into the artboard's 1.8:1 miniature surface.
+        // No keys are cropped, and all geometry still comes from layoutFor.
+        let size = CGSize(width: 360, height: 200)
+        return UIGraphicsImageRenderer(size: size).image { renderer in
+            let ctx = renderer.cgContext
+            ctx.scaleBy(x: size.width / width, y: size.height / height)
+            palette.background.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            for wheel in wheels where wheel.rect.width > 0 {
+                palette.key.setFill()
+                UIBezierPath(roundedRect: wheel.rect.insetBy(dx: 2, dy: 5), cornerRadius: 18).fill()
+            }
+            for key in placed {
+                ctx.saveGState()
+                ctx.concatenate(key.t)
+                let code = key.item.keys[key.item.idx]
+                (code == Keys.enter ? palette.accent : ((KeyText.isLayerKey(code) || code == Keys.backspace) ? palette.functionKey : palette.key)).setFill()
+                ctx.addPath(key.shape.body)
+                ctx.fillPath()
+                if highContrast {
+                    palette.text.setStroke()
+                    ctx.addPath(key.shape.outline)
+                    ctx.setLineWidth(2)
+                    ctx.strokePath()
+                }
+                ctx.restoreGState()
+            }
+        }
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         let changed = builtWidth != bounds.width

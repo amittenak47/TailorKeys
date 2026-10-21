@@ -53,45 +53,6 @@ struct FullAccessSheet: View {
     }
 }
 
-struct ImportLayoutSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @ObservedObject var model: AppSettingsModel
-
-    var body: some View {
-        NavigationView {
-            Form {
-                Section(header: Text("Layout code")) {
-                    TextField("Paste a TK1- code", text: $model.importCode)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
-                        .textFieldStyle(.roundedBorder)
-                    if !model.importCode.isEmpty && model.importedGrid == nil {
-                        Text("No valid layout code found.").font(.footnote).foregroundColor(.secondary)
-                    }
-                }
-                Section {
-                    Button("Import") { importLayout() }
-                        .disabled(model.importedGrid == nil || !model.fullAccessConfirmed)
-                }
-            }
-            .navigationTitle("Import layout")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-            }
-        }
-        .navigationViewStyle(.stack)
-    }
-
-    private func importLayout() {
-        guard model.fullAccessConfirmed, let grid = model.importedGrid else { return }
-        model.editing = false
-        // Keep the cached decode independent of later preview/editor mutations.
-        model.saveGrid(grid.copy())
-        dismiss()
-    }
-}
-
 /// The iOS 15 share sheet; ShareLink requires iOS 16.
 struct LayoutShareSheet: UIViewControllerRepresentable {
     let code: String

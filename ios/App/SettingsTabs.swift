@@ -30,7 +30,6 @@ struct SettingsScreen: View {
                     }
                     .listStyle(.insetGrouped)
                 }
-                if tab == .layout { sharingButtons }
             }
             .environment(\.defaultMinListRowHeight, 48)
             .background(AppStyle.background.ignoresSafeArea())
@@ -82,60 +81,11 @@ struct SettingsScreen: View {
             }
         }
         switch tab {
-        case .layout: layoutOptions
+        case .layout: EmptyView()
         case .size: sizeOptions
         case .look: lookOptions
-        case .typing: typingOptions
+        case .settings: typingOptions
         }
-    }
-
-    private var layoutOptions: some View {
-        Group {
-            Section {
-                MenuRow(title: "Preset", value: model.layoutTitle) {
-                    ForEach(Template.allCases, id: \.self) { template in
-                        Button { model.applyTemplate(template) } label: {
-                            if model.layoutTitle == template.title { Label(template.title, systemImage: "checkmark") }
-                            else { Text(template.title) }
-                        }
-                    }
-                    Button {} label: {
-                        if model.layoutTitle == "Custom" { Label("Custom", systemImage: "checkmark") }
-                        else { Text("Custom") }
-                    }
-                    .disabled(true)
-                }
-            }
-            Section {
-                Button { model.editing.toggle() } label: {
-                    Label(model.editing ? "Done" : "Edit layout", systemImage: model.editing ? "checkmark" : "pencil")
-                        .font(.system(size: 17, weight: .semibold))
-                        .frame(maxWidth: .infinity, minHeight: 50)
-                        .foregroundColor(.white)
-                        .background(RoundedRectangle(cornerRadius: 14).fill(AppStyle.accent))
-                }
-                .buttonStyle(.plain)
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
-            }
-        }
-        .disabled(!model.fullAccessConfirmed)
-    }
-
-    private var sharingButtons: some View {
-        HStack(spacing: 8) {
-            Button {
-                model.shareCode = model.grid.toCode()
-                model.sheet = .share
-            } label: { Label("Share", systemImage: "square.and.arrow.up") }
-            Button(action: model.prepareImport) { Label("Import", systemImage: "square.and.arrow.down") }
-        }
-        .font(.system(size: 15, weight: .medium))
-        .buttonStyle(.borderless)
-        .controlSize(.regular)
-        .frame(maxWidth: .infinity, minHeight: 44)
-        .padding(.bottom, 8)
-        .disabled(!model.fullAccessConfirmed)
     }
 
     private var sizeOptions: some View {

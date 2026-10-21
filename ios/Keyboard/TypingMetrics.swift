@@ -87,11 +87,9 @@ struct TypingSession {
     }
 
     static func misspelledRanges(_ text: String, dictionary: Set<String>) -> [Range<String.Index>] {
-        guard !dictionary.isEmpty, let regex = try? NSRegularExpression(pattern: #"\p{L}+(?:['’]\p{L}+)*"#) else { return [] }
+        guard !dictionary.isEmpty, let regex = try? NSRegularExpression(pattern: #"[\p{L}\p{M}]+(?:['’][\p{L}\p{M}]+)*"#) else { return [] }
         return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
             guard let range = Range(match.range, in: text),
-                  // Don't flag the word that's still being composed.
-                  range.upperBound != text.endIndex,
                   !dictionary.contains(String(text[range]).lowercased().replacingOccurrences(of: "’", with: "'")) else { return nil }
             return range
         }
