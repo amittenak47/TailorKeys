@@ -1040,6 +1040,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val oneShot = code == Keys.ABC && state.layer == Layer.ABC && state.shift && !state.capsLock
         val accentBg = code == Keys.ENTER || lock
         fill.color = when {
+            code == Keys.INSERT && insertStripHeight > 0 -> palette.pressed
             highContrast -> palette.key
             pressed -> palette.pressed
             accentBg -> palette.accent
@@ -1062,6 +1063,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         fill.alpha = 255
         if (palette.keyOutline ushr 24 != 0) {
             stroke.color = palette.keyOutline; stroke.strokeWidth = 2 * density
+            outlineRect.set(rect); outlineRect.inset(density, density)
+            canvas.drawRoundRect(outlineRect, radius, radius, stroke)
+        }
+        if (code == Keys.INSERT && insertStripHeight > 0) {
+            stroke.color = palette.accent; stroke.strokeWidth = 2 * density
             outlineRect.set(rect); outlineRect.inset(density, density)
             canvas.drawRoundRect(outlineRect, radius, radius, stroke)
         }
@@ -1133,7 +1139,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 canvas.drawPoint(cx - radius * .32f, cy - radius * .22f, stroke)
                 canvas.drawPoint(cx + radius * .32f, cy - radius * .22f, stroke)
                 canvas.drawArc(cx - radius * .42f, cy - radius * .25f, cx + radius * .42f, cy + radius * .55f, 20f, 140f, false, stroke)
-                if (insertStripHeight > 0) { stroke.color = palette.accent; canvas.drawCircle(cx, cy, radius + 4 * density, stroke) }
             }
             Keys.BACKSPACE -> drawDelete(canvas, r, icon, color, a)
             Keys.ENTER -> enterLabel?.let { drawLabel(canvas, r, it, r.height() * 0.3f * scale, color, a) } ?: drawReturn(canvas, r, icon, color, a)

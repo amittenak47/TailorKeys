@@ -1117,7 +1117,8 @@ final class KeyboardView: UIView {
         let oneShot = code == Keys.abc && state.layer == .abc && state.shift && !state.capsLock
         let accentBg = code == Keys.enter || lock
         let bg: UIColor
-        if highContrast { bg = palette.key }
+        if code == Keys.insert && insertStripHeight > 0 { bg = palette.pressed }
+        else if highContrast { bg = palette.key }
         else if pressed { bg = palette.pressed }
         else if accentBg { bg = palette.accent }
         else if KeyText.isLayerKey(code) || code == Keys.backspace || code == Keys.insert { bg = palette.functionKey }
@@ -1141,6 +1142,9 @@ final class KeyboardView: UIView {
         ctx.setAlpha(keyAlpha)
         if palette.keyOutline.cgColor.alpha > 0 {
             palette.keyOutline.setStroke(); ctx.addPath(shape.outline); ctx.setLineWidth(2); ctx.strokePath()
+        }
+        if code == Keys.insert && insertStripHeight > 0 {
+            palette.accent.setStroke(); ctx.addPath(shape.inset); ctx.setLineWidth(2); ctx.strokePath()
         }
         let highlighted = accentBg || oneShot || pressed || chord || (viewPrefs.keyTint && !editMode && weight > 0.1)
         if (editMode && reducedMotion) || (highContrast && highlighted) {
@@ -1197,7 +1201,6 @@ final class KeyboardView: UIView {
             color.setFill()
             for dx in [CGFloat(-0.22), CGFloat(0.22)] { UIBezierPath(ovalIn: CGRect(x: center.x + icon * dx - 1, y: center.y - icon * 0.18 - 1, width: 2, height: 2)).fill() }
             let mouth = UIBezierPath(); mouth.move(to: CGPoint(x: center.x - icon * 0.28, y: center.y + icon * 0.15)); mouth.addQuadCurve(to: CGPoint(x: center.x + icon * 0.28, y: center.y + icon * 0.15), controlPoint: CGPoint(x: center.x, y: center.y + icon * 0.5)); mouth.lineWidth = 1.75; mouth.stroke()
-            if insertStripHeight > 0 { palette.accent.setStroke(); let circle = UIBezierPath(ovalIn: CGRect(x: center.x - icon, y: center.y - icon, width: icon * 2, height: icon * 2)); circle.lineWidth = 1.5; circle.stroke() }
         case Keys.backspace: drawIcon(Self.deletePaths, center, icon, color)
         case Keys.enter:
             if let l = enterLabel { drawText(l, center: center, size: r.height * 0.3 * scale, color: color, maxWidth: r.width * 0.85, maxHeight: r.height * 0.85) }

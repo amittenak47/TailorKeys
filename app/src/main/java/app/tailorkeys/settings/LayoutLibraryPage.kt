@@ -50,6 +50,7 @@ internal fun LayoutLibraryPage(state: SettingsState, listState: LazyListState, e
     LaunchedEffect(active) {
         if (active && !state.settings.prefs.getBoolean(app.tailorkeys.insert.InsertKeyPrompt.SEEN, false)) {
             insertPrompt = (listOf(state.selectedLayout()) + entries).firstOrNull { app.tailorkeys.insert.InsertKeyPrompt.shouldShow(false, it.custom, it.grid()) }
+            // Also mark seen when no layout qualifies: this prompt is intentionally one-time.
             state.settings.prefs.edit().putBoolean(app.tailorkeys.insert.InsertKeyPrompt.SEEN, true).apply()
         }
     }
