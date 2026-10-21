@@ -2292,7 +2292,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         return 1f - (1f - t) * (1f - t) * (1f - t)
     }
 
-    private fun resetPreview() { previewSig = null; previewTo.clear(); previewFrom.clear(); shownRects.clear(); previewSlot = null }
+    private fun resetPreview() { previewSig = null; previewTo.clear(); previewFrom.clear(); shownRects.clear(); previewSlot = null; fitSig = null }
 
     private fun screenRect(pk: Placed) = RectF(pk.rect).also { pk.matrix.mapRect(it) }
 
@@ -2492,7 +2492,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             val pt = floatArrayOf(x, y)
             pk.inverse.mapPoints(pt)
             val rel = (pt[0] - pk.rect.left) / pk.rect.width()
-            return if (rel > 0.25f && rel < 0.75f) Target(T_COMBINE, item, pk = pk) else Target(T_INSERT, item, before = rel <= 0.25f, pk = pk)
+            if (rel > 0.25f && rel < 0.75f) return Target(T_COMBINE, item, pk = pk)
+            // A full row has no room: no slot opens and the key snaps back (it can still go to the tray).
+            return if (insertFits(dg, item, rel <= 0.25f)) Target(T_INSERT, item, before = rel <= 0.25f, pk = pk) else Target(T_FULL, item, pk = pk)
         }
         val pt = FloatArray(2)
         for (i in cells.indices) {
@@ -2504,9 +2506,25 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         return null
     }
 
+    private var fitSig: String? = null
+    private var fits = true
+
+    /** Whether inserting beside [target] has room, tried on a copy; cached while the finger stays on the same spot. */
+    private fun insertFits(dg: Drag, target: GridKey, before: Boolean): Boolean {
+        val sig = "${dg.tray}:${dg.item.id}:${target.id}:$before"
+        if (sig == fitSig) return fits
+        val g = grid.copy()
+        val key = if (dg.tray >= 0) g.tray.getOrNull(dg.tray)?.let(g::detachedKey) else g.items.firstOrNull { it.id == dg.item.id }
+        val other = g.items.firstOrNull { it.id == target.id }
+        fits = key != null && other != null && g.insertShift(key, other, before)
+        fitSig = sig
+        return fits
+    }
+
     private fun hintFor(dg: Drag) = when (dg.target?.type) {
         T_COMBINE -> "Combine into a swipe key"
         T_INSERT -> "Insert, neighbours shift over"
+        T_FULL -> "Row is full"
         T_SPACE -> "Sit beside the spacebar"
         T_MOVE -> "Move here"
         T_TRAY -> grid.removalHint(dg.item) ?: "Set aside in the tray"
@@ -2543,7 +2561,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             T_MOVE -> g.moveTo(item, t.r, t.c)
             T_SPACE -> if (target != null) g.insertBesideSpace(item, target)
             T_COMBINE -> if (target != null) g.combine(item, target)
-            T_INSERT -> if (target != null && !g.insertShift(item, target, t.before)) g.swap(item, target)
+            T_INSERT -> if (target != null) g.insertShift(item, target, t.before)
         }
     }
 
@@ -2614,6 +2632,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         const val T_COMBINE = 2
         const val T_INSERT = 3
         const val T_TRAY = 5
+        const val T_FULL = 6
         const val PREVIEW_MS = 160f
         const val GHOST_LIFT = 50f
 

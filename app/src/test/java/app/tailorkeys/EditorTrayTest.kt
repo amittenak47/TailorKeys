@@ -66,4 +66,17 @@ class EditorTrayTest {
         val json = """{"rows":4,"items":${org.json.JSONObject(grid.toJson()).getJSONArray("items")},"tray":[["a"],[],"bad",[""],["b","c"]]}"""
         assertEquals(listOf(listOf("a"), listOf("b", "c")), KeyGrid.fromJson(json)!!.tray)
     }
+
+    @Test fun fullRowsRefuseInsertsButStillReorderWithinTheRow() {
+        val grid = KeyGrid.template(Template.SPLIT)
+        val q = grid.items.single { it.keys == listOf("q") }
+        val t = grid.items.single { it.keys == listOf("t") }
+        val a = grid.items.single { it.keys == listOf("a") }
+        // The top-left row has five keys: a key from another row has no room there.
+        assertFalse(grid.copy().let { g -> g.insertShift(g.items.single { it.id == a.id }, g.items.single { it.id == q.id }, before = true) })
+        // Moving a key within its own full row only reorders it.
+        assertTrue(grid.insertShift(t, q, before = true))
+        assertEquals(listOf("t", "q", "w", "e", "r"), grid.items.filter { it.r == 0 && it.c < 5 }.sortedBy { it.c }.map { it.keys.single() })
+        assertTrue(grid.isSound())
+    }
 }

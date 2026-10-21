@@ -2256,7 +2256,7 @@ final class KeyboardView: UIView {
 
     // MARK: - Edit mode: drag and drop
 
-    private enum TargetType { case move, space, combine, insert, remove, tray }
+    private enum TargetType { case move, space, combine, insert, remove, tray, full }
 
     private struct Target {
         let type: TargetType
@@ -2407,7 +2407,9 @@ final class KeyboardView: UIView {
             if item.isSpace && item.w > 1 && KeyGrid.region(item.c) != 1 && !d.item.isSpace { return Target(type: .space, item: item, pk: pk) }
             let q = p.applying(pk.inv)
             let rel = (q.x - pk.rect.minX) / pk.rect.width
-            return rel > 0.25 && rel < 0.75 ? Target(type: .combine, item: item, pk: pk) : Target(type: .insert, item: item, before: rel <= 0.25, pk: pk)
+            if rel > 0.25 && rel < 0.75 { return Target(type: .combine, item: item, pk: pk) }
+            // A full row has no room: no slot opens and the key snaps back (it can still go to the tray).
+            return insertFits(d, item, before: rel <= 0.25) ? Target(type: .insert, item: item, before: rel <= 0.25, pk: pk) : Target(type: .full, item: item, pk: pk)
         }
         for (i, cell) in cells.enumerated() where cell.rect.contains(p.applying(cell.inv)) {
             return Target(type: .move, r: cell.r, c: cell.c, cellIndex: i)
@@ -2415,11 +2417,27 @@ final class KeyboardView: UIView {
         return nil
     }
 
+    private var fitSig: String?
+    private var fits = true
+
+    /// Whether inserting beside `target` has room, tried on a copy; cached while the finger stays on the same spot.
+    private func insertFits(_ d: Drag, _ target: GridKey, before: Bool) -> Bool {
+        let sig = "\(d.tray):\(d.item.id):\(target.id):\(before)"
+        if sig == fitSig { return fits }
+        let g = grid.copy()
+        let key = d.tray >= 0 ? (g.tray.indices.contains(d.tray) ? g.detachedKey(g.tray[d.tray]) : nil) : g.items.first { $0.id == d.item.id }
+        let other = g.items.first { $0.id == target.id }
+        if let key = key, let other = other { fits = g.insertShift(key, other, before: before) } else { fits = false }
+        fitSig = sig
+        return fits
+    }
+
     private func hint(_ d: Drag) -> String? {
         guard let t = d.target else { return nil }
         switch t.type {
         case .combine: return "Combine into a swipe key"
         case .insert: return "Insert, neighbours shift over"
+        case .full: return "Row is full"
         case .space: return "Sit beside the spacebar"
         case .move: return "Move here"
         case .tray: return grid.removalHint(d.item) ?? "Set aside in the tray"
@@ -2438,7 +2456,7 @@ final class KeyboardView: UIView {
             case .space: if let other = target { g.placeFromTray(d.tray) { g.insertBesideSpace($0, other) } }
             case .combine: if let other = target { g.combineFromTray(d.tray, other) }
             case .insert: if let other = target { g.placeFromTray(d.tray) { g.insertShift($0, other, before: t.before) } }
-            case .tray: break
+            case .tray, .full: break
             }
             return
         }
@@ -2454,7 +2472,8 @@ final class KeyboardView: UIView {
         case .move: g.moveTo(item, t.r, t.c)
         case .space: if let other = target { g.insertBesideSpace(item, other) }
         case .combine: if let other = target { g.combine(item, into: other) }
-        case .insert: if let other = target, !g.insertShift(item, other, before: t.before) { g.swap(item, other) }
+        case .insert: if let other = target { g.insertShift(item, other, before: t.before) }
+        case .full: break
         }
     }
 
@@ -2474,7 +2493,7 @@ final class KeyboardView: UIView {
         return 1 - (1 - t) * (1 - t) * (1 - t)
     }
 
-    private func resetPreview() { previewSig = nil; previewTo = [:]; previewFrom = [:]; shownRects = [:]; previewSlot = nil }
+    private func resetPreview() { previewSig = nil; previewTo = [:]; previewFrom = [:]; shownRects = [:]; previewSlot = nil; fitSig = nil }
 
     private func screenRect(_ pk: Placed) -> CGRect { pk.rect.applying(pk.t) }
 
