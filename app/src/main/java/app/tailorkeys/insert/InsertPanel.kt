@@ -30,7 +30,8 @@ import app.tailorkeys.layout.Keys
 class InsertPanel(context: Context, private val settings: KeyboardSettings,
     private val repository: InsertRepository, private val inputState: InputState,
     private val close: () -> Unit, private val insert: (String) -> Unit, private val backspace: () -> Unit,
-    private val typing: (Boolean, Int) -> Unit, private val pickIme: () -> Unit) : FrameLayout(context) {
+    private val typing: (Boolean, Int) -> Unit, private val pickIme: () -> Unit,
+    private val composeVoice: (String) -> Unit, private val finishVoice: (String) -> Unit, private val cancelVoice: () -> Unit) : FrameLayout(context) {
     private val d = resources.displayMetrics.density
     private fun dp(n: Int) = (n * d).toInt()
     private val tablet get() = resources.configuration.smallestScreenWidthDp >= 600 && (width == 0 || width / d >= 600)
@@ -83,14 +84,23 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
     private val voiceMode = TextView(context)
     private val level = VoiceLevelView(context).apply { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
     private var listening = false
-    private var voiceButton: TextView? = null
+    private var voiceButton: VoiceStopView? = null
+    private var startVoiceOnRender = false
+    private var previousVoiceText = ""
     private val voice = VoiceInput(context, repository, { text, mode, rms, running ->
-        if (text.isNotEmpty()) voiceText.text = text
-        voiceMode.text = mode; listening = running
-        level.update(rms, palette.accent, running)
-        voiceButton?.text = if (running) "■  Stop" else "Start"
-        voiceButton?.contentDescription = if (running) "Stop listening" else "Start voice recognition"
-    }, insert)
+        if (text.isNotEmpty()) {
+            val display = android.text.SpannableString(text)
+            if (running && text != "Listening…") {
+                val settled = settledVoicePrefix(previousVoiceText,text)
+                display.setSpan(android.text.style.ForegroundColorSpan(sub),settled,text.length,android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                previousVoiceText=text
+            }
+            voiceText.text=display
+        }
+        voiceMode.text=mode; listening=running
+        level.update(rms,palette.accent,running); voiceButton?.update(rms,palette.accent,palette.onAccent,running)
+        voiceButton?.contentDescription=if (running) "Stop listening" else "Start voice recognition"
+    }, composeVoice, finishVoice, cancelVoice)
     private val adapter = object : BaseAdapter() {
         override fun getCount() = symbols.size
         override fun getItem(position: Int) = symbols[position]
@@ -207,7 +217,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { super.onSizeChanged(w,h,oldw,oldh); if (w != oldw && w > 0) post { refresh(true) } }
     fun show() {
         if (editor == "Note") retainDraft(); restoreKeys(); if (editor != null) typing(false, 0); editor = null; field = null; session++
-        visibility = VISIBLE; importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_AUTO
+        startVoiceOnRender = false; visibility = VISIBLE; importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_AUTO
         refresh(renderedEditor)
         if (section in listOf("Emoji", "Kaomoji") && editor == null) {
             activeCategory = "Recent"
@@ -224,6 +234,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
             listOf(InsertPrefs.KAOMOJI, InsertPrefs.TONE, InsertPrefs.HISTORY, InsertPrefs.RECENTS, InsertPrefs.KEEP, InsertPrefs.VOICE, InsertPrefs.DEVICE_ONLY).joinToString { repository.prefs.all[it].toString() }
         if (!force && lastStyle == style) return
         if (section == "Kaomoji" && !repository.prefs.getBoolean(InsertPrefs.KAOMOJI, true)) { restoreKeys(); editor = null; field = null; typing(false, 0) }
+        if (section == "Voice" && !repository.prefs.getBoolean(InsertPrefs.VOICE,true)) { voice.cancel(); listening=false }
         lastStyle = style; palette = Palette.of(context, settings)
         if (editor != null) renderEditor() else renderPanel()
     }
@@ -239,7 +250,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         val switch = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; background = shape(fill) }
         sections.filter { it != "Voice" || repository.prefs.getBoolean(InsertPrefs.VOICE, true) }.filter { it != "Kaomoji" || repository.prefs.getBoolean(InsertPrefs.KAOMOJI, true) }.forEach { name ->
             val b = button(if (name == "Kaomoji") "^_^" else "", name, section == name) {
-                voice.cancel(); listening = false; section = name; activeCategory = "Recent"; repository.prefs.edit().putString(InsertPrefs.SECTION, name).apply(); renderPanel()
+                voice.cancel(); listening = false; startVoiceOnRender = name == "Voice"; section = name; activeCategory = "Recent"; repository.prefs.edit().putString(InsertPrefs.SECTION, name).apply(); renderPanel()
             }
             b.minimumHeight = 0; b.background = if (section == name) android.graphics.drawable.InsetDrawable(shape(palette.key, radius = 9), dp(2), dp(3), dp(2), dp(3)) else null
             b.elevation = if (section == name) d else 0f
@@ -599,40 +610,28 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         postDelayed({ removeView(toast); if (undoToast === toast) undoToast=null },6_000)
     }
     private fun renderVoice() {
-        val col = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(16), dp(8), dp(16), dp(8)) }
-        (voiceText.parent as? ViewGroup)?.removeView(voiceText); (voiceMode.parent as? ViewGroup)?.removeView(voiceMode); (level.parent as? ViewGroup)?.removeView(level)
-        voiceMode.text = ""; voiceMode.setTextColor(palette.hint)
-        voiceText.setTextColor(palette.text); voiceText.background = shape(palette.key); voiceText.setPadding(dp(12), dp(8), dp(12), dp(8))
-        voiceText.maxLines = 5; voiceText.ellipsize = android.text.TextUtils.TruncateAt.END
-        col.addView(voiceMode, LinearLayout.LayoutParams(-1, dp(if (tablet) 48 else 24))); col.addView(voiceText, LinearLayout.LayoutParams(-1, 0, 1f))
-        if (!voice.permitted) {
-            voiceText.text = "Allow microphone in TailorKeys\nAn Android keyboard cannot show the permission dialog."
-            col.addView(button("Open TailorKeys", "Allow microphone in TailorKeys", true) { openSettings(requestMicrophone = true) })
-        } else if (!voice.available) {
-            voiceText.text = "No speech recognizer is installed. Switch to the system voice keyboard."
-            col.addView(button("Choose voice keyboard") { pickIme() })
-        } else if (voice.deviceOnly && !voice.onDevice) {
-            voiceMode.text = "On-device only"
-            voiceText.text = "On-device recognition is unavailable. Change Voice settings to allow online recognition, or use the system voice keyboard."
-            col.addView(button("Voice settings") { openSettings() })
-            col.addView(button("Choose voice keyboard") { pickIme() })
-        } else {
-            voiceMode.text = if (voice.onDevice) "On-device" else "Online recognition"
-            voiceText.text = "Tap Start and speak. Stop keeps what you said. Cancel discards it."
-            level.update(0f, palette.accent, false)
-            col.addView(level, LinearLayout.LayoutParams(-1, dp(40)))
-            val buttons = LinearLayout(context)
-            buttons.addView(button("Cancel") { voice.cancel(); listening = false; level.update(0f, palette.accent, false); voiceText.text = "Cancelled"; voiceButton?.text = "Start" }, LinearLayout.LayoutParams(0, dp(48), 1f))
-            voiceButton = button("Start", "Start or stop voice recognition", true) { if (listening) voice.stop() else voice.start(settings.currentLanguage()) }.apply {
-                background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(palette.accent) }
-                setTextColor(palette.onAccent)
-            }
-            buttons.gravity = Gravity.CENTER_VERTICAL
-            buttons.addView(voiceButton, LinearLayout.LayoutParams(dp(72), dp(72)).apply { marginStart = dp(12); marginEnd = dp(12) })
-            buttons.addView(button("Settings") { voice.cancel(); openSettings() }, LinearLayout.LayoutParams(0, dp(48), 1f)); col.addView(buttons)
+        val col=LinearLayout(context).apply { orientation=LinearLayout.VERTICAL; gravity=Gravity.CENTER; setPadding(dp(12),0,dp(12),0) }
+        if (!voice.permitted) col.addView(stateView("Voice","Allow the microphone","Keyboards cannot ask for it here. TailorKeys opens and asks once.",listOf("Allow in TailorKeys" to { openSettings(requestMicrophone=true) })),LinearLayout.LayoutParams(-1,-1))
+        else if (!voice.available) col.addView(stateView("Voice","No speech recognizer","This device has no recognizer TailorKeys can use. Switch to a voice keyboard instead.",listOf("Use voice keyboard" to { pickIme() })),LinearLayout.LayoutParams(-1,-1))
+        else if (voice.deviceOnly && !voice.onDevice) col.addView(stateView("Voice","On-device recognition unavailable","Change Voice settings to allow online recognition, or use a voice keyboard.",listOf("Voice settings" to { openSettings() },"Use voice keyboard" to { pickIme() })),LinearLayout.LayoutParams(-1,-1))
+        else {
+            (voiceText.parent as? ViewGroup)?.removeView(voiceText); (voiceMode.parent as? ViewGroup)?.removeView(voiceMode); (level.parent as? ViewGroup)?.removeView(level)
+            voiceMode.text=if (voice.onDevice) "On device" else "Online"; voiceMode.textSize=12f; voiceMode.setTextColor(sub); voiceMode.gravity=Gravity.CENTER; voiceMode.background=shape(fill,radius=13); voiceMode.setPadding(dp(12),0,dp(12),0); voiceMode.compoundDrawablePadding=dp(6)
+            voiceMode.setCompoundDrawables(InsertIcon(if (voice.onDevice) "Device" else "Cloud",sub).apply { setBounds(0,0,dp(14),dp(14)) },null,null,null)
+            col.addView(voiceMode,LinearLayout.LayoutParams(-2,dp(26)))
+            voiceText.textSize=22f; voiceText.gravity=Gravity.CENTER; voiceText.setTextColor(palette.text); voiceText.background=null; voiceText.setPadding(0,0,0,0); voiceText.maxLines=4; voiceText.ellipsize=android.text.TextUtils.TruncateAt.END
+            if (!listening) { voiceText.text="Tap Start and speak."; previousVoiceText="" }
+            col.addView(voiceText,LinearLayout.LayoutParams(minOf(dp(560),(availableWidth()*d).toInt()-dp(24)),-2).apply { topMargin=dp(16); bottomMargin=dp(12) })
+            col.addView(level,LinearLayout.LayoutParams(minOf(dp(240),(availableWidth()*d).toInt()-dp(24)),dp(44)))
+            val controls=LinearLayout(context).apply { gravity=Gravity.CENTER_VERTICAL }
+            controls.addView(button("Cancel") { voice.cancel(); listening=false; level.update(0f,palette.accent,false); voiceButton?.update(0f,palette.accent,palette.onAccent,false); voiceText.text="Cancelled" },LinearLayout.LayoutParams(dp(88),dp(44)))
+            voiceButton=VoiceStopView(context).apply { isFocusable=true; contentDescription=if (listening) "Stop listening" else "Start voice recognition"; setOnClickListener { if (listening) voice.stop() else voice.start(settings.currentLanguage()) }; update(0f,palette.accent,palette.onAccent,listening) }
+            controls.addView(voiceButton,LinearLayout.LayoutParams(dp(96),dp(96)))
+            controls.addView(View(context),LinearLayout.LayoutParams(dp(88),dp(1))); col.addView(controls,LinearLayout.LayoutParams(-2,dp(96)))
         }
-        pages.addView(col, LayoutParams(-1, -1))
-        if (voice.permitted && voice.available && (!voice.deviceOnly || voice.onDevice)) post { if (visibility == VISIBLE && section == "Voice" && editor == null && !listening) voice.start(settings.currentLanguage()) }
+        pages.addView(col,LayoutParams(-1,-1))
+        val start=startVoiceOnRender; val token=session; startVoiceOnRender=false
+        if (start && voice.permitted && voice.available && (!voice.deviceOnly || voice.onDevice)) post { if (session == token && visibility == VISIBLE && section == "Voice" && editor == null && !listening) voice.start(settings.currentLanguage()) }
     }
     private fun openSettings(requestMicrophone: Boolean = false) {
         val page = when (section) { "Voice" -> "Voice typing"; "Clipboard" -> "Clipboard and notes"; else -> "Emoji" }

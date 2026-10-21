@@ -122,3 +122,18 @@ class InsertPins(initial: List<String> = emptyList()) {
     fun toggle(text: String) { if (!items.remove(text)) { items.add(0, text); while (items.size > 16) items.removeAt(items.lastIndex) } }
     fun values(): List<String> = items.toList()
 }
+
+/** Owns only dictated text. A terminal action runs once even if the recognizer calls back late. */
+class VoiceDraft(private val compose: (String) -> Unit, private val commit: (String) -> Unit, private val discard: () -> Unit) {
+    var text = ""; private set
+    var active = false; private set
+    fun start() { cancel(); text = ""; active = true }
+    fun partial(value: String) { if (active) { text = value; compose(value) } }
+    fun finish(final: String = text) { if (active) { active = false; text = final; if (final.isNotBlank()) commit(final) else discard() } }
+    fun cancel() { if (active) { active = false; discard() }; text = "" }
+}
+fun settledVoicePrefix(previous: String, current: String): Int {
+    val old = previous.split(' '); val words = current.split(' ')
+    val common = old.zip(words).takeWhile { it.first == it.second }.size.coerceAtMost((words.size-1).coerceAtLeast(0))
+    return words.take(common).sumOf { it.length+1 }.coerceAtMost(current.length)
+}
