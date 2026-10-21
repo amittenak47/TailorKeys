@@ -167,7 +167,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         setOnClickListener { action() }
     }
     private fun tabShape(selected: Boolean): android.graphics.drawable.Drawable? = if (selected) shape(palette.key, radius = 9) else null
-    private fun categoryShape(selected: Boolean): android.graphics.drawable.Drawable? = if (selected) android.graphics.drawable.InsetDrawable(shape(fillHi, radius = 17), dp(if (section == "Emoji") (if (tablet) 7 else 5) else 0), dp(5)) else null
+    private fun categoryShape(selected: Boolean): android.graphics.drawable.Drawable? = if (selected) android.graphics.drawable.InsetDrawable(shape(fillHi, radius = 17), dp(if (section == "Emoji") (if (tablet) 7 else 5) else 0), dp(5), dp(if (section == "Emoji") (if (tablet) 7 else 5) else 0), dp(5)) else null
     private fun bottomScroll(content: View) = HorizontalScrollView(context).apply {
         isHorizontalScrollBarEnabled = false; isFillViewport = tablet; isHorizontalFadingEdgeEnabled = !tablet; setFadingEdgeLength(dp(24)); addView(content)
     }
@@ -179,7 +179,22 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         dismissOverlay()
         dim.setBackgroundColor(if (app.tailorkeys.contrastRatio(palette.background, Color.BLACK) < 4.5) 0x66000000 else 0x2E000000)
         dim.visibility = VISIBLE
-        if (anchor != null) { heldView = anchor; heldBackground = anchor.background; anchor.background = shape(palette.key, true) }
+        if (anchor != null) {
+            heldView = anchor; heldBackground = anchor.background
+            val at = IntArray(2); val origin = IntArray(2); anchor.getLocationOnScreen(at); getLocationOnScreen(origin)
+            val rect = android.graphics.RectF((at[0]-origin[0]).toFloat(), (at[1]-origin[1]).toFloat(), (at[0]-origin[0]+anchor.width).toFloat(), (at[1]-origin[1]+anchor.height).toFloat())
+            dim.background = object : android.graphics.drawable.Drawable() {
+                private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+                override fun draw(canvas: Canvas) {
+                    val path = android.graphics.Path().apply { addRoundRect(rect,dp(12).toFloat(),dp(12).toFloat(),android.graphics.Path.Direction.CW) }
+                    canvas.save(); canvas.clipOutPath(path); canvas.drawColor(if (app.tailorkeys.contrastRatio(palette.background,Color.BLACK)<4.5) 0x66000000 else 0x2E000000); canvas.restore()
+                    paint.style=Paint.Style.STROKE; paint.strokeWidth=dp(2).toFloat(); paint.color=palette.accent; val inset=android.graphics.RectF(rect).apply { inset(d,d) }; canvas.drawRoundRect(inset,dp(12).toFloat(),dp(12).toFloat(),paint)
+                }
+                override fun setAlpha(alpha: Int) = Unit
+                override fun setColorFilter(filter: android.graphics.ColorFilter?) = Unit
+                @Deprecated("Deprecated in Java") override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
+            }
+        }
     }
     override fun onAttachedToWindow() { super.onAttachedToWindow(); repository.prefs.registerOnSharedPreferenceChangeListener(prefListener) }
     override fun onDetachedFromWindow() { repository.prefs.unregisterOnSharedPreferenceChangeListener(prefListener); voice.cancel(); super.onDetachedFromWindow() }
@@ -223,7 +238,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
             val b = button(if (name == "Kaomoji") "^_^" else "", name, section == name) {
                 voice.cancel(); listening = false; section = name; activeCategory = "Recent"; repository.prefs.edit().putString(InsertPrefs.SECTION, name).apply(); renderPanel()
             }
-            b.minimumHeight = 0; b.background = if (section == name) android.graphics.drawable.InsetDrawable(shape(palette.key, radius = 9), dp(2), dp(3)) else null
+            b.minimumHeight = 0; b.background = if (section == name) android.graphics.drawable.InsetDrawable(shape(palette.key, radius = 9), dp(2), dp(3), dp(2), dp(3)) else null
             b.elevation = if (section == name) d else 0f
             if (name != "Kaomoji") { b.setCompoundDrawables(null, InsertIcon(name, palette.text).apply { setBounds(0,0,dp(18),dp(18)) }, null, null); b.setPadding(0,dp(13),0,dp(13)) }
             sectionButtons[name] = b; switch.addView(b, LinearLayout.LayoutParams(dp(if (tablet) 56 else 44), dp(44)))
@@ -473,69 +488,87 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         }
         return true
     }
-    fun clipboardChanged() { if (visibility == VISIBLE && section == "Clipboard" && editor == null) { pages.removeAllViews(); footer.removeAllViews(); categories.removeAllViews(); renderClipboard() } }
+    fun clipboardChanged() { if (visibility == VISIBLE && section == "Clipboard" && editor == null) renderPanel() }
+    private fun sectionHeader(title: String, newNote: Boolean = false): View = LinearLayout(context).apply {
+        gravity = Gravity.CENTER_VERTICAL
+        addView(label(title.uppercase(), 12f).apply { setTextColor(sub); letterSpacing = .033f; setTypeface(typeface, Typeface.BOLD) }, LinearLayout.LayoutParams(0, dp(30), 1f))
+        if (newNote) addView(button("+ New", "Create note") { edit() }.apply { setTextColor(palette.smallAccent) }, LinearLayout.LayoutParams(-2,dp(44)))
+    }
+    private fun primary(text: String, action: () -> Unit) = button(text, action = action).apply { background = shape(palette.accent); setTextColor(palette.onAccent); setTypeface(typeface, Typeface.BOLD) }
+    private fun stateView(icon: String, title: String, message: String, actions: List<Pair<String, () -> Unit>> = emptyList()): View = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(16),dp(8),dp(16),dp(8))
+        addView(label("", 20f).apply { gravity = Gravity.CENTER; background = shape(fill, radius = 22); setCompoundDrawables(null, InsertIcon(icon, palette.text).apply { setBounds(0,0,dp(20),dp(20)) },null,null); setPadding(dp(12),dp(12),dp(12),dp(12)); importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }, LinearLayout.LayoutParams(dp(44),dp(44)))
+        addView(label(title,17f).apply { gravity = Gravity.CENTER; setTypeface(typeface,Typeface.BOLD) }, LinearLayout.LayoutParams(-1,-2).apply { topMargin = dp(10); bottomMargin = dp(8) })
+        addView(label(message,14f).apply { gravity = Gravity.CENTER; setTextColor(sub) }, LinearLayout.LayoutParams(-1,-2))
+        val buttons = LinearLayout(context).apply { gravity = Gravity.CENTER }
+        actions.forEachIndexed { i, a -> buttons.addView(if (i == 0) primary(a.first, a.second) else button(a.first, action = a.second).apply { background = shape(fill) }, LinearLayout.LayoutParams(-2,dp(44)).apply { marginStart = dp(4); marginEnd = dp(4) }) }
+        addView(buttons, LinearLayout.LayoutParams(-1,dp(44)).apply { topMargin = dp(12) })
+    }
     private fun renderClipboard() {
         val store = repository.store(); repository.save(store)
-        if (!tablet) {
-            categories.addView(button("⌕", "Search clips") { startSearch() }, LinearLayout.LayoutParams(dp(48), dp(48)))
-            categories.addView(button("Clipboard ${store.clips().size}", selected = !notes) { notes = false; clipboardChanged() }, LinearLayout.LayoutParams(0, dp(48), 1f))
-            categories.addView(button("Notes ${store.notes().size}", selected = notes) { notes = true; clipboardChanged() }, LinearLayout.LayoutParams(0, dp(48), 1f))
-        }
         val columns = LinearLayout(context)
         fun column(isNotes: Boolean): View {
-            val col = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-            val actions = LinearLayout(context)
-            actions.addView(label(if (isNotes) "Notes" else "Clipboard"), LinearLayout.LayoutParams(0, dp(48), 1f))
-            actions.addView(button(if (isNotes) "+ New" else "Clear", if (isNotes) "Create note" else "Clear unpinned clipboard history") { if (isNotes) edit() else { repository.change { it.clear() }; clipboardChanged() } })
-            col.addView(actions)
-            val list = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
             val enabled = repository.prefs.getBoolean(InsertPrefs.HISTORY, false)
             val items = if (isNotes) store.notes() else if (enabled) store.clips() else emptyList()
-            if (isNotes && items.isEmpty()) list.addView(label("No notes yet\nWrite one with + New, or save a clip as a note."))
-            if (!isNotes) when (clipboardPanelState(enabled, items.isNotEmpty(), repository.prefs.getBoolean(InsertPrefs.HAD_CLIPS, false), repository.prefs.getBoolean("insert_first_use", false))) {
-                ClipboardPanelState.HISTORY_OFF -> {
-                    list.addView(label("Clipboard history is off\nTurn it on to keep what you copy for a while. Notes still work.").apply { gravity = Gravity.CENTER; setPadding(dp(12), dp(16), dp(12), dp(16)) })
-                    list.addView(button("Turn on") { repository.prefs.edit().putBoolean(InsertPrefs.HISTORY, true).apply(); clipboardChanged() })
-                }
-                ClipboardPanelState.FIRST_USE -> list.addView(button("History stays on this device. Got it", "History stays on this device and clears after ${repository.keep.title}. Got it") { repository.prefs.edit().putBoolean("insert_first_use", true).apply(); clipboardChanged() })
-                ClipboardPanelState.EMPTY -> list.addView(label("Nothing copied yet\nCopy text and it shows up here."))
-                else -> Unit
+            if (!isNotes) {
+                val state = clipboardPanelState(enabled, items.isNotEmpty(), repository.prefs.getBoolean(InsertPrefs.HAD_CLIPS, false), repository.prefs.getBoolean("insert_first_use", false))
+                if (state == ClipboardPanelState.HISTORY_OFF) return stateView("Clipboard", "Clipboard history is off", "Notes still work: they are your own text, not history.", listOf("Turn on" to { repository.prefs.edit().putBoolean(InsertPrefs.HISTORY,true).apply(); clipboardChanged() }, "Settings" to { openSettings() }))
+                if (state == ClipboardPanelState.FIRST_USE) return stateView("Lock", "Your clipboard, kept on this device", "Copied text shows here and clears after ${repository.keep.title}. Pins and notes stay until you remove them. Password fields are never kept.", listOf("Got it" to { repository.prefs.edit().putBoolean("insert_first_use",true).apply(); clipboardChanged() }))
+                if (state == ClipboardPanelState.EMPTY) return stateView("Clipboard", "Nothing copied yet", "Copy text and it shows up here.")
             }
-            var pinned: Boolean? = null
-            items.forEach { clip ->
-                if (!isNotes && pinned != clip.pinned) { pinned = clip.pinned; list.addView(label(if (clip.pinned) "Pinned" else "Recent", 12f)) }
-                val age = android.text.format.DateUtils.getRelativeTimeSpanString(clip.at, System.currentTimeMillis(), 60_000).toString()
-                val card = button((if (clip.pinned) "⌖ " else "") + (if (isNotes) clip.title.ifBlank { "Note" } + "\n" + clip.text else clip.text + "\n" + age), "${if (clip.pinned) "Pinned, " else ""}${clip.title}, ${clip.text}, $age") { insert(clip.text) }.apply {
-                    gravity = Gravity.CENTER_VERTICAL; maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; background = shape(palette.key); setPadding(dp(12), dp(6), dp(12), dp(6))
-                    setOnLongClickListener { actions(this, clip); true }
+            val list = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+            fun group(title: String, entries: List<ClipItem>, newNote: Boolean = false) {
+                list.addView(sectionHeader(title,newNote))
+                val group = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; background = shape(palette.key); clipToOutline = true }
+                entries.forEachIndexed { index, item ->
+                    if (index > 0) group.addView(View(context).apply { setBackgroundColor(hair) }, LinearLayout.LayoutParams(-1,1).apply { marginStart = dp(14) })
+                    val row = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14),0,dp(14),0); isFocusable = true; isClickable = true }
+                    if (item.pinned) row.addView(ImageView(context).apply { setImageDrawable(InsertIcon("Pin",palette.text)); importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO },LinearLayout.LayoutParams(dp(16),dp(16)).apply { marginEnd = dp(8) })
+                    if (isNotes && item.title.isNotBlank()) row.addView(label(item.title,15f).apply { maxLines=1; ellipsize=android.text.TextUtils.TruncateAt.END; setTypeface(typeface,Typeface.BOLD); maxWidth=dp(if (tablet) 170 else 130) }, LinearLayout.LayoutParams(-2,-1).apply { marginEnd=dp(6) })
+                    row.addView(label(item.text.replace('\n',' '),15f).apply { maxLines=1; ellipsize=android.text.TextUtils.TruncateAt.END; if (isNotes) setTextColor(readable(palette.hint,palette.key)) },LinearLayout.LayoutParams(0,-1,1f))
+                    val age = android.text.format.DateUtils.getRelativeTimeSpanString(item.at,System.currentTimeMillis(),60_000).toString()
+                    if (!isNotes) row.addView(label(age,13f).apply { setTextColor(readable(palette.hint,palette.key)); maxLines=1 }, LinearLayout.LayoutParams(-2,-1).apply { marginStart=dp(8) })
+                    row.contentDescription = "${if (item.pinned) "Pinned, " else ""}${item.title}, ${item.text}, $age"
+                    row.setOnClickListener { insert(item.text) }
+                    val actions = clipActions(item); row.setOnLongClickListener { showMenu(row,actions); true }; accessibleActions(row,actions)
+                    group.addView(row,LinearLayout.LayoutParams(-1,dp(if (tablet) 48 else 44)))
                 }
-                list.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(4) })
+                list.addView(group,LinearLayout.LayoutParams(-1,-2).apply { bottomMargin=dp(8) })
             }
-            col.addView(ScrollView(context).apply { addView(list) }, LinearLayout.LayoutParams(-1, 0, 1f)); return col
+            if (isNotes) { group("Notes",items,true); if (items.isEmpty()) list.addView(label("No notes yet. Write one with + New, or save a clip as a note.").apply { setTextColor(sub) }) }
+            else { if (items.any { it.pinned }) group("Pinned",items.filter { it.pinned }); if (items.any { !it.pinned }) group("Recent",items.filter { !it.pinned }) }
+            return ScrollView(context).apply { addView(list) }
         }
-        if (tablet) { columns.addView(column(false), LinearLayout.LayoutParams(0, -1, 1f)); columns.addView(column(true), LinearLayout.LayoutParams(0, -1, 1f)) }
-        else columns.addView(column(notes), LinearLayout.LayoutParams(-1, -1))
-        pages.addView(columns, LayoutParams(-1, -1))
-        footer.addView(label("Items stay on this device and clear after ${repository.keep.title}.\nPins and notes stay until you delete them.", 11f), LinearLayout.LayoutParams(0, dp(48), 1f))
-        footer.addView(button("Settings") { openSettings() })
+        if (tablet) { columns.addView(column(false),LinearLayout.LayoutParams(0,-1,1f).apply { marginEnd=dp(14) }); columns.addView(column(true),LinearLayout.LayoutParams(0,-1,1f)) }
+        else columns.addView(column(notes),LinearLayout.LayoutParams(-1,-1))
+        pages.addView(columns,LayoutParams(-1,-1))
+        if (tablet) categories.addView(label("",12f).apply {
+            text = if (repository.keep == ClipKeep.FOREVER) "On this device ? kept until you clear it" else "On this device ? clears after ${repository.keep.title}"
+            setTextColor(sub); gravity=Gravity.CENTER; compoundDrawablePadding=dp(6); setCompoundDrawables(InsertIcon("Lock",sub).apply { setBounds(0,0,dp(14),dp(14)) },null,null,null)
+        },LinearLayout.LayoutParams(-1,dp(44)))
+        else {
+            val switch = LinearLayout(context).apply { background=shape(fill); gravity=Gravity.CENTER; setPadding(dp(2),0,dp(2),0) }
+            listOf("Clips","Notes").forEachIndexed { i,name -> switch.addView(button(name,selected=notes == (i == 1)) { notes=i == 1; clipboardChanged() }.apply { background=if (notes == (i == 1)) android.graphics.drawable.InsetDrawable(shape(palette.key,radius=9),0,dp(5),0,dp(5)) else null },LinearLayout.LayoutParams(dp(72),dp(44))) }
+            categories.gravity=Gravity.CENTER; categories.addView(switch,LinearLayout.LayoutParams(-2,dp(44)))
+        }
     }
-    private fun actions(anchor: View, item: ClipItem) {
-        PopupMenu(context, anchor).apply {
-            listOf(if (item.pinned) "Unpin" else "Pin", "Edit", if (item.note) "Delete" else "Save as note", if (item.note) null else "Delete").filterNotNull().forEach { menu.add(it) }
-            setOnMenuItemClickListener { action ->
-                when (action.title.toString()) {
-                    "Pin", "Unpin" -> repository.change { it.pin(item.id) }
-                    "Edit" -> edit(item)
-                    "Save as note" -> repository.change { it.saveAsNote(item.id) }
-                    "Delete" -> {
-                        val store = repository.store(); store.delete(item.id); repository.save(store); clipboardChanged()
-                        val undo = button("${if (item.note) "Note" else "Clip"} deleted · Undo") { if (store.undo()) repository.change { it.restore(item) }; clipboardChanged() }
-                        footer.addView(undo); postDelayed({ footer.removeView(undo) }, 6_000); return@setOnMenuItemClickListener true
-                    }
-                }
-                if (editor == null) clipboardChanged(); true
-            }; show()
+    private fun clipActions(item: ClipItem): List<Pair<String, () -> Unit>> =
+        (listOf(if (item.pinned) "Unpin" else "Pin", "Edit") + (if (item.note) emptyList() else listOf("Save as note")) + "Delete").map { title -> title to { performClip(title,item) } }
+    private fun performClip(action: String,item: ClipItem) {
+        when (action) {
+            "Pin","Unpin" -> repository.change { it.pin(item.id) }
+            "Edit" -> edit(item)
+            "Save as note" -> repository.change { it.saveAsNote(item.id) }
+            "Delete" -> {
+                val store=repository.store(); store.delete(item.id); repository.save(store); clipboardChanged()
+                showUndo(item,store); return
+            }
         }
+        if (editor == null) clipboardChanged()
+    }
+    private fun showUndo(item: ClipItem,store: ClipboardStore) {
+        val undo=button("${if (item.note) "Note" else "Clip"} deleted ? Undo") { if (store.undo()) repository.change { it.restore(item) }; clipboardChanged() }
+        addView(undo,LayoutParams(-2,dp(44),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=dp(54) }); postDelayed({ removeView(undo) },6_000)
     }
     private fun renderVoice() {
         val col = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(16), dp(8), dp(16), dp(8)) }

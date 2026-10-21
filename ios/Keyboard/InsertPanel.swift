@@ -468,80 +468,115 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         default: if let text = KeyText.output(code, state) { typeText(text); if !state.capsLock { state.shift = false } }
         }; return true
     }
+    private func sectionHeader(_ title: String, new: Bool = false) -> UIView {
+        let row = stack(), caption = label(title.uppercased(), size: 12); caption.font = .systemFont(ofSize: 12, weight: .semibold); caption.textColor = sub
+        let tracked = NSMutableAttributedString(string: title.uppercased(), attributes: [.kern: 0.4]); caption.attributedText = tracked; row.addArrangedSubview(caption)
+        if new { let add = button("+ New", label: "Create note") { [weak self] in self?.edit() }; add.setTitleColor(palette.smallAccent, for: .normal); row.addArrangedSubview(add) }
+        row.heightAnchor.constraint(equalToConstant: new ? 44 : 30).isActive = true; return row
+    }
+    private func stateView(_ icon: String, _ title: String, _ message: String, actions: [(String, () -> Void)] = []) -> UIView {
+        let holder = UIView(), content = stack(.vertical); content.alignment = .center; content.spacing = 10
+        let circle = UIView(); circle.backgroundColor = fill; circle.layer.cornerRadius = 22
+        circle.widthAnchor.constraint(equalToConstant: 44).isActive = true; circle.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        let image = UIImageView(image: UIImage(systemName: icon)); image.tintColor = palette.text; image.contentMode = .scaleAspectFit; image.frame = CGRect(x: 12, y: 12, width: 20, height: 20); circle.addSubview(image); image.isAccessibilityElement = false
+        content.addArrangedSubview(circle)
+        let heading = label(title, size: 17); heading.font = .systemFont(ofSize: 17, weight: .semibold); heading.textAlignment = .center; content.addArrangedSubview(heading)
+        let body = label(message, size: 14); body.textColor = sub; body.textAlignment = .center; content.addArrangedSubview(body)
+        let buttons = stack()
+        for (i, action) in actions.enumerated() { let b = button(action.0, action.1); b.backgroundColor = i == 0 ? palette.accent : fill; b.setTitleColor(i == 0 ? palette.onAccent : palette.text, for: .normal); buttons.addArrangedSubview(b) }; content.addArrangedSubview(buttons)
+        holder.addSubview(content); content.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([content.centerXAnchor.constraint(equalTo: holder.centerXAnchor), content.centerYAnchor.constraint(equalTo: holder.centerYAnchor), content.widthAnchor.constraint(lessThanOrEqualTo: holder.widthAnchor, constant: -24), content.topAnchor.constraint(greaterThanOrEqualTo: holder.topAnchor), content.bottomAnchor.constraint(lessThanOrEqualTo: holder.bottomAnchor)])
+        return holder
+    }
+    private func settingsButton(_ title: String, system: Bool = false) -> UIButton {
+        let b = button(title) {}; b.isAccessibilityElement = false
+        settingsLinkController.rootView = InsertSettingsLink(destination: system ? UIApplication.openSettingsURLString : "tailorkeys://settings?panel=clipboard")
+        let link = settingsLinkController.view!; link.removeFromSuperview(); link.backgroundColor = .clear; link.translatesAutoresizingMaskIntoConstraints = false; b.addSubview(link)
+        NSLayoutConstraint.activate([link.leadingAnchor.constraint(equalTo: b.leadingAnchor), link.trailingAnchor.constraint(equalTo: b.trailingAnchor), link.topAnchor.constraint(equalTo: b.topAnchor), link.bottomAnchor.constraint(equalTo: b.bottomAnchor)]); return b
+    }
     private func renderClipboard() {
         let store = repository.store(); repository.save(store)
-        if !tablet {
-            let tabs = stack(); tabs.distribution = .fillEqually
-            tabs.addArrangedSubview(button("⌕", label: "Search clips") { [weak self] in self?.search() })
-            tabs.addArrangedSubview(button("Clipboard \(store.clips.count)", selected: !notes) { [weak self] in self?.notes = false; self?.render() })
-            tabs.addArrangedSubview(button("Notes \(store.notes.count)", selected: notes) { [weak self] in self?.notes = true; self?.render() }); main.addArrangedSubview(tabs)
-        }
-        let columns = stack(); columns.distribution = .fillEqually
+        let columns = stack(); columns.spacing = 14; columns.distribution = .fillEqually
         if tablet || !notes { columns.addArrangedSubview(clipboardColumn(store, notes: false)) }
-        if tablet || notes { columns.addArrangedSubview(clipboardColumn(store, notes: true)) }
-        main.addArrangedSubview(columns)
-        let foot = stack(); foot.addArrangedSubview(label("Items stay on this device and clear after \(repository.keep.title). Pins and notes stay until deleted.", size: 11))
-        let settings = button("Settings") {}; settings.isAccessibilityElement = false
-        let link = settingsLinkController.view!; link.backgroundColor = .clear; link.translatesAutoresizingMaskIntoConstraints = false; settings.addSubview(link)
-        NSLayoutConstraint.activate([link.leadingAnchor.constraint(equalTo: settings.leadingAnchor), link.trailingAnchor.constraint(equalTo: settings.trailingAnchor), link.topAnchor.constraint(equalTo: settings.topAnchor), link.bottomAnchor.constraint(equalTo: settings.bottomAnchor)])
-        foot.addArrangedSubview(settings); main.addArrangedSubview(foot); footer = foot
+        if tablet || notes { columns.addArrangedSubview(clipboardColumn(store, notes: true)) }; main.addArrangedSubview(columns)
+        if tablet {
+            let privacy = label(repository.keep == .forever ? "On this device ? kept until you clear it" : "On this device ? clears after " + repository.keep.title, size: 12); privacy.textColor = sub; privacy.textAlignment = .center
+            let context = stack(); context.alignment = .center
+            let icon = UIImageView(image: UIImage(systemName: "lock")); icon.tintColor = sub; icon.widthAnchor.constraint(equalToConstant: 14).isActive = true; icon.heightAnchor.constraint(equalToConstant: 14).isActive = true; icon.contentMode = .scaleAspectFit
+            context.addArrangedSubview(UIView()); context.addArrangedSubview(icon); context.addArrangedSubview(privacy); context.addArrangedSubview(UIView()); makeBottom(context)
+        } else {
+            let context = UIView(), control = stack(); control.spacing = 0; control.backgroundColor = fill; control.layer.cornerRadius = 12
+            for (i, name) in ["Clips", "Notes"].enumerated() { let b = button(name, selected: notes == (i == 1)) { [weak self] in self?.notes = i == 1; self?.render() }; b.widthAnchor.constraint(equalToConstant: 72).isActive = true; styleTab(b, selected: notes == (i == 1)); control.addArrangedSubview(b) }
+            context.addSubview(control); control.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([control.centerXAnchor.constraint(equalTo: context.centerXAnchor), control.centerYAnchor.constraint(equalTo: context.centerYAnchor), control.heightAnchor.constraint(equalToConstant: 44)])
+            makeBottom(context)
+        }
     }
     private func clipboardColumn(_ store: ClipboardStore, notes: Bool) -> UIView {
-        let column = stack(.vertical); let header = stack()
-        header.addArrangedSubview(label(notes ? "Notes" : "Clipboard"))
-        header.addArrangedSubview(button(notes ? "+ New" : "Clear") { [weak self] in
-            guard let self = self else { return }; if notes { self.edit() } else { self.repository.change { $0.clear() }; self.render() }
-        }); column.addArrangedSubview(header)
-        let list = stack(.vertical)
-        let enabled = repository.prefs.boolDefault(InsertPrefs.history, false)
-        let items = notes ? store.notes : enabled && fullAccess() ? store.clips : []
-        if notes && items.isEmpty { list.addArrangedSubview(label("No notes yet. Write one with + New, or hold a clip and Save as note.")) }
-        if !notes {
-            switch clipboardPanelState(enabled: enabled, hasItems: !items.isEmpty, hadItems: repository.prefs.bool(forKey: InsertPrefs.hadClips), dismissed: repository.prefs.bool(forKey: "insert_first_use"), fullAccess: fullAccess()) {
-            case .historyOff:
-                list.addArrangedSubview(label("Clipboard history is off. Turn it on to keep what you copy for a while. Notes still work."))
-                list.addArrangedSubview(button("Turn on") { [weak self] in self?.repository.prefs.set(true, forKey: InsertPrefs.history); self?.render() })
-            case .accessRequired: list.addArrangedSubview(label("Turn on Full Access to keep clipboard history. Notes still work."))
-            case .firstUse: list.addArrangedSubview(button("History stays on this device · Got it") { [weak self] in self?.repository.prefs.set(true, forKey: "insert_first_use"); self?.render() })
-            case .empty: list.addArrangedSubview(label("Nothing copied yet. Read clipboard to add copied text."))
-            case .items: break
-            }
-        }
+        let column = stack(.vertical); column.spacing = 0
+        let enabled = repository.prefs.boolDefault(InsertPrefs.history, false), items = notes ? store.notes : enabled && fullAccess() ? store.clips : []
         if !notes && enabled && fullAccess() {
-            list.addArrangedSubview(button("Read clipboard", label: "Read clipboard. iOS may ask permission to paste.") { [weak self] in
+            let paste = button("Paste from clipboard", label: "Paste from clipboard. iOS may ask permission to paste.") { [weak self] in
                 guard let self = self, self.fullAccess(), !self.password(), self.repository.prefs.bool(forKey: InsertPrefs.history) else { return }
                 if let text = UIPasteboard.general.string { self.repository.change { $0.capture(text, enabled: true, sensitive: false, password: self.password(), fullAccess: self.fullAccess()) } }; self.render()
-            })
+            }; paste.heightAnchor.constraint(equalToConstant: 44).isActive = true; column.addArrangedSubview(paste)
         }
-        var pinSection: Bool?
-        for item in items {
-            if !notes && pinSection != item.pinned { pinSection = item.pinned; list.addArrangedSubview(label(item.pinned ? "Pinned" : "Recent", size: 12)) }
-            let age = RelativeDateTimeFormatter().localizedString(for: Date(timeIntervalSince1970: item.at), relativeTo: Date())
-            let text = (item.pinned ? "⌖ " : "") + (notes ? item.title + "\n" + item.text : item.text + "\n" + age)
-            let b = button(text, label: item.title + ", " + item.text + ", " + age) { [weak self] in self?.onInsert?(item.text) }
-            b.titleLabel?.numberOfLines = 3; b.titleLabel?.lineBreakMode = .byTruncatingTail; b.contentHorizontalAlignment = .leading; b.backgroundColor = palette.key
-            b.menu = UIMenu(children: clipActions(item)); b.showsMenuAsPrimaryAction = false
-            b.accessibilityCustomActions = clipActions(item).map { action in UIAccessibilityCustomAction(name: action.title) { [weak self] _ in self?.perform(action.title, item: item); return true } }
-            list.addArrangedSubview(b)
+        if !notes {
+            let state = clipboardPanelState(enabled: enabled, hasItems: !items.isEmpty, hadItems: repository.prefs.bool(forKey: InsertPrefs.hadClips), dismissed: repository.prefs.bool(forKey: "insert_first_use"), fullAccess: fullAccess())
+            let view: UIView?
+            switch state {
+            case .historyOff:
+                let content = stateView("doc.on.clipboard", "Clipboard history is off", "Notes still work: they are your own text, not history.", actions: [("Turn on", { [weak self] in self?.repository.prefs.set(true, forKey: InsertPrefs.history); self?.render() })])
+                if let buttons = (content.subviews.first as? UIStackView)?.arrangedSubviews.last as? UIStackView { buttons.addArrangedSubview(settingsButton("Settings")) }; view = content
+            case .accessRequired:
+                let content = stateView("lock", "Turn on Full Access", "iOS only shares the clipboard with Full Access. Notes still work.")
+                if let buttons = (content.subviews.first as? UIStackView)?.arrangedSubviews.last as? UIStackView { let b = settingsButton("Open Settings", system: true); b.backgroundColor = palette.accent; b.setTitleColor(palette.onAccent, for: .normal); buttons.addArrangedSubview(b) }; view = content
+            case .firstUse:
+                view = stateView("lock", "Your clipboard, kept on this device", "Copied text shows here and clears after " + repository.keep.title + ". Pins and notes stay until you remove them. Password fields are never kept.", actions: [("Got it", { [weak self] in self?.repository.prefs.set(true, forKey: "insert_first_use"); self?.render() })])
+            case .empty: view = stateView("doc.on.clipboard", "Nothing copied yet", "Paste from clipboard to add copied text.")
+            case .items: view = nil
+            }
+            if let view = view { column.addArrangedSubview(view); return column }
         }
+        let list = stack(.vertical); list.spacing = 0
+        func group(_ title: String, _ entries: [ClipItem], new: Bool = false) {
+            list.addArrangedSubview(sectionHeader(title, new: new))
+            let group = stack(.vertical); group.spacing = 0; group.backgroundColor = palette.key; group.layer.cornerRadius = 12; group.layer.borderWidth = 1; group.layer.borderColor = palette.keyOutline.cgColor; group.clipsToBounds = true
+            for (index, item) in entries.enumerated() {
+                if index > 0 { let inset = UIView(); let line = UIView(); line.backgroundColor = hair; line.translatesAutoresizingMaskIntoConstraints = false; inset.addSubview(line); NSLayoutConstraint.activate([inset.heightAnchor.constraint(equalToConstant: 1/UIScreen.main.scale), line.leadingAnchor.constraint(equalTo: inset.leadingAnchor, constant: 14), line.trailingAnchor.constraint(equalTo: inset.trailingAnchor), line.topAnchor.constraint(equalTo: inset.topAnchor), line.bottomAnchor.constraint(equalTo: inset.bottomAnchor)]); group.addArrangedSubview(inset) }
+                let row = button("", label: (item.pinned ? "Pinned, " : "") + item.title + ", " + item.text) { [weak self] in self?.onInsert?(item.text) }; row.contentEdgeInsets = .zero
+                let content = stack(); content.isUserInteractionEnabled = false; content.alignment = .center; content.translatesAutoresizingMaskIntoConstraints = false; row.addSubview(content)
+                if item.pinned { let pin = UIImageView(image: UIImage(systemName: "pin.fill")); pin.tintColor = palette.text; pin.contentMode = .scaleAspectFit; pin.widthAnchor.constraint(equalToConstant: 16).isActive = true; pin.heightAnchor.constraint(equalToConstant: 16).isActive = true; content.addArrangedSubview(pin) }
+                let text = label(item.text.replacingOccurrences(of: "\n", with: " "), size: 15); text.numberOfLines = 1; text.lineBreakMode = .byTruncatingTail; text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+                if notes && !item.title.isEmpty { let title = label(item.title, size: 15); title.numberOfLines = 1; title.lineBreakMode = .byTruncatingTail; title.font = .systemFont(ofSize: 15, weight: .semibold); title.widthAnchor.constraint(lessThanOrEqualTo: row.widthAnchor, multiplier: 0.45).isActive = true; content.addArrangedSubview(title); text.textColor = readable(palette.hint, on: palette.key) }
+                content.addArrangedSubview(text)
+                if !notes { let age = label(RelativeDateTimeFormatter().localizedString(for: Date(timeIntervalSince1970: item.at), relativeTo: Date()), size: 13); age.textColor = readable(palette.hint, on: palette.key); age.numberOfLines = 1; age.setContentCompressionResistancePriority(.required, for: .horizontal); content.addArrangedSubview(age) }
+                NSLayoutConstraint.activate([row.heightAnchor.constraint(equalToConstant: tablet ? 48 : 44), content.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 14), content.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -14), content.topAnchor.constraint(equalTo: row.topAnchor), content.bottomAnchor.constraint(equalTo: row.bottomAnchor)])
+                let titles = clipActions(item)
+                row.addGestureRecognizer(InsertHoldGesture { [weak self, weak row] in guard let self = self, let row = row else { return }; self.showMenu(row, titles: titles) { [weak self] in self?.perform($0, item: item) } })
+                row.accessibilityCustomActions = titles.map { title in UIAccessibilityCustomAction(name: title) { [weak self] _ in self?.perform(title, item: item); return true } }; group.addArrangedSubview(row)
+            }; list.addArrangedSubview(group); list.setCustomSpacing(8, after: group)
+        }
+        if notes { group("Notes", items, new: true); if items.isEmpty { list.addArrangedSubview(label("No notes yet. Write one with + New, or save a clip as a note.")) } }
+        else { if items.contains(where: \.pinned) { group("Pinned", items.filter(\.pinned)) }; if items.contains(where: { !$0.pinned }) { group("Recent", items.filter { !$0.pinned }) } }
         column.addArrangedSubview(scroll(list)); return column
     }
-    private func clipActions(_ item: ClipItem) -> [UIAction] {
-        ([item.pinned ? "Unpin" : "Pin", "Edit"] + (item.note ? [] : ["Save as note"]) + ["Delete"]).map { title in
-            UIAction(title: title, attributes: title == "Delete" ? .destructive : []) { [weak self] _ in self?.perform(title, item: item) }
-        }
-    }
+    private func clipActions(_ item: ClipItem) -> [String] { [item.pinned ? "Unpin" : "Pin", "Edit"] + (item.note ? [] : ["Save as note"]) + ["Delete"] }
     private func perform(_ action: String, item: ClipItem) {
+        dismissOverlay()
         switch action {
         case "Pin", "Unpin": repository.change { $0.pin(item.id) }; render()
         case "Edit": edit(item)
         case "Save as note": repository.change { $0.saveAsNote(item.id) }; render()
         case "Delete":
-            let store = repository.store(); store.delete(item.id); repository.save(store); render()
-            let undo = button("\(item.note ? "Note" : "Clip") deleted · Undo") { [weak self] in guard let self = self else { return }; if store.undo() { self.repository.change { $0.restore(item) } }; self.render() }
-            footer?.addArrangedSubview(undo); DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak undo] in undo?.removeFromSuperview() }
+            let store = repository.store(); store.delete(item.id); repository.save(store); render(); showUndo(item, store)
         default: break
         }
+    }
+    private func showUndo(_ item: ClipItem, _ store: ClipboardStore) {
+        let undo = button((item.note ? "Note" : "Clip") + " deleted ? Undo") { [weak self] in guard let self = self else { return }; if store.undo() { self.repository.change { $0.restore(item) } }; self.render() }
+        undo.frame = CGRect(x: max(4, bounds.midX-120), y: bounds.height-100, width: min(240,bounds.width-8), height: 44); addSubview(undo)
+        DispatchQueue.main.asyncAfter(deadline: .now()+6) { [weak undo] in undo?.removeFromSuperview() }
     }
     private func renderDictate() {
         let col = stack(.vertical); col.backgroundColor = palette.key; col.layer.cornerRadius = 12; col.layoutMargins = UIEdgeInsets(top: 20, left: 20, bottom: 12, right: 20); col.isLayoutMarginsRelativeArrangement = true
@@ -562,8 +597,9 @@ private final class SymbolCell: UICollectionViewCell {
 }
 
 struct InsertSettingsLink: View {
+    var destination = "tailorkeys://settings?panel=clipboard"
     var body: some View {
-        Link(destination: URL(string: "tailorkeys://settings?panel=clipboard")!) {
+        Link(destination: URL(string: destination)!) {
             Rectangle().fill(Color.clear).contentShape(Rectangle()).frame(maxWidth: .infinity, maxHeight: .infinity)
         }.buttonStyle(.plain).accessibilityLabel("Clipboard and notes settings")
     }
@@ -593,4 +629,10 @@ private final class InsertFlowLayout: UICollectionViewFlowLayout {
             if item.frame.minY != row { row = item.frame.minY; x = 0 }; item.frame.origin.x = x; x += item.frame.width + 8
         }; return attributes
     }
+}
+
+private final class InsertHoldGesture: UILongPressGestureRecognizer {
+    private let held: () -> Void
+    init(_ held: @escaping () -> Void) { self.held = held; super.init(target: nil, action: nil); addTarget(self, action: #selector(invoke)) }
+    @objc private func invoke() { if state == .began { held() } }
 }
