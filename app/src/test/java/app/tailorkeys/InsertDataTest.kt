@@ -7,6 +7,26 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class InsertDataTest {
+    @org.junit.Test fun emojiCellsKeepMinimumTargets() {
+        for (width in listOf(320f, 360f, 390f, 412f)) {
+            val available = width - 8f
+            val cols = app.tailorkeys.insert.emojiColumns(available, false)
+            org.junit.Assert.assertTrue(cols <= 8 && cols * 44 <= available)
+            org.junit.Assert.assertTrue(cols == 8 || available - cols * 44 < 44)
+        }
+        org.junit.Assert.assertEquals(14, app.tailorkeys.insert.emojiColumns(776f, true))
+        org.junit.Assert.assertEquals(11, app.tailorkeys.insert.emojiColumns(576f, true))
+    }
+    @Test fun voicePartialsStopAndCancelOwnOnlyOneDraft() {
+        val composed=mutableListOf<String>(); val committed=mutableListOf<String>(); var discards=0
+        val voice=VoiceDraft({ composed.add(it) },{ committed.add(it) },{ discards++ })
+        voice.start(); voice.partial(""); assertTrue(composed.isEmpty()); voice.partial("see"); voice.partial("see you"); voice.finish(); voice.finish("late result")
+        assertEquals(listOf("see","see you"),composed); assertEquals(listOf("see you"),committed)
+        voice.start(); voice.partial("discard me"); voice.cancel(); voice.finish("late result")
+        assertEquals(1,discards); assertEquals(listOf("see you"),committed)
+        voice.start(); voice.partial("final"); voice.finish("final result"); assertEquals("final result",committed.last())
+        assertEquals(11,settledVoicePrefix("see you on Tuesday","see you on Thursday"))
+    }
     private fun asset(name: String) = File("src/main/assets/insert/$name")
     private fun catalog() = asset("emoji.tsv").bufferedReader().use { EmojiCatalog.load(it.lineSequence()) }
     @Test fun unicodeDataAndKeywordSearch() {

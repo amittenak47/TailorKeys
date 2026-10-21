@@ -26,6 +26,18 @@ class InsertRepositoryTest {
         } as SharedPreferences
     }
 
+    @Test fun pinnedFacesLeadRecentAndSurviveRepositoryReload() {
+        val prefs = preferences(); val repository = InsertRepository(prefs)
+        repeat(20) { repository.togglePin("Kaomoji", "face$it") }
+        assertEquals((19 downTo 4).map { "face$it" }, InsertRepository(prefs).pinned("Kaomoji"))
+        assertTrue(repository.pinned("Emoji").isEmpty())
+        repository.togglePin("Kaomoji", "face19")
+        assertEquals("face18", repository.pinned("Kaomoji").first())
+        repository.togglePin("Kaomoji", "face19")
+        assertEquals("face19", repository.pinned("Kaomoji").first())
+        assertEquals(16, repository.pinned("Kaomoji").size)
+    }
+
     @Test fun tapsAndTonePicksPersistBeforeInsertionAndStayInTheirSection() {
         val prefs = preferences()
         val repository = InsertRepository(prefs)

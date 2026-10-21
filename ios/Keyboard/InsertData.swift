@@ -108,8 +108,10 @@ final class ClipboardStore {
 }
 
 enum InsertPrefs {
+    static let kaomoji = "insert_kaomoji"
     static let history = "insert_history", keep = "insert_keep", tone = "insert_tone", recents = "insert_recents", section = "insert_section"
     static let toneNames = ["Default", "Light", "Medium-light", "Medium", "Medium-dark", "Dark"]
+    static let dictateHintSeen = "insert_dictate_hint_v1"
     static let promptSeen = "insert_key_prompt_v1"
     static let hadClips = "insert_had_clips"
     static func needsPrompt(seen: Bool, custom: Bool, grid: KeyGrid) -> Bool { !seen && custom && !grid.items.contains { $0.keys.contains(Keys.insert) } }
@@ -146,4 +148,37 @@ final class InsertRepository {
 
 extension UserDefaults {
     func boolDefault(_ key: String, _ value: Bool) -> Bool { object(forKey: key) == nil ? value : bool(forKey: key) }
+}
+
+func emojiColumns(width: Double, tablet: Bool) -> Int {
+    max(1, min(tablet ? 14 : 8, Int(width / (tablet ? 52 : 44))))
+}
+
+struct InsertPins {
+    private(set) var values: [String]
+    init(_ values: [String] = []) { var seen = Set<String>(); self.values = Array(values.filter { seen.insert($0).inserted }.prefix(16)) }
+    mutating func toggle(_ text: String) {
+        if values.contains(text) { values.removeAll { $0 == text } } else { values.insert(text, at: 0); values = Array(values.prefix(16)) }
+    }
+}
+extension InsertRepository {
+    func pinned(_ section: String) -> [String] { InsertPins(prefs.stringArray(forKey: "insert_pinned_" + section) ?? []).values }
+    func togglePin(_ section: String, _ text: String) { var pins = InsertPins(pinned(section)); pins.toggle(text); prefs.set(pins.values, forKey: "insert_pinned_" + section) }
+}
+
+enum DictateHint {
+    /// Consume the first-open hint even under Reduce Motion, so it never surprises a later visit.
+    static func claimPulse(_ prefs: UserDefaults, reduceMotion: Bool) -> Bool {
+        let seen = prefs.bool(forKey: InsertPrefs.dictateHintSeen)
+        if !seen { prefs.set(true, forKey: InsertPrefs.dictateHintSeen) }
+        return !seen && !reduceMotion
+    }
+}
+
+/// Match Android's length filter: an insertion at the limit cannot evict existing trailing text.
+func insertEditorText(_ value: String, _ text: String, caret: Int, limit: Int) -> (String, Int) {
+    let position = max(0, min(caret, value.count))
+    let accepted = String(text.prefix(max(0, limit-value.count)))
+    var result = value; result.insert(contentsOf: accepted, at: result.index(result.startIndex, offsetBy: position))
+    return (result, position+accepted.count)
 }

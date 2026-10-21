@@ -6,6 +6,24 @@ import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
 
+object InsertPrefs {
+    const val HISTORY = "insert_history"
+    const val KEEP = "insert_keep"
+    const val TONE = "insert_tone"
+    const val RECENTS = "insert_recents"
+    const val KAOMOJI = "insert_kaomoji"
+    const val VOICE = "insert_voice"
+    const val DEVICE_ONLY = "insert_device_only"
+    const val STORE = "insert_clips"
+    const val SECTION = "insert_section"
+    const val HAD_CLIPS = "insert_had_clips"
+    val toneNames = listOf("Default", "Light", "Medium-light", "Medium", "Medium-dark", "Dark")
+}
+
+/** Remaining width is spacing, never a narrower touch target. */
+fun emojiColumns(widthDp: Float, tablet: Boolean): Int =
+    minOf(if (tablet) 14 else 8, (widthDp / if (tablet) 52 else 44).toInt()).coerceAtLeast(1)
+
 data class InsertSymbol(val text: String, val name: String, val category: String, val keywords: String = "")
 
 /** The bundled Unicode fully-qualified sequences are authoritative, including ZWJ placement. */
@@ -96,4 +114,26 @@ class ClipboardStore(initial: List<ClipItem> = emptyList(), private val clock: (
             val a = JSONArray(json); (0 until a.length()).map { val o = a.getJSONObject(it); ClipItem(o.getString("id"), o.getString("text"), o.getLong("at"), o.optBoolean("pinned"), o.optBoolean("note"), o.optString("title")) }
         }.getOrDefault(emptyList()), clock)
     }
+}
+
+/** New pins lead, duplicates never consume the sixteen retained slots. */
+class InsertPins(initial: List<String> = emptyList()) {
+    private val items = initial.distinct().take(16).toMutableList()
+    fun toggle(text: String) { if (!items.remove(text)) { items.add(0, text); while (items.size > 16) items.removeAt(items.lastIndex) } }
+    fun values(): List<String> = items.toList()
+}
+
+/** Owns only dictated text. A terminal action runs once even if the recognizer calls back late. */
+class VoiceDraft(private val compose: (String) -> Unit, private val commit: (String) -> Unit, private val discard: () -> Unit) {
+    var text = ""; private set
+    var active = false; private set
+    fun start() { cancel(); text = ""; active = true }
+    fun partial(value: String) { if (active) { val hadText=text.isNotEmpty(); text=value; if (hadText || value.isNotEmpty()) compose(value) } }
+    fun finish(final: String = text) { if (active) { active = false; text = final; if (final.isNotBlank()) commit(final) else discard() } }
+    fun cancel() { if (active) { active = false; discard() }; text = "" }
+}
+fun settledVoicePrefix(previous: String, current: String): Int {
+    val old = previous.split(' '); val words = current.split(' ')
+    val common = old.zip(words).takeWhile { it.first == it.second }.size.coerceAtMost((words.size-1).coerceAtLeast(0))
+    return words.take(common).sumOf { it.length+1 }.coerceAtMost(current.length)
 }

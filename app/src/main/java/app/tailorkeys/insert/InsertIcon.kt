@@ -10,6 +10,10 @@ internal class InsertIcon(private val kind: String, color: Int) : Drawable() {
         canvas.save(); canvas.translate(bounds.left.toFloat(), bounds.top.toFloat()); canvas.scale(bounds.width() / 24f, bounds.height() / 24f)
         val path = Path()
         when (kind) {
+            "Device" -> { canvas.drawRoundRect(7f,2f,17f,22f,2f,2f,paint); canvas.drawLine(10f,18f,14f,18f,paint) }
+            "Cloud" -> { path.moveTo(6f,18f); path.cubicTo(-1f,18f,1f,9f,6f,9f); path.cubicTo(8f,1f,18f,2f,19f,10f); path.cubicTo(26f,11f,23f,18f,19f,18f); path.close(); canvas.drawPath(path,paint) }
+            "Lock" -> { canvas.drawRoundRect(5f,10f,19f,21f,2f,2f,paint); canvas.drawArc(8f,2f,16f,15f,180f,180f,false,paint) }
+            "Pin" -> { path.moveTo(8f,3f); path.lineTo(16f,3f); path.lineTo(15f,10f); path.lineTo(18f,14f); path.lineTo(6f,14f); path.lineTo(9f,10f); path.close(); paint.style=Paint.Style.FILL; canvas.drawPath(path,paint); paint.style=Paint.Style.STROKE; canvas.drawLine(12f,14f,12f,22f,paint) }
             "Emoji" -> { canvas.drawCircle(12f, 12f, 9f, paint); canvas.drawPoint(9f, 10f, paint); canvas.drawPoint(15f, 10f, paint); canvas.drawArc(8f, 10f, 16f, 16f, 25f, 130f, false, paint) }
             "Clipboard" -> { canvas.drawRoundRect(5f, 4.5f, 19f, 21f, 2.5f, 2.5f, paint); canvas.drawRoundRect(9f, 3f, 15f, 6f, 1f, 1f, paint); canvas.drawLine(9f, 11f, 15f, 11f, paint); canvas.drawLine(9f, 15f, 13f, 15f, paint) }
             "Voice" -> { canvas.drawRoundRect(9f, 3f, 15f, 14f, 3f, 3f, paint); canvas.drawArc(5.5f, 4.5f, 18.5f, 17.5f, 0f, 180f, false, paint); canvas.drawLine(12f, 17.5f, 12f, 21f, paint); canvas.drawLine(9f, 21f, 15f, 21f, paint) }

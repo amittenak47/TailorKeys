@@ -4,19 +4,6 @@ import android.content.Context
 import android.content.SharedPreferences
 import org.json.JSONArray
 
-object InsertPrefs {
-    const val HISTORY = "insert_history"
-    const val KEEP = "insert_keep"
-    const val TONE = "insert_tone"
-    const val RECENTS = "insert_recents"
-    const val VOICE = "insert_voice"
-    const val DEVICE_ONLY = "insert_device_only"
-    const val STORE = "insert_clips"
-    const val SECTION = "insert_section"
-    const val HAD_CLIPS = "insert_had_clips"
-    val toneNames = listOf("Default", "Light", "Medium-light", "Medium", "Medium-dark", "Dark")
-}
-
 /** Reload before each operation, so the app and the retained IME panel never overwrite each other. */
 class InsertRepository(val prefs: SharedPreferences) {
     constructor(context: Context) : this(context.applicationContext.getSharedPreferences("insert_private", Context.MODE_PRIVATE))
@@ -41,6 +28,11 @@ class InsertRepository(val prefs: SharedPreferences) {
     fun insertSymbol(section: String, entry: InsertSymbol, insert: (String) -> Unit) {
         used(section, entry.text)
         insert(entry.text)
+    }
+    fun pinned(section: String): List<String> = runCatching { val a = JSONArray(prefs.getString("insert_pinned_$section", "[]")); (0 until a.length()).map { a.getString(it) } }.getOrDefault(emptyList())
+    fun togglePin(section: String, text: String) {
+        val pins = InsertPins(pinned(section)); pins.toggle(text)
+        prefs.edit().putString("insert_pinned_$section", JSONArray(pins.values()).toString()).apply()
     }
     fun clearRecents() { prefs.edit().remove("insert_recent_Emoji").remove("insert_recent_Kaomoji").apply() }
 }

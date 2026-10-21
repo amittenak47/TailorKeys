@@ -118,6 +118,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private var glideExplore = emptyList<String>()
     private var keyboardView: KeyboardView? = null
     private var quickOptions: QuickOptions? = null
+    private var voiceConnection: android.view.inputmethod.InputConnection? = null
     private var insertPanel: app.tailorkeys.insert.InsertPanel? = null
     private var clipboardCapture: app.tailorkeys.insert.ClipboardCapture? = null
     private var editingLayoutKey: String? = null
@@ -482,9 +483,24 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
                     keyboard.setOptionsCovered(!active); keyboard.alpha = if (active) 1f else 0f
                     keyboard.importantForAccessibility = if (active) View.IMPORTANT_FOR_ACCESSIBILITY_YES else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
                     keyboard.insertStripHeight = (height * resources.displayMetrics.density).toInt()
-                    keyboard.grid = if (active && (resources.configuration.smallestScreenWidthDp < 600 || height > 56))
+                    keyboard.grid = if (active && (resources.configuration.smallestScreenWidthDp < 600 || keyboard.width / resources.displayMetrics.density < 600))
                         KeyGrid.fromJson(grid.toJson())!!.apply { setNumberRow(false) } else grid
-                }, pickIme = { onPickIme() }).apply {
+                }, pickIme = { pickVoiceIme() },
+                composeVoice = { text -> editorPhase {
+                    val connection = currentInputConnection
+                    if (connection != null) {
+                        if (voiceConnection == null) { onChoiceInterrupted(); clearTaps(); connection.finishComposingText() }
+                        voiceConnection = connection; connection.setComposingText(text, 1); editorRead = null
+                    }
+                } },
+                finishVoice = { text -> editorPhase {
+                    val connection = voiceConnection ?: currentInputConnection
+                    if (voiceConnection == null) connection?.finishComposingText()
+                    connection?.commitText(text, 1); connection?.finishComposingText(); voiceConnection = null; editorRead = null; updateSuggestions()
+                } },
+                cancelVoice = { editorPhase {
+                    voiceConnection?.let { it.setComposingText("", 1); it.finishComposingText() }; voiceConnection = null; editorRead = null
+                } }).apply {
                 visibility = View.INVISIBLE
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
             }
@@ -1088,6 +1104,18 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val before = editor().before.takeLast(64)
         val context = if (hasAutomaticSpace()) before.dropLast(1) else before
         predictor.observe(glideWord!!, previousWord(context), previousWord2(context))
+    }
+
+    private fun pickVoiceIme() {
+        onChoiceInterrupted()
+        val manager = getSystemService(InputMethodManager::class.java)
+        if (Build.VERSION.SDK_INT >= 28) {
+            for (ime in manager.enabledInputMethodList) {
+                val subtype = manager.getEnabledInputMethodSubtypeList(ime, true).firstOrNull { it.mode == "voice" } ?: continue
+                switchInputMethod(ime.id, subtype); return
+            }
+        }
+        manager.showInputMethodPicker()
     }
 
     override fun onPickIme() {

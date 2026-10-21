@@ -835,3 +835,42 @@ do {
     switched.update("h", at: 6); switched.update("hello", at: 10)
     check(switched.result(at: Date())?.keyboard == "other" && switched.wpm(at: 10) == 15, "switched test retained old timing or keyboard")
 }
+
+for width in [320.0, 360, 390, 412] {
+    let available = width - 8, cols = emojiColumns(width: width - 8, tablet: false)
+    check(cols <= 8 && Double(cols) * 44 <= available && (cols == 8 || available - Double(cols) * 44 < 44), "emoji targets shrank or overflowed")
+}
+check(emojiColumns(width: 776, tablet: true) == 14 && emojiColumns(width: 576, tablet: true) == 11, "tablet emoji columns")
+
+do {
+    let suite = "tailorkeys.pins." + UUID().uuidString
+    let prefs = UserDefaults(suiteName: suite)!
+    defer { prefs.removePersistentDomain(forName: suite) }
+    let repository = InsertRepository(defaults: { prefs })
+    for i in 0..<20 { repository.togglePin("Kaomoji", "face\(i)") }
+    check(InsertRepository(defaults: { prefs }).pinned("Kaomoji") == (4...19).reversed().map { "face\($0)" }, "pins lost order or cap across reload")
+    check(repository.pinned("Emoji").isEmpty, "pins leaked into emoji")
+    repository.togglePin("Kaomoji", "face19"); check(repository.pinned("Kaomoji").first == "face18", "unpin failed")
+}
+
+do {
+    let suite = "tailorkeys.dictate." + UUID().uuidString
+    let prefs = UserDefaults(suiteName: suite)!
+    defer { prefs.removePersistentDomain(forName: suite) }
+    check(DictateHint.claimPulse(prefs, reduceMotion: false), "first dictate hint did not pulse")
+    check(!DictateHint.claimPulse(prefs, reduceMotion: false), "dictate hint repeated")
+    check(!DictateHint.claimPulse(prefs, reduceMotion: true), "dictate hint ignored reduced motion")
+    prefs.removeObject(forKey: InsertPrefs.dictateHintSeen)
+    check(!DictateHint.claimPulse(prefs, reduceMotion: true), "first reduced-motion visit pulsed")
+    check(!DictateHint.claimPulse(prefs, reduceMotion: false), "suppressed hint replayed later")
+}
+
+do {
+    let full = String(repeating: "x", count: ClipboardStore.noteMax)
+    let unchanged = insertEditorText(full, "y", caret: 10, limit: ClipboardStore.noteMax)
+    check(unchanged.0 == full && unchanged.1 == 10, "typing at note limit evicted existing text")
+    let capped = insertEditorText(String(repeating: "x", count: 1999), "🙂🙂", caret: 1999, limit: ClipboardStore.noteMax)
+    check(capped.0.count == 2000 && capped.0.hasSuffix("🙂") && capped.1 == 2000, "note insertion split or exceeded a character")
+    check(insertEditorText("abc", "X", caret: 1, limit: 4).0 == "aXbc", "note insertion ignored caret")
+    check(InsertPrefs.kaomoji == "insert_kaomoji", "kaomoji preference contract changed")
+}
