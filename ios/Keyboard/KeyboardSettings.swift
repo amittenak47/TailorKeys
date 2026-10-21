@@ -45,6 +45,7 @@ enum Prefs {
     static let numberRow = "number_row"
     static let showHints = "show_hints"
     static let cursorControl = "cursor_control"
+    static let cursorGlow = "cursor_glow"
     static let emptySide = "empty_side"
     static let spaceAccepts = "space_accepts"
     static let autoCap = "auto_cap"
@@ -65,6 +66,7 @@ enum Prefs {
 
     static let booleanDefaults: [String: Bool] = [
         followSystemText: true, typeOnPress: false, numberRow: true, showHints: true,
+        cursorGlow: false,
         spaceAccepts: true, autoCap: true, doubleSpace: true, clicks: true, keyTint: true,
         swipeTyping: true, chording: false, smartTargets: true, lockSize: false, sameOrientations: false,
     ]
@@ -160,6 +162,7 @@ final class KeyboardSettings {
     var typeOnPress: Bool { bool(Prefs.typeOnPress, false) }
     var numberRow: Bool { bool(Prefs.numberRow, true) }
     var showHints: Bool { bool(Prefs.showHints, true) }
+    var cursorGlow: Bool { bool(Prefs.cursorGlow, false) }
     var cursorControl: CursorControl {
         get { CursorControl(rawValue: d.string(forKey: Prefs.cursorControl) ?? "") ?? .auto }
         set { d.set(newValue.rawValue, forKey: Prefs.cursorControl) }

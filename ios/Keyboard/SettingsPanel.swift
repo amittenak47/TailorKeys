@@ -292,6 +292,10 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
             self.settings.cursorControl = value; self.changed(rebuild: true)
         })
         addNote("Hold and push in the empty space to move the cursor.")
+        stack.addArrangedSubview(switchRow("Cursor glow", settings.cursorGlow) { [weak self] on in
+            self?.settings.set(Prefs.cursorGlow, on); self?.changed()
+        })
+        addNote("Show a soft glow across the keys when you move the cursor.")
 
         let accessibility = label("Accessibility")
         accessibility.font = .boldSystemFont(ofSize: 15)

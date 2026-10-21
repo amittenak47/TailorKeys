@@ -315,6 +315,10 @@ struct SettingsScreen: View {
                 }
             }
             .disabled(!model.fullAccessConfirmed)
+            Section(footer: Text("Show a soft glow across the keys when you move the cursor.")) {
+                Toggle("Cursor glow", isOn: model.bool(Prefs.cursorGlow, default: false))
+            }
+            .disabled(!model.fullAccessConfirmed)
             Section(header: Text("Accessibility").textCase(nil).font(.system(size: 15, weight: .semibold))) {
                 Toggle("Type on press", isOn: model.bool(Prefs.typeOnPress, default: false))
                 SettingSlider(title: "Ignore repeated taps", pref: Prefs.keyRepeatGuard,

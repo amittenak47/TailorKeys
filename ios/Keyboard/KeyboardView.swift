@@ -266,6 +266,12 @@ final class KeyboardView: UIView {
     private var restoreWidth: Int?
     private var palette: Palette
     private var viewPrefs = ViewPreferences()
+    private var cursorGlow = false
+    private var cursorPointer: CursorPointer?
+    private var pointerTime: TimeInterval = 0
+    private let pointerBlue = UIColor(red: 173 / 255.0, green: 203 / 255.0, blue: 227 / 255.0, alpha: 1).cgColor
+    private let pointerWhite = UIColor.white.cgColor
+    private let pointerShadow = UIColor.black.withAlphaComponent(0.12).cgColor
     private var faceLabels: [String: String] = [:]
     private var faceHints: [String: String] = [:]
     private var faceLetters: [String: Character] = [:]
@@ -284,6 +290,7 @@ final class KeyboardView: UIView {
         var emptySide: EmptySide = .slideArrow
     }
     private func refreshPreferences() {
+        cursorGlow = settings.cursorGlow
         viewPrefs.highContrast = settings.theme == .highContrast
         viewPrefs.keyTint = settings.keyTint; viewPrefs.showHints = settings.showHints
         viewPrefs.smartTargets = settings.smartTargets; viewPrefs.swipeTyping = settings.swipeTyping
@@ -978,7 +985,7 @@ final class KeyboardView: UIView {
             drawGear()
             drawSymbol("globe", in: globeRect, color: palette.hint)
             // Under the keys, so it shows through the split and the spaces between keys.
-            drawWave(ctx)
+            if cursorGlow { drawWave(ctx) }
         }
         let now = CACurrentMediaTime()
         for pk in placed {
@@ -1008,6 +1015,7 @@ final class KeyboardView: UIView {
                 drawArrow(button, pointsLeft: switchToLeft)
             }
         }
+        if !editMode { drawCursorPointer(ctx, now) }
     }
 
     private func drawGlide(_ ctx: CGContext, _ now: TimeInterval) {
@@ -1297,6 +1305,26 @@ final class KeyboardView: UIView {
         ctx.restoreGState()
     }
 
+    /// Draw last, above the keys, using cached colors and the same zone-local geometry as Android.
+    private func drawCursorPointer(_ ctx: CGContext, _ now: TimeInterval) {
+        guard let p = cursorPointer,
+              p.released || trackers.values.contains(where: { $0.kind == .cursor }) else { return }
+        let alpha = p.alpha(now, reducedMotion: pointerReducedMotion)
+        guard alpha > 0 else { return }
+        let radius = max(0, p.radius - 0.5)
+        let disk = CGRect(x: p.x - radius, y: p.y - radius, width: radius * 2, height: radius * 2)
+        ctx.saveGState()
+        ctx.setAlpha(alpha)
+        ctx.setShadow(offset: CGSize(width: 0, height: 1), blur: 4, color: pointerShadow)
+        ctx.setFillColor(pointerBlue)
+        ctx.fillEllipse(in: disk)
+        ctx.setShadow(offset: .zero, blur: 0, color: nil)
+        ctx.setStrokeColor(pointerWhite)
+        ctx.setLineWidth(1)
+        ctx.strokeEllipse(in: disk)
+        ctx.restoreGState()
+    }
+
     private func drawGear() { drawSymbol("gearshape", in: gearRect, color: palette.hint) }
 
     private func drawToolbar() {
@@ -1542,7 +1570,7 @@ final class KeyboardView: UIView {
     }
 
     private func updateCursorLink() {
-        var moving = false
+        var moving = cursorPointer?.fading(CACurrentMediaTime(), reducedMotion: pointerReducedMotion) ?? false
         for tracker in trackers.values where tracker.kind == .cursor {
             if tracker.joystick.speed != 0 || tracker.waveMoving { moving = true; break }
         }
@@ -1559,16 +1587,28 @@ final class KeyboardView: UIView {
 
     @objc private func cursorTick() {
         let now = CACurrentMediaTime()
+        var held = false
         for t in trackers.values where t.kind == .cursor {
+            held = true
             moveCursor(t, t.joystick.advance(now), now)
-            t.waveMoving = stepWave(t, now)
+            let waveMoving = cursorGlow && stepWave(t, now)
+            let pointerMoving = cursorPointer?.step(CGFloat(t.joystick.push), seconds: CGFloat(now - pointerTime),
+                reducedMotion: pointerReducedMotion) ?? false
+            t.waveMoving = waveMoving || pointerMoving
+        }
+        pointerTime = now
+        if let p = cursorPointer, !held && (!p.released || p.alpha(now, reducedMotion: pointerReducedMotion) == 0) {
+            cursorPointer = nil
         }
         setNeedsDisplay()
         updateCursorLink()
     }
 
+    private var pointerReducedMotion: Bool { reducedMotion || UIAccessibility.isReduceMotionEnabled }
+
     func cancelTouches() {
         cursorDisplayLink?.invalidate(); cursorDisplayLink = nil
+        cursorPointer = nil
         chordTouches.cancel()
         chordHighlightWork?.cancel()
         chordHighlight.removeAll()
@@ -1694,6 +1734,10 @@ final class KeyboardView: UIView {
             t.cursorZone = zone
             t.waveX = p.x; t.waveTime = CACurrentMediaTime()
             t.joystick.reach(left: p.x - CursorZone.edge(zone.left, at: p.y), right: CursorZone.edge(zone.right, at: p.y) - p.x)
+            let now = CACurrentMediaTime()
+            cursorPointer = CursorPointer(zone: zone, press: p, radius: 10, now: now)
+            pointerTime = now
+            updateCursorLink()
             setNeedsDisplay()
             return
         }
@@ -1789,6 +1833,7 @@ final class KeyboardView: UIView {
             let now = CACurrentMediaTime()
             t.lastX = p.x; t.lastY = p.y
             moveCursor(t, t.joystick.displace(p.x - t.x0, now), now)
+            if pointerReducedMotion { cursorPointer?.step(CGFloat(t.joystick.push), seconds: 0, reducedMotion: true) }
             t.waveMoving = true
             updateCursorLink()
             setNeedsDisplay()
@@ -1886,6 +1931,8 @@ final class KeyboardView: UIView {
         case .gear:
             delegate?.openQuickOptions()
         case .cursor:
+            cursorPointer?.release(CACurrentMediaTime(), reducedMotion: pointerReducedMotion)
+            if pointerReducedMotion { cursorPointer = nil }
             updateCursorLink()
         }
         setNeedsDisplay()

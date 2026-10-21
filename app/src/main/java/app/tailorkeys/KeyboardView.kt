@@ -16,6 +16,7 @@ import android.graphics.ComposeShader
 import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.RadialGradient
 import android.graphics.Shader
 import android.os.Build
 import android.os.Bundle
@@ -217,6 +218,18 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private data class WaveAppearance(val color: Int, val top: Float, val bottom: Float)
     private var waveAppearance: WaveAppearance? = null
     private val waveMatrix = Matrix()
+    private var cursorGlow = settings.bool(Prefs.CURSOR_GLOW)
+    private var cursorPointer: CursorPointer? = null
+    private var pointerSelecting = false
+    private var pointerTime = 0L
+    private val pointerFill = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val pointerRing = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeWidth = density; color = Color.WHITE
+    }
+    private val pointerShadowShader = RadialGradient(0f, 0f, 1f,
+        intArrayOf(0x18000000, 0x10000000, 0x00000000), floatArrayOf(0f, .65f, 1f), Shader.TileMode.CLAMP)
+    private val pointerShadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { shader = pointerShadowShader }
+    private val pointerMatrix = Matrix()
 
     private val isLandscape get() = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
@@ -280,6 +293,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         multipleLanguages = settings.languages().size > 1
         languageLabel = state.language.uppercase()
         emptySide = settings.emptySide()
+        cursorGlow = settings.bool(Prefs.CURSOR_GLOW)
         if (builtGeometry != geometrySettings()) relayout()
         else {
             clearAccessibilityFocus()
@@ -933,7 +947,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         }
         val radius = cornerRadius
         // Under the keys, so it shows through the split and the spaces between keys.
-        if (!editMode) drawWave(canvas)
+        if (!editMode && cursorGlow) drawWave(canvas)
         val now = SystemClock.uptimeMillis()
         for (i in placed.indices) {
             val pk = placed[i]
@@ -960,6 +974,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 drawMoveArrow(canvas, it, pointsLeft = switchToLeft)
             }
         }
+        if (!editMode) drawCursorPointer(canvas, now)
         if (editMode && !reducedMotion) postInvalidateOnAnimation()
     }
 
@@ -1229,9 +1244,36 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun invalidateWave(oldX: Float, newX: Float, selecting: Boolean) {
+        if (!cursorGlow) return
         val half = (if (selecting) 52 else 44) * density + 1f
         invalidate(kotlin.math.floor(min(oldX, newX) - half).toInt(), stripH.toInt(),
             ceil(max(oldX, newX) + half).toInt(), ceil(handleRect.top).toInt())
+    }
+
+    /** Draw last so keys cannot cover the disk. Paints, gradient and matrix survive every frame. */
+    private fun drawCursorPointer(canvas: Canvas, now: Long) {
+        val p = cursorPointer ?: return
+        if (cursorTracker == null && !p.released) return
+        val alpha = p.alpha(now, reducedMotion)
+        if (alpha <= 0f) return
+        val shadowRadius = p.radius + 4 * density
+        pointerMatrix.setScale(shadowRadius, shadowRadius)
+        pointerMatrix.postTranslate(p.x, p.y + density)
+        pointerShadowShader.setLocalMatrix(pointerMatrix)
+        pointerShadow.alpha = (255 * alpha).toInt()
+        canvas.drawCircle(p.x, p.y + density, shadowRadius, pointerShadow)
+        pointerFill.color = if (pointerSelecting) palette.accent else Color.rgb(173, 203, 227)
+        pointerFill.alpha = (255 * alpha).toInt()
+        pointerRing.alpha = (255 * alpha).toInt()
+        val radius = (p.radius - density / 2).coerceAtLeast(0f)
+        canvas.drawCircle(p.x, p.y, radius, pointerFill)
+        canvas.drawCircle(p.x, p.y, radius, pointerRing)
+    }
+
+    private fun invalidatePointer(p: CursorPointer) {
+        val inset = p.radius + 6 * density
+        invalidate(kotlin.math.floor(p.minX - inset).toInt(), kotlin.math.floor(p.y - inset).toInt(),
+            ceil(p.maxX + inset).toInt(), ceil(p.y + inset).toInt())
     }
 
     private fun drawHandle(canvas: Canvas) {
@@ -1476,11 +1518,24 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         override fun run() {
             val now = SystemClock.uptimeMillis()
             var again = false
-            val t = cursorTracker ?: return
-            val oldX = t.waveX
-            moveCursor(t, t.joystick.advance(now), now)
-            if (cursorTracker === t && (stepWave(t, now) || t.joystick.speed != 0.0)) again = true
-            invalidateWave(oldX, t.waveX, t.select)
+            val t = cursorTracker
+            if (t != null) {
+                val oldX = t.waveX
+                moveCursor(t, t.joystick.advance(now), now)
+                if (cursorTracker === t) {
+                    val waveMoving = cursorGlow && stepWave(t, now)
+                    val pointerMoving = cursorPointer?.step(t.joystick.push.toFloat(),
+                        (now - pointerTime) / 1000f, reducedMotion) == true
+                    again = waveMoving || pointerMoving || t.joystick.speed != 0.0
+                }
+                invalidateWave(oldX, t.waveX, t.select)
+            }
+            pointerTime = now
+            cursorPointer?.let { p ->
+                invalidatePointer(p)
+                if (cursorTracker == null && (!p.released || p.alpha(now, reducedMotion) == 0f)) cursorPointer = null
+                else if (p.fading(now, reducedMotion)) again = true
+            }
             if (again) postOnAnimation(this)
         }
     }
@@ -1497,6 +1552,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     fun cancelTouches() {
         removeCallbacks(cursorFrame)
+        cursorPointer = null
         gapPresses.clear()
         chordTouches.cancel()
         timers.removeCallbacks(clearChordHighlight)
@@ -1601,7 +1657,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     haptic(HapticFeedbackConstants.LONG_PRESS)
                     it.lastCursorHaptic = SystemClock.uptimeMillis()
                 }
+                val now = SystemClock.uptimeMillis()
+                pointerSelecting = it.select
+                cursorPointer = CursorPointer(zone, x, y, (if (it.select) 11 else 10) * density, now)
+                pointerTime = now
             }
+            removeCallbacks(cursorFrame)
+            if (!reducedMotion) postOnAnimation(cursorFrame)
             invalidate()
             return
         }
@@ -1692,6 +1754,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 t.fx = x; t.fy = y
                 val now = SystemClock.uptimeMillis()
                 moveCursor(t, t.joystick.displace((x - t.x0) / density, now), now)
+                if (reducedMotion) cursorPointer?.step(t.joystick.push.toFloat(), 0f, true)
                 removeCallbacks(cursorFrame)
                 postOnAnimation(cursorFrame)
                 invalidateWave(t.waveX, t.waveX, t.select)
@@ -1794,6 +1857,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             K_GEAR -> listener?.onQuickOptions()
             K_CURSOR -> {
                 removeCallbacks(cursorFrame)
+                cursorPointer?.release(SystemClock.uptimeMillis(), reducedMotion)
+                if (reducedMotion) cursorPointer = null else postOnAnimation(cursorFrame)
                 gapPresses.lift(time, t.fx / density, t.fy / density)
                 if (t.select) listener?.onSelectMode(false)
             }

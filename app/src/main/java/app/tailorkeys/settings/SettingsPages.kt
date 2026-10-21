@@ -301,6 +301,8 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
             }
             Text("Hold and push in the empty space to move the cursor.", Modifier.padding(16.dp, 8.dp),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            ToggleRow("Cursor glow", state.bool(Prefs.CURSOR_GLOW),
+                note = "Show a soft glow across the keys when you move the cursor.") { state.set(Prefs.CURSOR_GLOW, it) }
         }
     }
     item("accessibility") {
