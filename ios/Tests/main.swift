@@ -860,3 +860,28 @@ do {
 }
 
 check(InsertPrefs.kaomoji == "insert_kaomoji", "Kaomoji preference wire key differs")
+do {
+    let tailor = KeyboardAverage(keyboard: "tailorkeys", wpm: 52, accuracy: 0.95, tests: 14)
+    let other = KeyboardAverage(keyboard: "other", wpm: 47, accuracy: 0.93, tests: 9)
+    check(KeyboardAverage.comparisons([]).isEmpty && KeyboardAverage.comparisons([tailor]).isEmpty && KeyboardAverage.comparisons([other]).isEmpty, "comparison needs both keyboards")
+    let summary = KeyboardAverage.comparisons([tailor, other])[0]
+    check(summary.wpmDifference == 5 && abs(summary.accuracyPoints - 2) < 0.00001, "comparison mixed percentages and points")
+    check(summary.description == "TailorKeys is 5 wpm faster on average, 2 points more accurate", "comparison copy differs")
+    let slower = KeyboardAverage(keyboard: "tailorkeys", wpm: 43, accuracy: 0.90, tests: 2)
+    check(KeyboardAverage.comparisons([slower, other])[0].description == "TailorKeys is 4 wpm slower on average, 3 points less accurate", "negative comparison differs")
+    let grid = KeyGrid.template(.standard), sentence = "A p,.'?!"
+    for (index, character) in sentence.enumerated() {
+        let expected: String
+        switch character {
+        case " ": expected = Keys.space; case ",": expected = "v"; case ".": expected = "b"
+        case "?": expected = "x"; case "!": expected = "z"; default: expected = String(character).lowercased()
+        }
+        check(nextTypingKey(grid, sentence: sentence, typedLength: index)?.keys.contains(expected) == true, "next key missed \(character)")
+    }
+    check(nextTypingKey(grid, sentence: sentence, typedLength: sentence.count) == nil && nextTypingKey(grid, sentence: sentence, typedLength: -1) == nil, "finished sentence has a hint")
+    let stacked = grid.items.first { $0.keys.contains("a") }!; stacked.keys.append("ω")
+    check(nextTypingKey(grid, sentence: "Ω", typedLength: 0) === stacked, "next key missed stack face")
+    stacked.keys.append(",")
+    check(nextTypingKey(grid, sentence: ",", typedLength: 0) === stacked, "explicit punctuation lost to a long-press hint")
+    check(nextTypingKey(grid, sentence: "🙂", typedLength: 0) == nil, "unknown character highlighted")
+}

@@ -63,6 +63,21 @@ struct KeyboardAverage {
                             accuracy: results.reduce(0) { $0 + $1.accuracy } / Double(results.count), tests: results.count)
         }.sorted { a, b in a.keyboard == "tailorkeys" ? b.keyboard != "tailorkeys" : (b.keyboard == "tailorkeys" ? false : a.keyboard < b.keyboard) }
     }
+    static func comparisons(_ rows: [KeyboardAverage]) -> [KeyboardComparisonSummary] {
+        guard let tailor = rows.first(where: { $0.keyboard == "tailorkeys" }) else { return [] }
+        return rows.filter { $0.keyboard != "tailorkeys" }.map {
+            KeyboardComparisonSummary(other: $0.keyboard, wpmDifference: tailor.wpm - $0.wpm, accuracyPoints: (tailor.accuracy - $0.accuracy) * 100)
+        }
+    }
+}
+
+struct KeyboardComparisonSummary {
+    let other: String
+    let wpmDifference: Double
+    let accuracyPoints: Double
+    var description: String {
+        "TailorKeys is \(Int(abs(wpmDifference).rounded())) wpm \(wpmDifference >= 0 ? "faster" : "slower") on average, \(Int(abs(accuracyPoints).rounded())) points \(accuracyPoints >= 0 ? "more" : "less") accurate"
+    }
 }
 
 /// The wire format deliberately contains grid OBJECTS, not escaped grid JSON strings.

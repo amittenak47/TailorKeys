@@ -9,12 +9,13 @@ struct KeyboardPreview: View {
     var palette: Palette? = nil
     var maximumHeight: CGFloat? = nil
     var showsPressed = false
+    var nextKeyID: Int? = nil
     @State private var height: CGFloat = 260
 
     var body: some View {
         GeometryReader { proxy in
             KeyboardPreviewView(model: model, landscape: landscape, permitsEditing: permitsEditing,
-                                previewsSelection: previewsSelection, palette: palette, maximumHeight: maximumHeight, showsPressed: showsPressed, width: proxy.size.width, height: $height)
+                                previewsSelection: previewsSelection, palette: palette, maximumHeight: maximumHeight, showsPressed: showsPressed, nextKeyID: nextKeyID, width: proxy.size.width, height: $height)
         }
         .frame(height: height)
         .clipShape(RoundedRectangle(cornerRadius: 24))
@@ -30,6 +31,7 @@ private struct KeyboardPreviewView: UIViewRepresentable {
     let palette: Palette?
     let maximumHeight: CGFloat?
     let showsPressed: Bool
+    let nextKeyID: Int?
     let width: CGFloat
     @Binding var height: CGFloat
 
@@ -43,9 +45,11 @@ private struct KeyboardPreviewView: UIViewRepresentable {
         let view = KeyboardView(settings: prefs, grid: model.grid)
         view.delegate = context.coordinator
         context.coordinator.keyboard = view
+        view.layer.addSublayer(context.coordinator.nextKeyOutline)
         view.setSuggestions(left: ["helpful", "helicopter", "helmet"], right: ["hello", "help", "held"], prefix: "hel")
         view.onHeightChange = { [weak coordinator = context.coordinator] height in
             coordinator?.reportHeight(height)
+            coordinator?.updateNextKeyOutline()
         }
         // Observe the preview toolbar's own Done button without consuming keyboard touches.
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.toolbarTapped))
@@ -70,6 +74,7 @@ private struct KeyboardPreviewView: UIViewRepresentable {
         view.previewPressed = showsPressed
         view.reloadSettings()
         context.coordinator.reportHeight(view.height(forWidth: max(1, width)))
+        context.coordinator.updateNextKeyOutline()
     }
 
     static func dismantleUIView(_ view: KeyboardView, coordinator: Coordinator) {
@@ -78,17 +83,36 @@ private struct KeyboardPreviewView: UIViewRepresentable {
         view.cancelTouches()
         view.onHeightChange = nil
         view.delegate = nil
+        coordinator.nextKeyOutline.removeFromSuperlayer()
     }
 
     final class Coordinator: NSObject, KeyboardViewDelegate, UIGestureRecognizerDelegate {
         var parent: KeyboardPreviewView
         var settings: KeyboardSettings?
         weak var keyboard: KeyboardView?
+        let nextKeyOutline = CAShapeLayer()
         private var pendingHeight: CGFloat?
         private weak var scroll: UIScrollView?
         private var scrollBehavior: (cancel: Bool, delay: Bool)?
 
         init(_ parent: KeyboardPreviewView) { self.parent = parent }
+
+        /// Use the preview's public key bounds so split, spacing and size match the rendered layout.
+        func updateNextKeyOutline() {
+            nextKeyOutline.path = nil
+            guard let keyboard = keyboard, let id = parent.nextKeyID,
+                  let index = keyboard.grid.items.filter({ $0.r < keyboard.grid.rows }).firstIndex(where: { $0.id == id }),
+                  let elements = keyboard.accessibilityElements as? [UIAccessibilityElement] else { return }
+            let keys = elements.filter { $0.accessibilityTraits.contains(.keyboardKey) }
+            guard keys.indices.contains(index), let prefs = settings else { return }
+            let rect = keys[index].accessibilityFrameInContainerSpace.insetBy(dx: 1, dy: 1)
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            nextKeyOutline.fillColor = UIColor.clear.cgColor
+            nextKeyOutline.strokeColor = (parent.palette ?? Palette.of(prefs, dark: keyboard.traitCollection.userInterfaceStyle == .dark)).accent.cgColor
+            nextKeyOutline.lineWidth = 2
+            nextKeyOutline.path = UIBezierPath(roundedRect: rect, cornerRadius: CGFloat(prefs.int(Prefs.cornerRadius))).cgPath
+            CATransaction.commit()
+        }
 
         func reportHeight(_ value: CGFloat) {
             guard abs(parent.height - value) > 0.5, pendingHeight != value else { return }

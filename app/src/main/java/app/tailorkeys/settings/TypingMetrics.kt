@@ -1,6 +1,20 @@
 package app.tailorkeys.settings
 
 import app.tailorkeys.TypingResult
+import app.tailorkeys.layout.GridKey
+import app.tailorkeys.layout.KeyGrid
+import app.tailorkeys.layout.Keys
+import app.tailorkeys.layout.KeyText
+import app.tailorkeys.layout.InputState
+
+/** Uses every stack face; punctuation and Space are keys too. A finished sentence has no hint. */
+internal fun nextTypingKey(grid: KeyGrid, sentence: String, typedLength: Int, language: String = "en"): GridKey? {
+    val next = sentence.getOrNull(typedLength) ?: return null
+    val code = if (next == ' ') Keys.SPACE else next.lowercaseChar().toString()
+    return grid.items.firstOrNull { code in it.keys } ?: grid.items.firstOrNull { key ->
+        key.keys.any { KeyText.longPress(it, InputState().apply { this.language = language }) == code }
+    }
+}
 
 internal enum class TypingMode { FREE, TEST }
 internal data class SpeedSample(val elapsed: Long, val wpm: Double, val mistake: Boolean)
