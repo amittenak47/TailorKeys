@@ -49,12 +49,14 @@ internal fun LayoutLibraryPage(state: SettingsState, listState: LazyListState, e
     var naming by rememberSaveable { mutableStateOf<String?>(null) }
     var name by rememberSaveable { mutableStateOf("Custom") }
     var pendingSplit by rememberSaveable { mutableStateOf(false) }
+    var pendingSettings by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingSource by rememberSaveable { mutableStateOf<String?>(null) }
     var delete by rememberSaveable { mutableStateOf<String?>(null) }
     var importPanel by rememberSaveable { mutableStateOf(false) }
     var code by rememberSaveable { mutableStateOf("") }
     var importName by rememberSaveable { mutableStateOf("Imported layout") }
-    val imported = remember(code) { if (code.length <= 100_000) KeyGrid.fromCode(code) else null }
+    val decoded = remember(code) { if (code.length <= 100_000) KeyGrid.decodeCode(code) else null }
+    val imported = decoded?.grid
     val newer = remember(code) { Regex("TK([0-9]+)-").find(code)?.groupValues?.get(1)?.toIntOrNull()?.let { it > 1 } == true }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -78,10 +80,11 @@ internal fun LayoutLibraryPage(state: SettingsState, listState: LazyListState, e
         if (state.library.requestNew() == NewLayoutFlow.SAVE_FIRST) {
             pendingSource = source
             pendingSplit = selected.split
+            pendingSettings = selected.settings
             name = "Custom"
             naming = "continue"
         } else {
-            state.selectLayout(state.library.startDraft(selected.grid(), selected.split))
+            state.selectLayout(state.library.startDraft(selected.grid(), selected.split, selected.settings))
             if (!editing) onEdit()
         }
     }
@@ -116,7 +119,7 @@ internal fun LayoutLibraryPage(state: SettingsState, listState: LazyListState, e
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                             TextButton(::closeImport) { Text("Cancel") }
-                            Button({ imported?.let { state.selectLayout(state.library.add(importName, it)); importPanel = false } },
+                            Button({ imported?.let { state.selectLayout(state.library.add(importName, it, settings = decoded?.settings ?: state.settings.layoutSettings())); importPanel = false } },
                                 enabled = imported != null) { Text("Add layout") }
                         }
                     }
@@ -197,7 +200,7 @@ internal fun LayoutLibraryPage(state: SettingsState, listState: LazyListState, e
             OutlinedTextField(name, { name = it.take(24) }, label = { Text("Layout name") }, singleLine = true,
                 supportingText = { Text("Keep it or give it a name.  ${name.length} / 24") })
         } }, confirmButton = { TextButton({
-            val entry = if (flow == "continue") state.library.saveAndContinue(name, requireNotNull(KeyGrid.fromJson(pendingSource)), pendingSplit)
+            val entry = if (flow == "continue") state.library.saveAndContinue(name, requireNotNull(KeyGrid.fromJson(pendingSource)), pendingSplit, pendingSettings)
                 else state.library.rename(flow, name)
             state.selectLayout(entry)
             naming = null; pendingSource = null
@@ -291,7 +294,7 @@ private fun SelectedLayoutActionBar(state: SettingsState, editing: Boolean, onTr
                 LayoutAction("Try", R.drawable.ic_settings_keyboard, entry.name, !editing, Modifier.weight(1f)) { onTry(entry) }
                 LayoutAction("Share", R.drawable.ic_settings_share, entry.name, true, Modifier.weight(1f)) {
                     context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                        .putExtra(Intent.EXTRA_TEXT, "My TailorKeys layout: ${entry.grid().toCode()}"), "Share layout"))
+                        .putExtra(Intent.EXTRA_TEXT, "My TailorKeys layout: ${entry.code()}"), "Share layout"))
                 }
                 if (entry.custom) {
                     LayoutAction(if (editing) "Done" else "Edit", R.drawable.ic_settings_edit, entry.name, true, Modifier.weight(1f), onEdit)

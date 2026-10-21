@@ -131,7 +131,7 @@ class LayoutLibraryTest {
         store.rename(first.key, "Work")
         assertEquals(listOf("Work", "Couch"), store.entries().filter { it.custom }.map { it.name })
         val array = JSONArray(f.values[LayoutKeys.SAVED])
-        assertEquals(setOf("id", "name", "grid", "split"), array.getJSONObject(0).keys().asSequence().toSet())
+        assertEquals(setOf("id", "name", "grid", "split", "settings"), array.getJSONObject(0).keys().asSequence().toSet())
         assertTrue(array.getJSONObject(0).get("grid") is JSONObject)
         store.delete(first.key)
         assertEquals(second.key, store.entries().single { it.custom }.key)

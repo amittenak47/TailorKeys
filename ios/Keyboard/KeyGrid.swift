@@ -102,7 +102,10 @@ final class KeyGrid {
 
     func rowColumns(_ row: Int, _ column: Int) -> Int {
         let start = Self.bounds(column).lowerBound
-        return max(1, items.filter { $0.r == row && Self.region($0.c) == Self.region(column) }.map { $0.c + $0.w - start }.max() ?? Self.bounds(column).count)
+        let side = Self.region(column)
+        var span = 0
+        for key in items where key.r == row && Self.region(key.c) == side { span = max(span, key.c + key.w - start) }
+        return span > 0 ? span : Self.bounds(column).count
     }
 
     func valid(_ k: GridKey) -> Bool {
@@ -251,8 +254,10 @@ final class KeyGrid {
 
     /// A short text code for sharing the layout: the JSON, raw-deflated and base64url-encoded.
     /// Android reads and writes the same codes.
-    func toCode() -> String {
-        guard let raw = toJSON().data(using: .utf8),
+    func toCode(settings: [String: Any]? = nil) -> String {
+        guard var object = (try? JSONSerialization.jsonObject(with: Data(toJSON().utf8))) as? [String: Any] else { return "" }
+        object["settings"] = settings
+        guard let raw = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
               let packed = try? (raw as NSData).compressed(using: .zlib) as Data else { return "" }
         let b64 = packed.base64EncodedString()
             .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
@@ -265,7 +270,7 @@ final class KeyGrid {
     }
 
     /// Optional names travel in the bounded layout object; decoding happens only once.
-    static func decodeCode(_ text: String) -> (grid: KeyGrid, name: String?)? {
+    static func decodeCode(_ text: String) -> (grid: KeyGrid, name: String?, settings: [String: Any]?)? {
         guard text.utf8.count <= maxLayoutBytes * 2 else { return nil }
         guard let start = text.range(of: codePrefix) else { return nil }
         let encoded = text[start.upperBound...].utf8.prefix(maxLayoutBytes * 2 + 1).prefix(while: {
@@ -280,7 +285,7 @@ final class KeyGrid {
               let json = String(data: raw, encoding: .utf8), let g = fromJSON(json) else { return nil }
         let object = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any]
         let name = (object?["name"] as? String).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        return (g, name.flatMap { $0.isEmpty ? nil : String($0.prefix(24)) })
+        return (g, name.flatMap { $0.isEmpty ? nil : String($0.prefix(24)) }, object?["settings"] as? [String: Any])
     }
 
     /// Raw DEFLATE, like Android. END is required; exhausted input alone is not success.

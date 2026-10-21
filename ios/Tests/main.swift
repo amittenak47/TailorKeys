@@ -482,4 +482,61 @@ withLayoutStore { prefs, defaults in
     check(defaults.object(forKey: Prefs.layoutDraftSplit) == nil, "draft split marker leaked")
 }
 
+for template in Template.allCases {
+    let grid = KeyGrid.template(template)
+    for code in [Keys.abc, Keys.num, Keys.sym, Keys.backspace, Keys.enter] {
+        let key = grid.items.first { $0.keys.contains(code) }!
+        check(!grid.remove(key) && grid.removalHint(key) != nil, "last required face removed")
+    }
+    check(grid.remove(grid.items.first { $0.isSpace }!), "duplicate Space was protected")
+    check(!grid.remove(grid.items.first { $0.isSpace }!), "last Space was removed")
+}
+let compacted = KeyGrid.template(.split)
+check(compacted.remove(compacted.items.first { $0.keys == ["e"] }!), "letter removal failed")
+check(compacted.items.filter { $0.r == 0 && $0.c < 5 }.map { $0.c } == [0, 1, 2, 3], "row did not compact")
+check(compacted.rowColumns(0, 0) == 4 && compacted.rowColumns(0, 6) == 5, "reflow crossed the split")
+for code in [",", "."] { check(compacted.remove(compacted.items.first { $0.keys == [code] }!), "punctuation protected") }
+check(KeyGrid.fromCode(compacted.toCode()).map { LayoutLibrary.sameGrid(compacted, $0) } == true, "removed layout code failed")
+
+withLayoutStore { prefs, defaults in
+    let library = LayoutLibrary(settings: prefs, defaults: defaults)
+    prefs.setFor(false, Prefs.height, 51); prefs.setFor(true, Prefs.height, 65)
+    prefs.setFor(true, Prefs.width, 79); prefs.setAlignFor(true, .right)
+    prefs.set(Prefs.curve, 92); prefs.set(Prefs.cornerRadius, 15); prefs.theme = .warm
+    let snapshot = prefs.layoutSettings()
+    let a = library.add(compacted, name: "Desk")!
+    prefs.theme = .dark; prefs.setFor(false, Prefs.height, 30)
+    library.use(a)
+    check(NSDictionary(dictionary: snapshot).isEqual(to: prefs.layoutSettings()), "layout settings did not apply")
+    prefs.theme = .midnight; prefs.setFor(true, Prefs.tilt, -8)
+    library.reload()
+    let updated = library.choice(a)!
+    check(updated.settings?["theme"] as? String == "MIDNIGHT", "Look did not sync")
+    check(updated.settings?["tilt_l"] as? Int == -8, "landscape Size did not sync")
+    let decoded = KeyGrid.decodeCode(updated.grid.toCode(settings: updated.settings))!
+    check(NSDictionary(dictionary: decoded.settings!).isEqual(to: updated.settings!), "settings code round trip failed")
+    let previous = prefs.layoutSettings()
+    var other = previous; other["theme"] = "LIGHT"; other["height_l"] = 34
+    let b = library.add(compacted, name: "Couch", snapshot: other)!
+    check(library.beginTrial(b), "settings trial failed")
+    check(prefs.theme == .light && prefs.int(Prefs.height(true)) == 34, "trial settings did not apply")
+    prefs.theme = .dark
+    _ = LayoutLibrary(settings: prefs, defaults: defaults)
+    check(NSDictionary(dictionary: previous).isEqual(to: prefs.layoutSettings()), "crash recovery lost Size/Look")
+    check(defaults.string(forKey: Prefs.layoutTrialSettings) == nil, "trial settings recovery record leaked")
+    library.reload()
+    check(library.choice(a)?.settings?["theme"] as? String == "MIDNIGHT", "trial overwrote previous layout settings")
+    check(library.startDraft(from: a), "settings draft failed")
+    library.use("draft"); prefs.set(Prefs.textScale, 135)
+    let saved = library.saveDraft(name: "Draft")!
+    check(library.choice(saved)?.settings?["text_scale"] as? Int == 135, "draft settings did not sync or save")
+    library.use("preset:STANDARD")
+    check(prefs.int(Prefs.textScale) == 135, "preset reset Look")
+    var array = (try! JSONSerialization.jsonObject(with: Data(defaults.string(forKey: Prefs.layoutsSaved)!.utf8))) as! [[String: Any]]
+    array[0].removeValue(forKey: "settings")
+    defaults.set(String(decoding: try! JSONSerialization.data(withJSONObject: array), as: UTF8.self), forKey: Prefs.layoutsSaved)
+    library.reload(); library.use(a)
+    check(prefs.int(Prefs.textScale) == 135, "legacy entry reset current settings")
+}
+
 print("Tablet layout and typing checks passed")

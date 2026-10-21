@@ -41,7 +41,7 @@ final class AppSettingsModel: ObservableObject {
     var choices: [LayoutChoice] { library.choices }
 
     func splitPreview(for choice: LayoutChoice) -> Bool? {
-        return choice.split
+        return choice.splitFor(settings.previewOrientation ?? (UIScreen.main.bounds.width > UIScreen.main.bounds.height))
     }
 
     var previewSplit: Bool? {
@@ -124,7 +124,7 @@ final class AppSettingsModel: ObservableObject {
         fullAccessDismissed = true
     }
 
-    func changed() { revision += 1 }
+    func changed() { library.reload(migrate: false); revision += 1 }
 
     func bool(_ key: String, default value: Bool) -> Binding<Bool> {
         Binding(get: { self.settings.bool(key, value) }, set: { on in
@@ -207,7 +207,7 @@ final class AppSettingsModel: ObservableObject {
 
     func shareSelected() {
         guard let choice = selectedLayout else { return }
-        shareCode = choice.grid.toCode()
+        shareCode = choice.grid.toCode(settings: choice.settings)
         sheet = .share
     }
 
@@ -273,7 +273,8 @@ final class AppSettingsModel: ObservableObject {
 
     func addImportedLayout() {
         guard fullAccessConfirmed, let grid = importedGrid else { return }
-        guard let key = library.add(grid.copy(), name: importName, split: settings.split(UIScreen.main.bounds.width > UIScreen.main.bounds.height)) else { return }
+        guard let key = library.add(grid.copy(), name: importName, split: settings.split(UIScreen.main.bounds.width > UIScreen.main.bounds.height),
+                                    snapshot: KeyGrid.decodeCode(importCode)?.settings) else { return }
         importOpen = false
         selectedLayoutKey = key
         updatePreview()

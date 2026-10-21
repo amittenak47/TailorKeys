@@ -97,8 +97,10 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
 
     fun rowColumns(row: Int, column: Int): Int {
         val start = bounds(column).first
-        return items.asSequence().filter { it.r == row && region(it.c) == region(column) }
-            .maxOfOrNull { it.c + it.w - start }?.coerceAtLeast(1) ?: bounds(column).count()
+        var span = 0
+        val side = region(column)
+        for (key in items) if (key.r == row && region(key.c) == side) span = maxOf(span, key.c + key.w - start)
+        return if (span > 0) span else bounds(column).count()
     }
 
     fun valid(key: GridKey): Boolean {
@@ -238,8 +240,8 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
     }
 
     /** A short text code for sharing the layout: the JSON, compressed and base64url-encoded. iOS reads the same codes. */
-    fun toCode(): String {
-        val raw = toJson().toByteArray()
+    fun toCode(settings: String? = null): String {
+        val raw = JSONObject(toJson()).apply { settings?.let { put("settings", JSONObject(it)) } }.toString().toByteArray()
         val d = Deflater(Deflater.BEST_COMPRESSION, true)
         d.setInput(raw)
         d.finish()
@@ -259,7 +261,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         fun bounds(c: Int) = when (region(c)) { 0 -> 0..4; 1 -> 5..5; else -> 6..10 }
 
         /** Finds a layout code anywhere in [text], so a whole pasted message works. Null if there's none or it's broken. */
-        data class DecodedLayout(val grid: KeyGrid, val name: String?)
+        data class DecodedLayout(val grid: KeyGrid, val name: String?, val settings: String? = null)
 
         fun fromCode(text: String): KeyGrid? = decodeCode(text)?.grid
 
@@ -281,7 +283,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
                     val json = out.toString("UTF-8")
                     val grid = fromJson(json) ?: return null
                     val name = JSONObject(json).opt("name") as? String
-                    DecodedLayout(grid, name?.trim()?.take(24)?.takeIf { it.isNotEmpty() })
+                    DecodedLayout(grid, name?.trim()?.take(24)?.takeIf { it.isNotEmpty() }, JSONObject(json).optJSONObject("settings")?.toString())
                 } finally {
                     inf.end()
                 }

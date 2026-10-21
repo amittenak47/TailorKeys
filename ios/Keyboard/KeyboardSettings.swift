@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import CoreFoundation
 
 enum Align: String, CaseIterable { case left, center, right }
 enum CursorControl: String, CaseIterable {
@@ -63,6 +64,7 @@ enum Prefs {
     static let layoutDraftSplit = "layout_draft_split"
     static let layoutTrialSplit = "layout_trial_split"
     static let layoutTrialPrevious = "layout_trial_previous"
+    static let layoutTrialSettings = "layout_trial_settings"
     static let typingResults = "typing_results"
     static let languages = "languages"
     static let currentLanguage = "current_language"
@@ -79,7 +81,7 @@ enum Prefs {
     /// Registry for reset; device-dependent defaults are still resolved by their getters.
     static var settingKeys: [String] {
         var keys = Array(booleanDefaults.keys) + [cursorControl, theme, layout, languages, currentLanguage,
-                                                 layoutsSaved, layoutDraft, layoutDraftSplit, layoutSelected, layoutTrialPrevious, layoutTrialSplit, typingResults]
+                                                 layoutsSaved, layoutDraft, layoutDraftSplit, layoutSelected, layoutTrialPrevious, layoutTrialSplit, layoutTrialSettings, typingResults]
         keys += [curve, keyGap, cornerRadius, keyRepeatGuard, touchSlack, textScale, longPressMs].map { $0.key }
         for l in [false, true] {
             keys += [height(l), width(l), bottomPadding(l), splitGap(l), tilt(l)].map { $0.key }
@@ -165,10 +167,64 @@ final class KeyboardSettings {
     }
 
     func int(_ p: IntPref) -> Int { min(max(d.object(forKey: p.key) as? Int ?? p.def, p.min), p.max) }
-    func set(_ p: IntPref, _ v: Int) { d.set(min(max(v, p.min), p.max), forKey: p.key) }
+    func set(_ p: IntPref, _ v: Int) { d.set(min(max(v, p.min), p.max), forKey: p.key); syncAppearance(p.key) }
 
     func bool(_ key: String, _ def: Bool) -> Bool { d.object(forKey: key) as? Bool ?? Prefs.booleanDefaults[key] ?? def }
-    func set(_ key: String, _ v: Bool) { d.set(v, forKey: key) }
+    func set(_ key: String, _ v: Bool) { d.set(v, forKey: key); syncAppearance(key) }
+
+    private var layoutInts: [IntPref] {
+        [Prefs.curve, Prefs.keyGap, Prefs.cornerRadius, Prefs.textScale] + [false, true].flatMap {
+            [Prefs.height($0), Prefs.width($0), Prefs.bottomPadding($0), Prefs.splitGap($0), Prefs.tilt($0)]
+        }
+    }
+    private var layoutBools: [String] { [Prefs.sameOrientations, Prefs.lockSize, Prefs.followSystemText, Prefs.showHints, Prefs.keyTint] }
+    private static func wireTheme(_ theme: ThemeName) -> String { theme == .highContrast ? "HIGH_CONTRAST" : theme.rawValue.uppercased() }
+
+    /// Portable, explicit Size/Look values; shared with the Android settings object.
+    func layoutSettings() -> [String: Any] {
+        var values: [String: Any] = [:]
+        for pref in layoutInts { values[pref.key] = int(pref) }
+        for key in layoutBools { values[key] = bool(key, false) }
+        values[Prefs.theme] = Self.wireTheme(theme)
+        for l in [false, true] { values[Prefs.alignKey(l)] = align(l).rawValue.uppercased(); values[Prefs.splitKey(l)] = split(l) }
+        return values
+    }
+
+    func applyLayoutSettings(_ values: [String: Any]) {
+        for pref in layoutInts {
+            if let n = values[pref.key] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite {
+                d.set(Int(min(Double(pref.max), max(Double(pref.min), n.doubleValue))), forKey: pref.key)
+            }
+        }
+        for key in layoutBools {
+            if let n = values[key] as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() { d.set(n.boolValue, forKey: key) }
+        }
+        if let name = values[Prefs.theme] as? String, let value = ThemeName.allCases.first(where: { Self.wireTheme($0) == name }) {
+            d.set(value.rawValue, forKey: Prefs.theme)
+        }
+        for l in [false, true] {
+            if let name = values[Prefs.alignKey(l)] as? String, let value = Align(rawValue: name.lowercased()) { d.set(value.rawValue, forKey: Prefs.alignKey(l)) }
+            if let n = values[Prefs.splitKey(l)] as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() { d.set(n.boolValue, forKey: Prefs.splitKey(l)) }
+        }
+    }
+
+    private func syncAppearance(_ key: String? = nil, landscape: Bool = false) {
+        guard d.string(forKey: Prefs.layoutTrialPrevious) == nil,
+              key == nil || key == Prefs.theme || layoutInts.contains(where: { $0.key == key }) || layoutBools.contains(where: { $0 == key }),
+              let selected = d.string(forKey: Prefs.layoutSelected) else { return }
+        let snapshot = layoutSettings()
+        if selected == "draft", let text = d.string(forKey: Prefs.layoutDraft),
+           var object = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] {
+            object["settings"] = snapshot
+            if let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) { d.set(String(decoding: data, as: UTF8.self), forKey: Prefs.layoutDraft) }
+            d.set(String(split(landscape)), forKey: Prefs.layoutDraftSplit)
+        } else if selected.hasPrefix("saved:"), let text = d.string(forKey: Prefs.layoutsSaved),
+                  var array = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [[String: Any]],
+                  let index = array.firstIndex(where: { "saved:" + ($0["id"] as? String ?? "") == selected }) {
+            array[index]["settings"] = snapshot; array[index]["split"] = split(landscape)
+            if let data = try? JSONSerialization.data(withJSONObject: array, options: [.sortedKeys]) { d.set(String(decoding: data, as: UTF8.self), forKey: Prefs.layoutsSaved) }
+        }
+    }
 
     var followSystemText: Bool { bool(Prefs.followSystemText, true) }
     var typeOnPress: Bool { bool(Prefs.typeOnPress, false) }
@@ -199,9 +255,13 @@ final class KeyboardSettings {
 
     // Per-orientation setters write both orientations while "same for both" is on.
     private func orientations(_ l: Bool) -> [Bool] { sameOrientations ? [false, true] : [l] }
-    func setFor(_ l: Bool, _ pref: (Bool) -> IntPref, _ v: Int) { for o in orientations(l) { set(pref(o), v) } }
-    func setAlignFor(_ l: Bool, _ a: Align) { for o in orientations(l) { d.set(a.rawValue, forKey: Prefs.alignKey(o)) } }
-    func setSplitFor(_ l: Bool, _ on: Bool) { for o in orientations(l) { d.set(on, forKey: Prefs.splitKey(o)) } }
+    func setFor(_ l: Bool, _ pref: (Bool) -> IntPref, _ v: Int) {
+        for o in orientations(l) { let p = pref(o); d.set(min(max(v, p.min), p.max), forKey: p.key) }
+        syncAppearance(landscape: l)
+    }
+    func setAlignFor(_ l: Bool, _ a: Align) { for o in orientations(l) { d.set(a.rawValue, forKey: Prefs.alignKey(o)) }; syncAppearance(landscape: l) }
+    func setSplitFor(_ l: Bool, _ on: Bool) { applyLayoutSplit(l, on); syncAppearance(landscape: l) }
+    func applyLayoutSplit(_ l: Bool, _ on: Bool) { for o in orientations(l) { d.set(on, forKey: Prefs.splitKey(o)) } }
 
     func quickOneHand(_ l: Bool) -> Align { int(Prefs.width(l)) < 100 ? align(l) : .center }
 
@@ -239,7 +299,8 @@ final class KeyboardSettings {
             if trialSplitCache?.json != json {
                 trialSplitCache = (json, KeyGrid.fromJSON(json).flatMap { LayoutLibrary.matchingPreset($0)?.split })
             }
-            trialSplit = d.string(forKey: Prefs.layoutTrialSplit).flatMap { Bool($0) } ?? trialSplitCache?.split
+            trialSplit = d.string(forKey: Prefs.layoutTrialSplit).flatMap { Bool($0) }
+                ?? (d.string(forKey: Prefs.layoutTrialSettings) == nil ? trialSplitCache?.split : nil)
         }
         return SizeProfile(heightPercent: int(Prefs.height(l)), widthPercent: int(Prefs.width(l)), align: align(l),
                     bottomPadding: int(Prefs.bottomPadding(l)), split: previewSplit ?? trialSplit ?? split(l),
@@ -248,7 +309,7 @@ final class KeyboardSettings {
 
     var theme: ThemeName {
         get { ThemeName(rawValue: d.string(forKey: Prefs.theme) ?? "") ?? .system }
-        set { d.set(newValue.rawValue, forKey: Prefs.theme) }
+        set { d.set(newValue.rawValue, forKey: Prefs.theme); syncAppearance(Prefs.theme) }
     }
 
     func loadGrid() -> KeyGrid {

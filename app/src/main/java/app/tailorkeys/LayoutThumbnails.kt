@@ -15,7 +15,7 @@ internal class LayoutThumbnailCache(private val context: Context, private val se
     }
     fun signature(entry: LayoutEntry): String {
         val landscape = context.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-        val profile = settings.profile(landscape).copy(split = entry.split)
+        val profile = settings.profile(landscape).copy(split = entry.splitFor(landscape))
         val display = context.resources.displayMetrics
         val width = (display.widthPixels - 8 * display.density).roundToInt().coerceAtLeast(1)
         return "${entry.json}|$profile|$landscape|$width|${display.heightPixels}|${display.density}|${settings.bool(Prefs.SAME_ORIENTATIONS)}|${settings.int(Prefs.CURVE)}|${settings.int(Prefs.KEY_GAP)}|${settings.int(Prefs.CORNER_RADIUS)}"
@@ -28,7 +28,7 @@ internal class LayoutThumbnailCache(private val context: Context, private val se
             val width = (context.resources.displayMetrics.widthPixels - 8 * context.resources.displayMetrics.density).roundToInt().coerceAtLeast(1)
             view.grid = entry.grid()
             view.reloadSettings()
-            view.thumbnailKeys(width, settings.profile(landscape).copy(split = entry.split))
+            view.thumbnailKeys(width, settings.profile(landscape).copy(split = entry.splitFor(landscape)))
         }
     }
 }

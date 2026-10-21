@@ -15,6 +15,7 @@ internal object LayoutKeys {
     const val TRIAL = "layout_trial_previous"
     const val DRAFT_SPLIT = "layout_draft_split"
     const val TRIAL_SPLIT = "layout_trial_split"
+    const val TRIAL_SETTINGS = "layout_trial_settings"
     const val RESULTS = "typing_results"
 }
 
@@ -24,10 +25,14 @@ internal interface LayoutPreferences {
     fun write(values: Map<String, String?>)
 }
 
-internal data class LayoutEntry(val key: String, val name: String, val json: String, val preset: Template? = null, val split: Boolean = preset?.split ?: false) {
+internal data class LayoutEntry(val key: String, val name: String, val json: String, val preset: Template? = null, val split: Boolean = preset?.split ?: false, val settings: String? = null) {
     val custom get() = preset == null
     val draft get() = key == "draft"
     fun grid(): KeyGrid = requireNotNull(KeyGrid.fromJson(json))
+    fun code() = grid().toCode(settings)
+    fun splitFor(landscape: Boolean) = preset?.split ?: settings?.let {
+        runCatching { JSONObject(it).opt(Prefs.splitKey(landscape)) as? Boolean }.getOrNull()
+    } ?: split
 }
 
 internal data class TypingResult(val wpm: Double, val accuracy: Double, val at: Long)
@@ -42,6 +47,8 @@ internal class LayoutLibrary(
     private val newId: () -> String = { UUID.randomUUID().toString() },
     private val loadSplit: () -> Boolean = { false },
     private val saveSplit: (Boolean) -> Unit = {},
+    private val loadSettings: () -> String = { "{}" },
+    private val saveSettings: (String) -> Unit = {},
 ) {
     constructor(settings: KeyboardSettings, landscape: () -> Boolean = { false }) : this(object : LayoutPreferences {
         override fun get(key: String) = settings.prefs.getString(key, null)
@@ -51,7 +58,8 @@ internal class LayoutLibrary(
             check(editor.commit()) { "Could not save layouts" }
         }
     }, settings::loadGrid, settings::saveGrid, settings::currentLanguage, { settings.bool(app.tailorkeys.Prefs.NUMBER_ROW) },
-        loadSplit = { settings.split(landscape()) }, saveSplit = { settings.setSplitFor(landscape(), it) })
+        loadSplit = { settings.split(landscape()) }, saveSplit = { settings.applyLayoutSplit(landscape(), it) },
+        loadSettings = settings::layoutSettings, saveSettings = settings::applyLayoutSettings)
 
     private var cachedInputs: List<String?>? = null
     private var cachedEntries = emptyList<LayoutEntry>()
@@ -66,7 +74,8 @@ internal class LayoutLibrary(
             LayoutEntry("preset:${t.name}", t.title, grid.toJson(), t)
         }
         cachedEntries = presets + saved() + listOfNotNull(prefs.get(LayoutKeys.DRAFT)?.let { json ->
-            KeyGrid.fromJson(json)?.let { LayoutEntry("draft", "Custom", it.toJson(), split = prefs.get(LayoutKeys.DRAFT_SPLIT)?.toBooleanStrictOrNull() ?: loadSplit()) }
+            KeyGrid.fromJson(json)?.let { LayoutEntry("draft", "Custom", it.toJson(), split = prefs.get(LayoutKeys.DRAFT_SPLIT)?.toBooleanStrictOrNull() ?: loadSplit(),
+                settings = runCatching { JSONObject(json).optJSONObject("settings")?.toString() }.getOrNull()) }
         })
         cachedInputs = inputs
         return cachedEntries
@@ -78,14 +87,14 @@ internal class LayoutLibrary(
             val item = array.getJSONObject(index)
             val id = item.getString("id")
             KeyGrid.fromJson(item.getJSONObject("grid").toString())?.let {
-                LayoutEntry("saved:$id", item.getString("name"), it.toJson(), split = item.optBoolean("split", loadSplit()))
+                LayoutEntry("saved:$id", item.getString("name"), it.toJson(), split = item.optBoolean("split", loadSplit()), settings = item.optJSONObject("settings")?.toString())
             }
         }.distinctBy { it.key }
     }.getOrDefault(emptyList())
 
     private fun encode(entries: List<LayoutEntry>): String = JSONArray().apply {
         entries.forEach { put(JSONObject().put("id", it.key.removePrefix("saved:")).put("name", it.name)
-            .put("grid", JSONObject(it.json)).put("split", it.split)) }
+            .put("grid", JSONObject(it.json)).put("split", it.split).apply { it.settings?.let { value -> put("settings", JSONObject(value)) } }) }
     }.toString()
 
     fun migrate(recoverTrial: Boolean = true) {
@@ -102,14 +111,14 @@ internal class LayoutLibrary(
         val preset = entries().firstOrNull { it.preset != null && sameGrid(it.grid(), grid) }
         if (preset != null) prefs.write(mapOf(LayoutKeys.SELECTED to preset.key))
         else {
-            val entry = LayoutEntry("saved:${newId()}", "My layout", grid.toJson(), split = loadSplit())
+            val entry = LayoutEntry("saved:${newId()}", "My layout", grid.toJson(), split = loadSplit(), settings = loadSettings())
             prefs.write(mapOf(LayoutKeys.SAVED to encode(saved() + entry), LayoutKeys.SELECTED to entry.key))
         }
     }
 
-    fun add(name: String, grid: KeyGrid, split: Boolean = loadSplit()): LayoutEntry {
+    fun add(name: String, grid: KeyGrid, split: Boolean = loadSplit(), settings: String? = loadSettings()): LayoutEntry {
         require(grid.isSound())
-        val entry = LayoutEntry("saved:${newId()}", cleanName(name), grid.toJson(), split = split)
+        val entry = LayoutEntry("saved:${newId()}", cleanName(name), grid.toJson(), split = split, settings = settings)
         prefs.write(mapOf(LayoutKeys.SAVED to encode(saved() + entry)))
         return entry
     }
@@ -124,7 +133,7 @@ internal class LayoutLibrary(
 
     /** Both entry points preserve the sole draft. The caller presents Save first before retrying. */
     fun quickEdit(source: LayoutEntry, newCopy: Boolean): LayoutEntry {
-        val entry = if (newCopy || !source.custom) startDraft(source.grid(), source.split) else source
+        val entry = if (newCopy || !source.custom) startDraft(source.grid(), source.split, source.settings) else source
         use(entry)
         return entry
     }
@@ -132,18 +141,22 @@ internal class LayoutLibrary(
     fun importCode(text: String?): ClipboardLayoutResult {
         if (text.isNullOrBlank()) return ClipboardLayoutResult.Empty
         val decoded = KeyGrid.decodeCode(text) ?: return ClipboardLayoutResult.Invalid
-        return ClipboardLayoutResult.Added(add(decoded.name ?: nextName("Imported"), decoded.grid))
+        return ClipboardLayoutResult.Added(add(decoded.name ?: nextName("Imported"), decoded.grid, settings = decoded.settings ?: loadSettings()))
     }
 
-    fun startDraft(source: KeyGrid, split: Boolean = loadSplit()): LayoutEntry {
+    fun startDraft(source: KeyGrid, split: Boolean = loadSplit(), settings: String? = null): LayoutEntry {
         check(!hasDraft) { "Save the existing draft first" }
-        prefs.write(mapOf(LayoutKeys.DRAFT to source.toJson(), LayoutKeys.DRAFT_SPLIT to split.toString()))
-        return LayoutEntry("draft", "Custom", source.toJson(), split = split)
+        val snapshot = JSONObject(settings ?: loadSettings()).apply {
+            if (settings == null) { put(Prefs.splitKey(false), split); put(Prefs.splitKey(true), split) }
+        }.toString()
+        prefs.write(mapOf(LayoutKeys.DRAFT to draftJson(source.toJson(), snapshot), LayoutKeys.DRAFT_SPLIT to split.toString()))
+        return LayoutEntry("draft", "Custom", source.toJson(), split = split, settings = snapshot)
     }
 
     fun saveDraft(name: String): LayoutEntry {
         val grid = requireNotNull(KeyGrid.fromJson(prefs.get(LayoutKeys.DRAFT)))
-        val entry = LayoutEntry("saved:${newId()}", cleanName(name), grid.toJson(), split = prefs.get(LayoutKeys.DRAFT_SPLIT)?.toBooleanStrictOrNull() ?: loadSplit())
+        val snapshot = JSONObject(requireNotNull(prefs.get(LayoutKeys.DRAFT))).optJSONObject("settings")?.toString() ?: loadSettings()
+        val entry = LayoutEntry("saved:${newId()}", cleanName(name), grid.toJson(), split = prefs.get(LayoutKeys.DRAFT_SPLIT)?.toBooleanStrictOrNull() ?: loadSplit(), settings = snapshot)
         val changes = mutableMapOf<String, String?>(LayoutKeys.SAVED to encode(saved() + entry), LayoutKeys.DRAFT to null, LayoutKeys.DRAFT_SPLIT to null)
         val results = resultsObject()
         results.optJSONArray("draft")?.let {
@@ -157,9 +170,9 @@ internal class LayoutLibrary(
     }
 
     /** Saves the old draft before making the next one; Cancel never calls this. */
-    fun saveAndContinue(name: String, source: KeyGrid, split: Boolean = loadSplit()): LayoutEntry {
+    fun saveAndContinue(name: String, source: KeyGrid, split: Boolean = loadSplit(), settings: String? = null): LayoutEntry {
         saveDraft(name)
-        return startDraft(source, split)
+        return startDraft(source, split, settings)
     }
 
     fun rename(key: String, name: String): LayoutEntry {
@@ -172,18 +185,36 @@ internal class LayoutLibrary(
 
     fun edit(key: String, grid: KeyGrid) {
         require(grid.isSound())
-        if (key == "draft") prefs.write(mapOf(LayoutKeys.DRAFT to grid.toJson()))
+        if (inUse == key) saveGrid(grid)
+        if (key == "draft") prefs.write(mapOf(LayoutKeys.DRAFT to draftJson(grid.toJson(),
+            if (inUse == key) loadSettings() else entries().firstOrNull { it.key == key }?.settings)))
         else {
             check(saved().any { it.key == key })
-            prefs.write(mapOf(LayoutKeys.SAVED to encode(saved().map { if (it.key == key) it.copy(json = grid.toJson()) else it })))
+            prefs.write(mapOf(LayoutKeys.SAVED to encode(saved().map { if (it.key == key) it.copy(json = grid.toJson(), settings = if (inUse == key) loadSettings() else it.settings) else it })))
         }
-        if (inUse == key) saveGrid(grid)
+    }
+
+    private fun draftJson(grid: String, settings: String?) = JSONObject(grid).apply { settings?.let { put("settings", JSONObject(it)) } }.toString()
+
+    /** Called by Size/Look setters, including the keyboard's quick controls. Trials never alter the owner's snapshot. */
+    fun syncSettings() {
+        if (prefs.get(LayoutKeys.TRIAL) != null || (inUse != "draft" && !inUse.startsWith("saved:"))) return
+        val snapshot = loadSettings()
+        if (inUse == "draft" && hasDraft) {
+            prefs.write(mapOf(LayoutKeys.DRAFT to draftJson(requireNotNull(prefs.get(LayoutKeys.DRAFT)), snapshot), LayoutKeys.DRAFT_SPLIT to loadSplit().toString()))
+        } else if (inUse.startsWith("saved:")) {
+            val entries = saved()
+            if (entries.any { it.key == inUse }) prefs.write(mapOf(LayoutKeys.SAVED to encode(entries.map {
+                if (it.key == inUse) it.copy(settings = snapshot, split = loadSplit()) else it
+            })))
+        }
     }
 
     fun use(entry: LayoutEntry) {
-        saveSplit(entry.split)
+        if (entry.custom && entry.settings != null) saveSettings(entry.settings)
+        if (!hasSplitSettings(entry)) saveSplit(entry.split)
         saveGrid(entry.grid())
-        prefs.write(mapOf(LayoutKeys.SELECTED to entry.key, LayoutKeys.TRIAL to null, LayoutKeys.TRIAL_SPLIT to null))
+        prefs.write(mapOf(LayoutKeys.SELECTED to entry.key, LayoutKeys.TRIAL to null, LayoutKeys.TRIAL_SPLIT to null, LayoutKeys.TRIAL_SETTINGS to null))
     }
 
     fun delete(key: String) {
@@ -200,18 +231,26 @@ internal class LayoutLibrary(
 
     fun beginTrial(entry: LayoutEntry) {
         if (prefs.get(LayoutKeys.TRIAL) != null) restoreTrial()
-        if (entry.key == inUse && sameGrid(entry.grid(), loadGrid()) && entry.split == loadSplit()) return
-        // Split is a trial override, so both orientations retain their original Size preferences.
-        prefs.write(mapOf(LayoutKeys.TRIAL to loadGrid().toJson(), LayoutKeys.TRIAL_SPLIT to entry.split.toString()))
+        if (entry.key == inUse && sameGrid(entry.grid(), loadGrid()) && entry.split == loadSplit() &&
+            (entry.settings == null || sameSettings(entry.settings, loadSettings()))) return
+        // Presets and legacy entries use a split override; custom settings restore from the durable snapshot.
+        prefs.write(mapOf(LayoutKeys.TRIAL to loadGrid().toJson(), LayoutKeys.TRIAL_SPLIT to if (!hasSplitSettings(entry)) entry.split.toString() else null,
+            LayoutKeys.TRIAL_SETTINGS to loadSettings()))
+        if (entry.custom) entry.settings?.let(saveSettings)
         saveGrid(entry.grid())
     }
 
     fun restoreTrial(): Boolean {
         val json = prefs.get(LayoutKeys.TRIAL) ?: return false
+        prefs.get(LayoutKeys.TRIAL_SETTINGS)?.let(saveSettings)
         KeyGrid.fromJson(json)?.let(saveGrid)
-        prefs.write(mapOf(LayoutKeys.TRIAL to null, LayoutKeys.TRIAL_SPLIT to null))
+        prefs.write(mapOf(LayoutKeys.TRIAL to null, LayoutKeys.TRIAL_SPLIT to null, LayoutKeys.TRIAL_SETTINGS to null))
         return true
     }
+
+    private fun hasSplitSettings(entry: LayoutEntry) = entry.custom && entry.settings?.let {
+        val o = JSONObject(it); o.opt("split_p") is Boolean && o.opt("split_l") is Boolean
+    } == true
 
     private fun resultsObject() = runCatching { JSONObject(prefs.get(LayoutKeys.RESULTS) ?: "{}") }.getOrElse { JSONObject() }
     fun results(key: String): List<TypingResult> = runCatching {
@@ -231,6 +270,10 @@ internal class LayoutLibrary(
     }
 
     companion object {
+        fun sameSettings(a: String, b: String): Boolean {
+            val left = JSONObject(a); val right = JSONObject(b)
+            return left.length() == right.length() && left.keys().asSequence().all { right.has(it) && left.opt(it) == right.opt(it) }
+        }
         fun cleanName(name: String) = name.trim().take(24).ifEmpty { "Custom" }
         fun sameGrid(a: KeyGrid, b: KeyGrid): Boolean = a.rows == b.rows && a.items.size == b.items.size &&
             a.items.sortedWith(compareBy({ it.r }, { it.c })).zip(b.items.sortedWith(compareBy({ it.r }, { it.c }))).all { (x, y) ->

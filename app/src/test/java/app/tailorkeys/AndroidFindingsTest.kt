@@ -147,6 +147,7 @@ class AndroidFindingsTest {
         val prefs = Proxy.newProxyInstance(javaClass.classLoader, arrayOf(SharedPreferences::class.java)) { _, m, a ->
             when (m.name) {
                 "edit" -> edit
+                "contains" -> values.containsKey(a[0])
                 "getInt", "getString", "getBoolean" -> values[a[0]] ?: a[1]
                 else -> error(m.name)
             }

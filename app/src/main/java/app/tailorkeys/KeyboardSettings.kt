@@ -3,6 +3,7 @@ package app.tailorkeys
 import android.content.Context
 import android.content.SharedPreferences
 import app.tailorkeys.layout.KeyGrid
+import org.json.JSONObject
 
 enum class Align { LEFT, CENTER, RIGHT }
 
@@ -117,8 +118,39 @@ class KeyboardSettings internal constructor(
 
     fun int(p: IntPref) = prefs.getInt(p.key, p.default).coerceIn(p.min, p.max)
     fun bool(p: BoolPref) = prefs.getBoolean(p.key, p.default)
-    fun set(p: IntPref, value: Int) = prefs.edit().putInt(p.key, value.coerceIn(p.min, p.max)).apply()
-    fun set(p: BoolPref, value: Boolean) = prefs.edit().putBoolean(p.key, value).apply()
+    fun set(p: IntPref, value: Int) { prefs.edit().putInt(p.key, value.coerceIn(p.min, p.max)).apply(); syncAppearance(p.key) }
+    fun set(p: BoolPref, value: Boolean) { prefs.edit().putBoolean(p.key, value).apply(); syncAppearance(p.key) }
+
+    private val layoutInts get() = listOf(Prefs.CURVE, Prefs.KEY_GAP, Prefs.CORNER_RADIUS, Prefs.TEXT_SCALE) +
+        listOf(false, true).flatMap { listOf(Prefs.height(it), Prefs.width(it), Prefs.bottomPadding(it), Prefs.splitGap(it), Prefs.tilt(it)) }
+    private val layoutBools get() = listOf(Prefs.SAME_ORIENTATIONS, Prefs.LOCK_SIZE, Prefs.FOLLOW_SYSTEM_TEXT, Prefs.SHOW_HINTS, Prefs.KEY_TINT)
+
+    /** Explicit defaults make settings portable between devices and between Android and iOS. */
+    internal fun layoutSettings(): String = JSONObject().apply {
+        layoutInts.forEach { put(it.key, int(it)) }
+        layoutBools.forEach { put(it.key, bool(it)) }
+        put(Prefs.THEME, theme().name)
+        for (l in listOf(false, true)) { put(Prefs.alignKey(l), align(l).name); put(Prefs.splitKey(l), split(l)) }
+    }.toString()
+
+    /** Only Size/Look keys are accepted from storage or share codes; typing preferences never travel. */
+    internal fun applyLayoutSettings(json: String) {
+        val o = runCatching { JSONObject(json) }.getOrNull() ?: return
+        val e = prefs.edit()
+        layoutInts.forEach { p -> (o.opt(p.key) as? Number)?.toDouble()?.takeIf { it.isFinite() }?.let { e.putInt(p.key, it.coerceIn(p.min.toDouble(), p.max.toDouble()).toInt()) } }
+        layoutBools.forEach { p -> (o.opt(p.key) as? Boolean)?.let { e.putBoolean(p.key, it) } }
+        (o.opt(Prefs.THEME) as? String)?.takeIf { name -> ThemeName.entries.any { it.name == name } }?.let { e.putString(Prefs.THEME, it) }
+        for (l in listOf(false, true)) {
+            (o.opt(Prefs.alignKey(l)) as? String)?.takeIf { name -> Align.entries.any { it.name == name } }?.let { e.putString(Prefs.alignKey(l), it) }
+            (o.opt(Prefs.splitKey(l)) as? Boolean)?.let { e.putBoolean(Prefs.splitKey(l), it) }
+        }
+        e.apply()
+    }
+
+    private fun syncAppearance(key: String? = null, landscape: Boolean = false) {
+        if (key == null || key == Prefs.THEME || layoutInts.any { it.key == key } || layoutBools.any { it.key == key })
+            LayoutLibrary(this) { landscape }.syncSettings()
+    }
 
     fun cursorControl() = CursorControl.entries.firstOrNull { it.name == prefs.getString(Prefs.CURSOR_CONTROL, null) } ?: CursorControl.AUTO
     fun setCursorControl(value: CursorControl) = prefs.edit().putString(Prefs.CURSOR_CONTROL, value.name).apply()
@@ -128,12 +160,15 @@ class KeyboardSettings internal constructor(
         return Align.entries.firstOrNull { it.name == name } ?: Align.CENTER
     }
 
-    fun setAlign(landscape: Boolean, align: Align) =
-        prefs.edit().putString(Prefs.alignKey(landscape), align.name).apply()
+    fun setAlign(landscape: Boolean, align: Align) {
+        prefs.edit().putString(Prefs.alignKey(landscape), align.name).apply(); syncAppearance(landscape = landscape)
+    }
 
     /** Split defaults to on for tablets in landscape. */
     fun split(landscape: Boolean) = prefs.getBoolean(Prefs.splitKey(landscape), landscape && tablet)
-    fun setSplit(landscape: Boolean, on: Boolean) = prefs.edit().putBoolean(Prefs.splitKey(landscape), on).apply()
+    fun setSplit(landscape: Boolean, on: Boolean) {
+        prefs.edit().putBoolean(Prefs.splitKey(landscape), on).apply(); syncAppearance(landscape = landscape)
+    }
 
     fun profile(landscape: Boolean) = SizeProfile(
         heightPercent = int(Prefs.height(landscape)),
@@ -153,12 +188,14 @@ class KeyboardSettings internal constructor(
         val e = prefs.edit()
         orientations(landscape).forEach { val p = pref(it); e.putInt(p.key, value.coerceIn(p.min, p.max)) }
         e.apply()
+        syncAppearance(landscape = landscape)
     }
 
     fun setAlignFor(landscape: Boolean, align: Align) {
         val e = prefs.edit()
         orientations(landscape).forEach { e.putString(Prefs.alignKey(it), align.name) }
         e.apply()
+        syncAppearance(landscape = landscape)
     }
 
     /** Width and alignment form one gesture: notify observers after both are stored. */
@@ -170,9 +207,15 @@ class KeyboardSettings internal constructor(
             e.putString(Prefs.alignKey(orientation), align.name)
         }
         e.apply()
+        syncAppearance(landscape = landscape)
     }
 
     fun setSplitFor(landscape: Boolean, on: Boolean) {
+        applyLayoutSplit(landscape, on)
+        syncAppearance(landscape = landscape)
+    }
+
+    internal fun applyLayoutSplit(landscape: Boolean, on: Boolean) {
         val e = prefs.edit()
         orientations(landscape).forEach { e.putBoolean(Prefs.splitKey(it), on) }
         e.apply()
@@ -210,6 +253,7 @@ class KeyboardSettings internal constructor(
         e.putBoolean(Prefs.splitKey(to), split(from))
         e.putBoolean(Prefs.SAME_ORIENTATIONS.key, true)
         e.apply()
+        syncAppearance(landscape = from)
     }
 
     fun theme(): ThemeName {
@@ -217,7 +261,7 @@ class KeyboardSettings internal constructor(
         return ThemeName.entries.firstOrNull { it.name == name } ?: ThemeName.SYSTEM
     }
 
-    fun setTheme(theme: ThemeName) = prefs.edit().putString(Prefs.THEME, theme.name).apply()
+    fun setTheme(theme: ThemeName) { prefs.edit().putString(Prefs.THEME, theme.name).apply(); syncAppearance(Prefs.THEME) }
 
     fun loadGrid(): KeyGrid = KeyGrid.savedOrDefault(KeyGrid.fromJson(prefs.getString(Prefs.LAYOUT, null)),
         currentLanguage(), bool(Prefs.NUMBER_ROW))

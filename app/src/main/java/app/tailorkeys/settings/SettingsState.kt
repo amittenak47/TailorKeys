@@ -30,6 +30,7 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
     private val chordLibraries = HashMap<String, Chords>()
     private val templateMatcher = TemplateMatcher()
     private val revisions = PreferenceRevisions()
+    private val landscape get() = appContext.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     val library = LayoutLibrary(settings) { appContext.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE }.also { it.migrate() }
     var selectedKey by mutableStateOf(library.inUse)
         private set
@@ -48,14 +49,14 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         selectedKey = entry.key
         previewingSelected = true
         importing = false
-        preview.previewSplit = entry.split
+        preview.previewSplit = entry.splitFor(landscape)
         preview.grid = entry.grid()
     }
     fun useLayout(entry: LayoutEntry) {
         library.use(entry)
         selectLayout(entry)
     }
-    fun showSelected() { previewingSelected = true; preview.previewSplit = selectedLayout().split; preview.grid = selectedLayout().grid() }
+    fun showSelected() { previewingSelected = true; preview.previewSplit = selectedLayout().splitFor(landscape); preview.grid = selectedLayout().grid() }
     fun showApplied() { previewingSelected = false; preview.previewSplit = null; preview.grid = settings.loadGrid() }
     fun chordLanguage(): String { revisions.read(Prefs.CURRENT_LANGUAGE, Prefs.LANGUAGES); return settings.currentLanguage() }
     fun chordLetters(): Set<Char> {
@@ -69,7 +70,7 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         }.forLetters(letters)
 
     val preview = KeyboardView(context, settings).apply {
-        previewSplit = selectedLayout().split
+        previewSplit = selectedLayout().splitFor(landscape)
         grid = selectedLayout().grid()
         state.language = settings.currentLanguage()
         setSuggestions(listOf("helpful", "helicopter", "helmet"), listOf("hello", "help", "held"), "hel")
@@ -86,6 +87,10 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         }
     }
     private val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (previewingSelected && !importing) {
+            preview.previewSplit = if (selectedKey == library.inUse) settings.profile(landscape).split
+                else library.entries().firstOrNull { it.key == selectedKey }?.splitFor(landscape)
+        }
         if (key == null || key == Prefs.CURRENT_LANGUAGE || key == Prefs.LANGUAGES || key == Prefs.NUMBER_ROW.key) {
             if (!importing && !preview.editMode) {
                 val selected = if (previewingSelected) library.entries().firstOrNull { it.key == selectedKey }?.grid() ?: settings.loadGrid() else settings.loadGrid()
@@ -141,7 +146,7 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         settings.resetAll()
         library.migrate()
         selectedKey = library.inUse
-        preview.previewSplit = selectedLayout().split
+        preview.previewSplit = selectedLayout().splitFor(landscape)
         preview.grid = settings.loadGrid()
         preview.state.language = settings.currentLanguage()
         preview.reloadSettings()
