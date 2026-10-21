@@ -301,7 +301,17 @@ struct SettingsScreen: View {
             }
             Section {
                 Toggle("Auto-capitalize", isOn: model.bool(Prefs.autoCap, default: true))
-                Toggle("Double-space period", isOn: model.bool(Prefs.doubleSpace, default: true))
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Automatic space", isOn: model.bool(Prefs.automaticSpace, default: true))
+                    Text("Add a space after swiped and picked words.").font(.footnote).foregroundColor(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Automatic punctuation", isOn: model.bool(Prefs.automaticPunctuation, default: true))
+                    Text("Attach punctuation and close brackets and quotes.").font(.footnote).foregroundColor(.secondary)
+                }
+                if prefs.automaticPunctuation {
+                    Toggle("Double-space period", isOn: model.bool(Prefs.doubleSpace, default: true))
+                }
                 Toggle("Key sounds", isOn: model.bool(Prefs.clicks, default: true))
                 SettingSlider(title: "Long-press time", pref: Prefs.longPressMs,
                               value: model.integer(Prefs.longPressMs), suffix: " ms")
@@ -326,6 +336,15 @@ struct SettingsScreen: View {
             Section(header: Text("Assist").textCase(nil).font(.system(size: 15, weight: .semibold))) {
                 Toggle("Space accepts chosen word", isOn: model.bool(Prefs.spaceAccepts, default: true))
                 assistedToggle("Swipe typing", Prefs.swipeTyping, default: true)
+                if prefs.swipeTyping {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Picker("Swipe style", selection: model.bool(Prefs.swipeLetters, default: false)) {
+                            Text("Guess the word").tag(false)
+                            Text("Type the letters").tag(true)
+                        }
+                        Text("Choose word guessing or the letters at turns and pauses.").font(.footnote).foregroundColor(.secondary)
+                    }
+                }
                 Toggle("Highlight likely keys", isOn: model.bool(Prefs.keyTint, default: true))
                 Toggle("Smart tap areas", isOn: model.bool(Prefs.smartTargets, default: true))
                 assistedToggle("Chords", Prefs.chording, default: false)

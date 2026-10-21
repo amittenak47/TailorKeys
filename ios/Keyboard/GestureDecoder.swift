@@ -3,7 +3,7 @@ import CoreGraphics
 
 /// SHARK2-style matcher, using the same pruning, resampling and constants as Android.
 final class GestureDecoder {
-    struct Candidate { let word: String; let score: Double }
+    struct Candidate { let word: String; let score: Double; let prefix: String }
     private struct Endpoints: Hashable { let first: Character; let last: Character }
     private final class Entry {
         let word: String
@@ -68,13 +68,17 @@ final class GestureDecoder {
     /// Shape uses centroid/maximum-span normalization; location uses key width. k=12 was tuned in the JVM jitter harness.
     /// Endpoint radius=1.1 key widths; word length=1/8..2x visited keys (+2), allowing repeated letters.
     func decode(_ path: [GlidePoint], _ previous: String?, frequency: (String) -> Double,
-                context: (String?, String) -> Double) -> [Candidate] {
+                context: (String?, String) -> Double, hints: [DoubleLetterHint] = [],
+                prefix: String = "", partial: Bool = false) -> [Candidate] {
         guard path.count >= 2, !keys.isEmpty else { return [] }
-        // Bound retained templates to a few MB in the keyboard extension; never retain a full 60k x 50 cache.
+        if cached.count >= 2048 { clearTemplates() }
         let input = resample(path.map { $0.position })
         let shape = normalize(input)
-        let first = keys.filter { distance($0.value, path.first!.position) <= keyWidth * 1.1 }.keys.sorted()
-        let last = keys.filter { distance($0.value, path.last!.position) <= keyWidth * 1.1 }.keys.sorted()
+        let typed = prefix.lowercased()
+        var observedLength: CGFloat = 0
+        for i in 1..<path.count { observedLength += distance(path[i - 1].position, path[i].position) }
+        let first = typed.first.map { [$0] } ?? keys.filter { distance($0.value, path.first!.position) <= keyWidth * 1.1 }.keys.sorted()
+        let last = partial ? keys.keys.sorted() : keys.filter { distance($0.value, path.last!.position) <= keyWidth * 1.1 }.keys.sorted()
         var count = 0
         var prior: Character?
         for point in input {
@@ -83,24 +87,98 @@ final class GestureDecoder {
         }
         var top: [Candidate] = []
         for a in first { for b in last { for entry in buckets[Endpoints(first: a, last: b)] ?? [] {
-            guard (max(1, count / 8)...max(4, count * 2 + 2)).contains(entry.length) else { continue }
-            if entry.template == nil {
-                if cached.count >= 2048 { clearTemplates() }
-                let ideal = entry.letters.compactMap { keys[$0] }
-                guard ideal.count == entry.letters.count else { continue }
-                let template = resample(ideal)
-                entry.template = template; entry.shape = normalize(template)
-                cached.append(entry)
+            guard entry.word.hasPrefix(typed) else { continue }
+            var letters = Array(entry.letters)
+            var consumed = entry.length
+            var offset = 0
+            if !typed.isEmpty {
+                let overlap = keys[typed.last!].map { distance($0, path.first!.position) <= keyWidth * 0.55 } ?? false
+                offset = max(0, typed.count - (overlap ? 1 : 0))
+                letters = collapse(String(entry.word.dropFirst(offset)))
+                guard let first = letters.first, let centre = keys[first], distance(centre, path.first!.position) <= keyWidth * 1.1 else { continue }
             }
-            let location = meanDistance(input, entry.template!) / Double(keyWidth)
-            let sh = meanDistance(shape, entry.shape!)
-            let score = -12 * (sh + 1.5 * location) + 0.6 * log(max(1e-12, frequency(entry.word))) + context(previous, entry.word)
-            let candidate = Candidate(word: entry.word, score: score)
+            if partial {
+                var stop: Int?
+                var best = CGFloat.infinity, length: CGFloat = 0
+                for i in letters.indices {
+                    guard let centre = keys[letters[i]] else { continue }
+                    if i > 0, let previous = keys[letters[i - 1]] { length += distance(previous, centre) }
+                    let endpoint = distance(centre, path.last!.position)
+                    if endpoint > keyWidth * 1.1 { continue }
+                    let cost = endpoint + 0.35 * abs(length - observedLength)
+                    if cost < best { best = cost; stop = i }
+                }
+                guard let stop = stop else { continue }
+                letters = Array(letters.prefix(stop + 1))
+                let chars = Array(entry.word)
+                var groups = 0, cursor = offset
+                while cursor < chars.count && groups < letters.count {
+                    let ch = chars[cursor]; cursor += 1
+                    if !ch.isLetter { continue }
+                    while cursor < chars.count && chars[cursor] == ch { cursor += 1 }
+                    groups += 1
+                }
+                consumed = cursor
+            }
+            guard (max(1, count / 8)...max(4, count * 2 + 2)).contains(letters.count) else { continue }
+            let useCache = typed.isEmpty && !partial
+            var template = useCache ? entry.template : nil
+            var templateShape = useCache ? entry.shape : nil
+            if template == nil {
+                let ideal = letters.compactMap { keys[$0] }
+                guard ideal.count == letters.count else { continue }
+                template = resample(ideal); templateShape = normalize(template!)
+                if useCache { entry.template = template; entry.shape = templateShape; cached.append(entry) }
+            }
+            let location = meanDistance(input, template!) / Double(keyWidth)
+            let sh = meanDistance(shape, templateShape!)
+            let hintScore = doubleScore(String(entry.word.dropFirst(offset)), letters, path, hints)
+            let score = -12 * (sh + 1.5 * location) + 0.6 * log(max(1e-12, frequency(entry.word))) + context(previous, entry.word) + hintScore
+            let candidate = Candidate(word: entry.word, score: score, prefix: String(entry.word.prefix(consumed)))
             if let at = top.firstIndex(where: { $0.score < score || ($0.score == score && $0.word > entry.word) }) { top.insert(candidate, at: at) }
             else if top.count < 12 { top.append(candidate) }
             if top.count > 12 { top.removeLast() }
         } } }
         return top
+    }
+
+    private func collapse(_ word: String) -> [Character] {
+        var result: [Character] = []
+        for ch in word where ch.isLetter { if result.last != ch { result.append(ch) } }
+        return result
+    }
+    private func doubleScore(_ word: String, _ letters: [Character], _ path: [GlidePoint], _ hints: [DoubleLetterHint]) -> Double {
+        guard !hints.isEmpty else { return 0 }
+        var total: CGFloat = 0, idealTotal: CGFloat = 0
+        for i in 1..<path.count { total += distance(path[i - 1].position, path[i].position) }
+        if letters.count > 1 { for i in 1..<letters.count { idealTotal += distance(keys[letters[i - 1]]!, keys[letters[i]]!) } }
+        var score = 0.0
+        let chars = Array(word)
+        for hint in hints {
+            var travelled: CGFloat = 0
+            let end = max(0, min(hint.pathIndex, path.count - 1))
+            if end > 0 { for i in 1...end { travelled += distance(path[i - 1].position, path[i].position) } }
+            let position = total > 0 ? travelled / total : 0
+            var ideal: CGFloat = 0
+            var matched = false
+            for i in letters.indices {
+                if i > 0 { ideal += distance(keys[letters[i - 1]]!, keys[letters[i]]!) }
+                let fraction = idealTotal > 0 ? ideal / idealTotal : 0
+                if letters[i] == hint.letter && abs(fraction - position) < 0.22 {
+                    let occurrence = letters.prefix(i + 1).filter { $0 == hint.letter }.count
+                    var seen = 0, j = 0
+                    while j < chars.count {
+                        let ch = chars[j]
+                        var end = j + 1
+                        while end < chars.count && chars[end] == ch { end += 1 }
+                        if ch == hint.letter { seen += 1; if seen == occurrence && end - j >= 2 { matched = true } }
+                        j = end
+                    }
+                }
+            }
+            score += matched ? 5 : -1.5
+        }
+        return score
     }
 
     private func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat { hypot(a.x - b.x, a.y - b.y) }

@@ -48,9 +48,13 @@ enum Prefs {
     static let emptySide = "empty_side"
     static let spaceAccepts = "space_accepts"
     static let autoCap = "auto_cap"
+    // Keep the old key under Automatic punctuation so existing choices migrate unchanged.
     static let doubleSpace = "double_space_period"
     static let clicks = "haptics"
     static let keyTint = "key_tint"
+    static let swipeLetters = "swipe_letters"
+    static let automaticSpace = "automatic_space"
+    static let automaticPunctuation = "automatic_punctuation"
     static let swipeTyping = "swipe_typing"
     static let chording = "chording"
     static let smartTargets = "smart_targets"
@@ -66,6 +70,7 @@ enum Prefs {
     static let booleanDefaults: [String: Bool] = [
         followSystemText: true, typeOnPress: false, numberRow: true, showHints: true,
         spaceAccepts: true, autoCap: true, doubleSpace: true, clicks: true, keyTint: true,
+        swipeLetters: false, automaticSpace: true, automaticPunctuation: true,
         swipeTyping: true, chording: false, smartTargets: true, lockSize: false, sameOrientations: false,
     ]
     /// Registry for reset; device-dependent defaults are still resolved by their getters.
@@ -173,6 +178,9 @@ final class KeyboardSettings {
     var doubleSpace: Bool { bool(Prefs.doubleSpace, true) }
     var clicks: Bool { bool(Prefs.clicks, true) }
     var keyTint: Bool { bool(Prefs.keyTint, true) }
+    var swipeLetters: Bool { bool(Prefs.swipeLetters, false) }
+    var automaticSpace: Bool { bool(Prefs.automaticSpace, true) }
+    var automaticPunctuation: Bool { bool(Prefs.automaticPunctuation, true) }
     var swipeTyping: Bool { !typeOnPress && bool(Prefs.swipeTyping, true) }
     var chording: Bool { !typeOnPress && bool(Prefs.chording, false) }
     var smartTargets: Bool { bool(Prefs.smartTargets, true) }

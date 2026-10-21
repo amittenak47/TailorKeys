@@ -495,8 +495,38 @@ final class Predictor {
     func chordWords() -> [String] { base.prefix(20_000).map { $0.text } }
 
     // Read-only gesture inputs; tap ranking and its caches remain unchanged.
+    func hasWord(_ word: String) -> Bool { rank[word.lowercased()] != nil || user[word.lowercased()] != nil }
     func gestureWords() -> [String] { base.map { $0.text } }
     func gestureUserWords() -> [String] { Array(user.keys) }
+    struct GestureScoring {
+        let words: [String]
+        let frequency: (String) -> Double
+        let context: (String?, String) -> Double
+    }
+    /// Copy-on-write learning snapshots keep decoder workers away from live tap state.
+    func gestureScoring() -> GestureScoring {
+        let words = user, pairs = userPairs, triples = userTriples, ranks = rank, contextModel = english
+        tableLock.lock(); let tables = seedTables; tableLock.unlock()
+        func personal(_ word: String, _ prev: String?, _ prev2: String?) -> Double {
+            let pair = prev.flatMap { pairs[$0]?[word] } ?? 0
+            let triple = prev2.flatMap { first in prev.flatMap { triples[first + "\t" + $0]?[word] } } ?? 0
+            return log(1 + Double(words[word] ?? 0) * 0.05 * Double((ranks[word] ?? 5000) + 10)) +
+                2.25 * log(1 + Double(pair)) + 2.7 * log(1 + Double(triple))
+        }
+        return GestureScoring(words: Array(words.keys), frequency: { word in
+            let corpus = ranks[word].flatMap { index in tables.flatMap { index < $0.frequencies.count ? $0.frequencies[index] : nil } } ?? 0
+            return 1 / Double((ranks[word] ?? 5000) + 10) + 0.2 * corpus + Double(words[word] ?? 0) * 0.05
+        }, context: { prev, word in
+            if let score = contextModel?.withScores({ scores -> Double? in
+                guard let scores = scores else { return nil }
+                return scores.probability(word, ranks[word]) + personal(word, prev, scores.previous2)
+            }) { return score }
+            let row = prev.flatMap { ranks[$0] }.flatMap { tables?.pairs[UInt64($0)] } ?? []
+            let seedPair = self.count(row, ranks[word])
+            let userPair = prev.flatMap { pairs[$0]?[word] } ?? 0
+            return 1.5 * (log(1 + Double(seedPair)) + 1.5 * log(1 + Double(userPair)))
+        })
+    }
     func gestureFrequency(_ word: String) -> Double {
         tableLock.lock()
         let tables = seedTables
