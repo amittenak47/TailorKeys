@@ -110,7 +110,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         super.layoutSubviews()
         let h: CGFloat = mode == "Note" || mode == "Search" ? 94 : bounds.height - (tablet ? 14 : 8)
         main.spacing = tablet ? 6 : 4
-        main.frame = CGRect(x: tablet ? 12 : 4, y: tablet ? 10 : 6, width: max(0, bounds.width - (tablet ? 24 : 8)), height: h)
+        main.frame = CGRect(x: tablet ? 12 : 4, y: mode == nil ? (tablet ? 10 : 6) : 0, width: max(0, bounds.width - (tablet ? 24 : 8)), height: h)
         if laidOutWidth != main.bounds.width {
             laidOutWidth = main.bounds.width
             if section == "Emoji" && mode == nil { symbols = emojiCells(); collection.reloadData() }
@@ -343,7 +343,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
                 if entry.text == defaultText { b.backgroundColor = fillHi; b.layer.borderWidth = 2; b.layer.borderColor = palette.accent.cgColor }; row.addArrangedSubview(b)
             }
             pop.addArrangedSubview(row)
-            let caption = label("?  " + InsertPrefs.toneNames[tone] + " is your default ? change it in Settings", size: 12); caption.textColor = sub; caption.textAlignment = .center; pop.addArrangedSubview(caption)
+            let caption = label("✓  " + InsertPrefs.toneNames[tone] + " is your default · change it in Settings", size: 12); caption.textColor = sub; caption.textAlignment = .center; pop.addArrangedSubview(caption)
             pop.backgroundColor = palette.key; pop.layer.cornerRadius = 16; pop.layer.borderWidth = 1; pop.layer.borderColor = palette.keyOutline.cgColor; pop.layer.shadowOpacity = 0.2; pop.layer.shadowRadius = 8
             let point = gesture.location(in: self), width = CGFloat(toneEntries.count) * 52
             pop.frame = CGRect(x: min(max(0, point.x-width/2), max(0, bounds.width-width)), y: max(0, point.y-90), width: width, height: 84)
@@ -390,66 +390,87 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         titleFocused = false; caret = draftText.count; mode = "Note"; session += 1; renderEditor()
     }
     private func retainDraft() { if mode == "Note" { noteDrafts[editItem?.id ?? "new"] = (draftTitle, draftText) } }
+    private var editorLimit: Int { editItem?.note == false ? ClipboardStore.clipMax : ClipboardStore.noteMax }
     private func renderEditor() {
-        renderedEditor = true
-        reset(); backgroundColor = .clear; main.backgroundColor = palette.background
-        let height: CGFloat = mode == "Note" ? (tablet ? 104 : 152) : 94; onTyping?(true, height)
+        renderedEditor = true; reset(); backgroundColor = .clear; main.backgroundColor = palette.background
+        onTyping?(true, 94)
         let row = stack(); row.heightAnchor.constraint(equalToConstant: 44).isActive = true
         let cancel = button("Cancel", label: "Back to " + section.lowercased()) { [weak self] in
             guard let self = self else { return }; let wasSearch = self.mode == "Search"
-            self.retainDraft(); self.restoreKeys(); self.mode = nil; self.session += 1; self.onTyping?(false, 0); self.main.backgroundColor = .clear; self.render()
+            self.retainDraft(); self.restoreKeys(); self.mode = nil; self.session += 1; self.onTyping?(false, 0); self.render()
             if wasSearch && self.section == "Emoji" { self.layoutIfNeeded(); self.collection.layoutIfNeeded(); self.collection.setContentOffset(self.emojiScrollOffset, animated: false) }
-        }; cancel.setTitleColor(palette.smallAccent, for: .normal); cancel.widthAnchor.constraint(equalToConstant: 72).isActive = true; row.addArrangedSubview(cancel)
-        main.addArrangedSubview(row)
+        }; cancel.setTitleColor(palette.smallAccent, for: .normal); cancel.widthAnchor.constraint(equalToConstant: 72).isActive = true; row.addArrangedSubview(cancel); main.addArrangedSubview(row)
+        main.setCustomSpacing(6, after: row)
         if mode == "Search" {
             let pill = stack(); pill.spacing = 0; pill.backgroundColor = fill; pill.layer.cornerRadius = 12; pill.layer.borderWidth = 1; pill.layer.borderColor = palette.keyOutline.cgColor
-            searchLabel = button("", label: "Search " + section.lowercased()) {}; searchLabel?.contentHorizontalAlignment = .leading
+            searchLabel = button("", label: "Search " + section.lowercased()) {}; searchLabel?.contentHorizontalAlignment = .leading; searchLabel?.titleLabel?.lineBreakMode = .byTruncatingHead
             pill.addArrangedSubview(searchLabel!)
-            let clear = button("?", label: "Clear search") { [weak self] in self?.query = ""; self?.caret = 0; self?.updateEditor() }; clear.widthAnchor.constraint(equalToConstant: 44).isActive = true; pill.addArrangedSubview(clear); row.addArrangedSubview(pill)
-            let results = UIScrollView(); resultScroll = results; main.addArrangedSubview(results); main.setCustomSpacing(6, after: row); results.heightAnchor.constraint(equalToConstant: 44).isActive = true
-            updateEditor()
+            let clear = button("×", label: "Clear search") { [weak self] in self?.query = ""; self?.caret = 0; self?.updateEditor() }; clear.widthAnchor.constraint(equalToConstant: 44).isActive = true; pill.addArrangedSubview(clear); row.addArrangedSubview(pill)
+            let results = UIScrollView(); resultScroll = results; main.addArrangedSubview(results); results.heightAnchor.constraint(equalToConstant: 44).isActive = true
         } else {
-            row.addArrangedSubview(label(editItem == nil ? "New note" : "Edit note"))
-            row.addArrangedSubview(button("✓ Save", selected: true) { [weak self] in
-                guard let self = self else { return }; self.repository.change { store in
-                    if let item = self.editItem { store.edit(item.id, text: self.draftText, title: self.draftTitle) } else { store.note(self.draftTitle, self.draftText) }
-                }; self.noteDrafts.removeValue(forKey: self.editItem?.id ?? "new"); self.draftText = ""; self.draftTitle = ""; self.restoreKeys(); self.mode = nil; self.editItem = nil; self.session += 1; self.onTyping?(false, 0); self.render()
-            })
-            titleLabel = button("", label: "Note title") { [weak self] in guard let self = self else { return }; self.titleFocused = true; self.caret = self.draftTitle.count; self.session += 1; self.updateEditor() }
-            textLabel = button("", label: "Note text") { [weak self] in guard let self = self else { return }; self.titleFocused = false; self.caret = self.draftText.count; self.session += 1; self.updateEditor() }
-            if tablet { let fields = stack(); fields.distribution = .fillEqually; fields.addArrangedSubview(titleLabel!); fields.addArrangedSubview(textLabel!); main.addArrangedSubview(fields) }
-            else { main.addArrangedSubview(titleLabel!); main.addArrangedSubview(textLabel!) }; updateEditor()
+            let title = label(editItem == nil ? "New note" : editItem?.note == false ? "Edit clip" : "Edit note", size: 15); title.font = .systemFont(ofSize: 15, weight: .semibold); title.textAlignment = .center; row.addArrangedSubview(title)
+            let save = button("Save") { [weak self] in
+                guard let self = self else { return }; self.repository.change { store in if let item = self.editItem { store.edit(item.id, text: self.draftText, title: self.draftTitle) } else { store.note(self.draftTitle, self.draftText) } }
+                self.noteDrafts.removeValue(forKey: self.editItem?.id ?? "new"); self.draftText = ""; self.draftTitle = ""; self.restoreKeys(); self.mode = nil; self.editItem = nil; self.session += 1; self.onTyping?(false, 0); self.render()
+            }; save.widthAnchor.constraint(equalToConstant: 72).isActive = true; save.setTitleColor(palette.onAccent, for: .normal)
+            let pill = UIView(); pill.backgroundColor = palette.accent; pill.layer.cornerRadius = 12; pill.isUserInteractionEnabled = false; pill.translatesAutoresizingMaskIntoConstraints = false; save.insertSubview(pill, at: 0)
+            NSLayoutConstraint.activate([pill.leadingAnchor.constraint(equalTo: save.leadingAnchor), pill.trailingAnchor.constraint(equalTo: save.trailingAnchor), pill.centerYAnchor.constraint(equalTo: save.centerYAnchor), pill.heightAnchor.constraint(equalToConstant: 36)]); row.addArrangedSubview(save)
+            let fields = stack(); fields.spacing = 6
+            titleLabel = nil
+            if tablet { titleLabel = noteField(true); fields.addArrangedSubview(titleLabel!) }
+            textLabel = noteField(false); fields.addArrangedSubview(textLabel!)
+            if let title = titleLabel { textLabel!.widthAnchor.constraint(equalTo: title.widthAnchor, multiplier: 2).isActive = true }
+            fields.heightAnchor.constraint(equalToConstant: 44).isActive = true; main.addArrangedSubview(fields)
         }
-        setNeedsLayout()
+        updateEditor(); setNeedsLayout()
+    }
+    private func noteField(_ title: Bool) -> UIButton {
+        let b = button("", label: title ? "Note title" : "Note text") { [weak self] in guard let self = self else { return }; self.titleFocused = title; self.caret = title ? self.draftTitle.count : self.draftText.count; self.session += 1; self.updateEditor() }
+        b.backgroundColor = fill; b.contentHorizontalAlignment = .leading; b.titleLabel?.lineBreakMode = .byTruncatingHead
+        let caption = label(title ? "Title" : "Text", size: 12); caption.textColor = sub; caption.isUserInteractionEnabled = false; caption.translatesAutoresizingMaskIntoConstraints = false; b.addSubview(caption)
+        let counter = label("", size: 12); counter.tag = 602; counter.textAlignment = .right; counter.isUserInteractionEnabled = false; counter.translatesAutoresizingMaskIntoConstraints = false; b.addSubview(counter)
+        NSLayoutConstraint.activate([caption.leadingAnchor.constraint(equalTo: b.leadingAnchor, constant: 12), caption.centerYAnchor.constraint(equalTo: b.centerYAnchor), counter.trailingAnchor.constraint(equalTo: b.trailingAnchor, constant: -12), counter.centerYAnchor.constraint(equalTo: b.centerYAnchor)])
+        return b
+    }
+    private func caretTitle(_ text: String, focused: Bool) -> NSAttributedString {
+        let display = focused ? withCaret(text) : text
+        let result = NSMutableAttributedString(string: display, attributes: [.foregroundColor: palette.text, .font: UIFont.systemFont(ofSize: 15)])
+        if focused { let offset = text.prefix(caret).utf16.count; result.addAttribute(.foregroundColor, value: palette.accent, range: NSRange(location: offset, length: 1)) }; return result
     }
     private func updateEditor() {
         if mode == "Note" {
-            titleLabel?.setTitle("Title: \(titleFocused ? withCaret(draftTitle) : draftTitle)  \(draftTitle.count)/40", for: .normal)
-            textLabel?.setTitle("Text: \(!titleFocused ? withCaret(draftText) : draftText)  \(draftText.count)/\(ClipboardStore.noteMax)", for: .normal)
-            titleLabel?.layer.borderWidth = titleFocused ? 2 : 0; titleLabel?.layer.borderColor = palette.accent.cgColor
-            textLabel?.layer.borderWidth = titleFocused ? 0 : 2; textLabel?.layer.borderColor = palette.accent.cgColor
-            titleLabel?.accessibilityValue = draftTitle; textLabel?.accessibilityValue = draftText; return
+            for (b, title) in [(titleLabel, true), (textLabel, false)] {
+                guard let b = b else { continue }; let focused = title == titleFocused, text = title ? draftTitle : draftText
+                b.setAttributedTitle(caretTitle(text, focused: focused), for: .normal); b.accessibilityValue = text
+                b.layer.borderWidth = focused ? 2 : 1; b.layer.borderColor = (focused ? palette.accent : palette.keyOutline).cgColor
+                let counter = b.viewWithTag(602) as? UILabel
+                counter?.text = title ? (focused ? "\(text.count)/40" : "") : "\(text.count.formatted(.number.grouping(.automatic)))/\(editorLimit.formatted(.number.grouping(.automatic)))"
+                counter?.textColor = !title && text.count >= editorLimit ? readable(danger, on: fill) : sub
+                b.contentEdgeInsets = UIEdgeInsets(top: 0, left: title ? 48 : 44, bottom: 0, right: title ? (focused ? 56 : 12) : 90)
+            }; return
         }
-        searchLabel?.setTitle("⌕  \(withCaret(query))", for: .normal); searchLabel?.accessibilityValue = query
-        guard let scroll = resultScroll else { return }; scroll.subviews.forEach { $0.removeFromSuperview() }
-        let row = stack(); let entries = section == "Emoji" ? (emojiReady ? InsertAssets.emoji.search(query) : []).filter { InsertAssets.hasGlyph($0.text) } : InsertAssets.kaomoji.filter { ($0.name + " " + $0.category).localizedCaseInsensitiveContains(query) || query.isEmpty }
+        let display = NSMutableAttributedString(string: "⌕  ", attributes: [.foregroundColor: sub, .font: UIFont.systemFont(ofSize: 15)]); display.append(caretTitle(query, focused: true)); searchLabel?.setAttributedTitle(display, for: .normal); searchLabel?.accessibilityValue = query
+        guard let resultScroll = resultScroll else { return }; resultScroll.subviews.forEach { $0.removeFromSuperview() }
+        let row = stack(); row.spacing = 0
         if section == "Clipboard" {
-            for item in repository.searchableItems(fullAccess: fullAccess()).filter({ ($0.title + $0.text).localizedCaseInsensitiveContains(query) || query.isEmpty }).prefix(30) {
-                row.addArrangedSubview(button(String(item.text.prefix(24)), label: item.text) { [weak self] in self?.onInsert?(item.text) })
-            }
-        } else { for entry in entries.prefix(40) {
-            let e = section == "Emoji" ? shown(entry) : entry
-            let b = button(e.text, label: e.name) { [weak self] in self?.use(e) }; b.titleLabel?.font = .systemFont(ofSize: section == "Emoji" ? (tablet ? 32 : 28) : (tablet ? 17 : 16)); if section == "Emoji" { b.widthAnchor.constraint(equalToConstant: 48).isActive = true }; row.addArrangedSubview(b)
-        } }
-        if row.arrangedSubviews.isEmpty { let empty = label("No \(section.lowercased()) for “\(query)”", size: 14); empty.textColor = sub; empty.textAlignment = .center; row.addArrangedSubview(empty); row.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor).isActive = true }
-        scroll.addSubview(row); row.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([row.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor), row.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor), row.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor), row.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor), row.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor)])
+            for item in repository.searchableItems(fullAccess: fullAccess()).filter({ ($0.title + $0.text).localizedCaseInsensitiveContains(query) || query.isEmpty }).prefix(30) { row.addArrangedSubview(button(String(item.text.prefix(24)), label: item.text) { [weak self] in self?.onInsert?(item.text) }) }
+        } else {
+            let entries = section == "Emoji" ? (emojiReady ? InsertAssets.emoji.search(query).filter { InsertAssets.hasGlyph($0.text) } : []) : InsertAssets.kaomoji.filter { ($0.name + " " + $0.category).localizedCaseInsensitiveContains(query) || query.isEmpty }
+            for entry in entries.prefix(40) { let e = section == "Emoji" ? shown(entry) : entry; let b = button(e.text, label: e.name) { [weak self] in self?.use(e) }; b.titleLabel?.font = .systemFont(ofSize: section == "Emoji" ? 28 : 16); if section == "Emoji" { b.widthAnchor.constraint(equalToConstant: 48).isActive = true; b.contentEdgeInsets = .zero }; row.addArrangedSubview(b) }
+        }
+        let empty = row.arrangedSubviews.isEmpty
+        if empty { let message = label("No \(section.lowercased()) for “\(query)”", size: 14); message.textColor = sub; message.textAlignment = .center; row.addArrangedSubview(message) }
+        resultScroll.addSubview(row); row.translatesAutoresizingMaskIntoConstraints = false
+        if empty { row.widthAnchor.constraint(equalTo: resultScroll.frameLayoutGuide.widthAnchor).isActive = true }
+        NSLayoutConstraint.activate([row.leadingAnchor.constraint(equalTo: resultScroll.contentLayoutGuide.leadingAnchor), row.trailingAnchor.constraint(equalTo: resultScroll.contentLayoutGuide.trailingAnchor), row.topAnchor.constraint(equalTo: resultScroll.contentLayoutGuide.topAnchor), row.bottomAnchor.constraint(equalTo: resultScroll.contentLayoutGuide.bottomAnchor), row.heightAnchor.constraint(equalTo: resultScroll.frameLayoutGuide.heightAnchor)])
     }
     @discardableResult func typeText(_ text: String) -> Bool {
         guard acceptsText else { return false }
         var value = mode == "Search" ? query : titleFocused ? draftTitle : draftText
-        let index = value.index(value.startIndex, offsetBy: min(caret, value.count)); value.insert(contentsOf: text, at: index); caret += text.count
-        if mode == "Search" { query = value } else if titleFocused { draftTitle = String(value.prefix(ClipboardStore.titleMax)) } else { draftText = String(value.prefix(ClipboardStore.noteMax)) }
+        let limit = mode == "Search" ? Int.max : titleFocused ? ClipboardStore.titleMax : editorLimit
+        let accepted = String(text.prefix(max(0, limit-value.count)))
+        let index = value.index(value.startIndex, offsetBy: min(caret, value.count)); value.insert(contentsOf: accepted, at: index); caret += accepted.count
+        if mode == "Search" { query = value } else if titleFocused { draftTitle = value } else { draftText = value }
         caret = min(caret, (mode == "Search" ? query : titleFocused ? draftTitle : draftText).count); updateEditor(); return true
     }
     private func withCaret(_ text: String) -> String { var result = text; result.insert("│", at: result.index(result.startIndex, offsetBy: min(caret, result.count))); return result }
@@ -500,7 +521,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         if tablet || !notes { columns.addArrangedSubview(clipboardColumn(store, notes: false)) }
         if tablet || notes { columns.addArrangedSubview(clipboardColumn(store, notes: true)) }; main.addArrangedSubview(columns)
         if tablet {
-            let privacy = label(repository.keep == .forever ? "On this device ? kept until you clear it" : "On this device ? clears after " + repository.keep.title, size: 12); privacy.textColor = sub; privacy.textAlignment = .center
+            let privacy = label(repository.keep == .forever ? "On this device · kept until you clear it" : "On this device · clears after " + repository.keep.title, size: 12); privacy.textColor = sub; privacy.textAlignment = .center
             let context = stack(); context.alignment = .center
             let icon = UIImageView(image: UIImage(systemName: "lock")); icon.tintColor = sub; icon.widthAnchor.constraint(equalToConstant: 14).isActive = true; icon.heightAnchor.constraint(equalToConstant: 14).isActive = true; icon.contentMode = .scaleAspectFit
             context.addArrangedSubview(UIView()); context.addArrangedSubview(icon); context.addArrangedSubview(privacy); context.addArrangedSubview(UIView()); makeBottom(context)
@@ -574,9 +595,13 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         }
     }
     private func showUndo(_ item: ClipItem, _ store: ClipboardStore) {
-        let undo = button((item.note ? "Note" : "Clip") + " deleted ? Undo") { [weak self] in guard let self = self else { return }; if store.undo() { self.repository.change { $0.restore(item) } }; self.render() }
-        undo.frame = CGRect(x: max(4, bounds.midX-120), y: bounds.height-100, width: min(240,bounds.width-8), height: 44); addSubview(undo)
-        DispatchQueue.main.asyncAfter(deadline: .now()+6) { [weak undo] in undo?.removeFromSuperview() }
+        viewWithTag(610)?.removeFromSuperview()
+        let toast = stack(); toast.tag = 610; toast.alignment = .center; toast.backgroundColor = palette.text; toast.layer.cornerRadius = 14; toast.layer.shadowOpacity = 0.15; toast.layer.shadowRadius = 8
+        let caption = label((item.note ? "Note" : "Clip") + " deleted", size: 15); caption.textColor = palette.background; toast.addArrangedSubview(caption)
+        let undo = button("Undo") { [weak self, weak toast] in guard let self = self else { return }; if store.undo() { self.repository.change { $0.restore(item) } }; toast?.removeFromSuperview(); self.render() }; undo.setTitleColor(readable(palette.accent, on: palette.text), for: .normal); toast.addArrangedSubview(undo)
+        toast.isLayoutMarginsRelativeArrangement = true; toast.layoutMargins = UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 4)
+        toast.frame = CGRect(x: max(8, bounds.midX-200), y: bounds.height-100, width: min(400,bounds.width-16), height: 48); addSubview(toast)
+        DispatchQueue.main.asyncAfter(deadline: .now()+6) { [weak toast] in toast?.removeFromSuperview() }
     }
     private func renderDictate() {
         let col = stack(.vertical); col.backgroundColor = palette.key; col.layer.cornerRadius = 12; col.layoutMargins = UIEdgeInsets(top: 20, left: 20, bottom: 12, right: 20); col.isLayoutMarginsRelativeArrangement = true

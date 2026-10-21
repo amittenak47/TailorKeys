@@ -12,7 +12,7 @@ class InsertDataTest {
             val available = width - 8f
             val cols = app.tailorkeys.insert.emojiColumns(available, false)
             org.junit.Assert.assertTrue(cols <= 8 && cols * 44 <= available)
-            org.junit.Assert.assertTrue(available - cols * 44 < 44)
+            org.junit.Assert.assertTrue(cols == 8 || available - cols * 44 < 44)
         }
         org.junit.Assert.assertEquals(14, app.tailorkeys.insert.emojiColumns(776f, true))
         org.junit.Assert.assertEquals(11, app.tailorkeys.insert.emojiColumns(576f, true))

@@ -63,6 +63,9 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
     private var field: EditText? = null
     private var titleField: EditText? = null
     private var textField: EditText? = null
+    private var titleCounter: TextView? = null
+    private var textCounter: TextView? = null
+    private var undoToast: View? = null
     private val grid = GridView(context).apply { verticalSpacing = 0; horizontalSpacing = 0; stretchMode = GridView.STRETCH_SPACING_UNIFORM; isVerticalScrollBarEnabled = true; clipChildren = false }
     private var symbols = emptyList<InsertSymbol>()
     private var emoji: EmojiCatalog? = null
@@ -232,7 +235,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         setPadding(dp(if (tablet) 12 else 4), dp(if (tablet) 10 else 6), dp(if (tablet) 12 else 4), dp(if (tablet) 4 else 2))
         body.layoutParams.height = -1
         val searchName = when (section) { "Kaomoji" -> "Search kaomoji"; "Clipboard" -> "Search clips and notes"; else -> "Search emoji" }
-        top.addView(button("?  $searchName", searchName) { if (section == "Voice") section = "Emoji"; startSearch() }.apply { background = shape(fill); gravity = Gravity.CENTER_VERTICAL; setTextColor(sub); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(8) })
+        top.addView(button("⌕  $searchName", searchName) { if (section == "Voice") section = "Emoji"; startSearch() }.apply { background = shape(fill); gravity = Gravity.CENTER_VERTICAL; setTextColor(sub); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(8) })
         val switch = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL; background = shape(fill) }
         sections.filter { it != "Voice" || repository.prefs.getBoolean(InsertPrefs.VOICE, true) }.filter { it != "Kaomoji" || repository.prefs.getBoolean(InsertPrefs.KAOMOJI, true) }.forEach { name ->
             val b = button(if (name == "Kaomoji") "^_^" else "", name, section == name) {
@@ -248,7 +251,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         body.addView(pages, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(if (tablet) 6 else 4); bottomMargin = dp(if (tablet) 6 else 4) })
         footer.addView(button("ABC", "Back to keys") { close() }, LinearLayout.LayoutParams(dp(if (tablet) 64 else 52), dp(44)))
         footer.addView(categories, LinearLayout.LayoutParams(0, dp(44), 1f))
-        footer.addView(button("?", "Backspace") { backspace() }, LinearLayout.LayoutParams(dp(if (tablet) 64 else 52), dp(44)))
+        footer.addView(button("⌫", "Backspace") { backspace() }, LinearLayout.LayoutParams(dp(if (tablet) 64 else 52), dp(44)))
         body.addView(footer, LinearLayout.LayoutParams(-1, dp(44)))
         when (section) { "Emoji", "Kaomoji" -> renderSymbols(); "Clipboard" -> renderClipboard(); "Voice" -> renderVoice() }
     }
@@ -365,7 +368,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
             textSize = 32f; setPadding(0,0,0,0); background = if (index == default) shape(fillHi, true) else null
         }, LinearLayout.LayoutParams(cell, dp(52))) }
         toneLayer.addView(row)
-        toneLayer.addView(label("?  ${InsertPrefs.toneNames.getOrElse(default) { "Default" }} is your default ? change it in Settings", 12f).apply { setTextColor(sub); setPadding(dp(10),0,dp(10),0) }, LinearLayout.LayoutParams(-1,dp(32)))
+        toneLayer.addView(label("✓  ${InsertPrefs.toneNames.getOrElse(default) { "Default" }} is your default · change it in Settings", 12f).apply { setTextColor(sub); setPadding(dp(10),0,dp(10),0) }, LinearLayout.LayoutParams(-1,dp(32)))
         val point = IntArray(2); val origin = IntArray(2); anchor.getLocationOnScreen(point); getLocationOnScreen(origin)
         (toneLayer.layoutParams as LayoutParams).apply { width = cell * variants.size; leftMargin = (point[0]-origin[0]-width/2+anchor.width/2).coerceIn(0,(this@InsertPanel.width-width).coerceAtLeast(0)); topMargin = (point[1]-origin[1]-dp(90)).coerceAtLeast(0) }
         toneLayer.visibility = VISIBLE
@@ -399,7 +402,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
     }
     private fun input(text: String, hint: String, changed: (String) -> Unit): EditText = EditText(context).apply {
         setText(text); setSelection(length()); this.hint = hint; textSize = 15f; setTextColor(palette.text); setHintTextColor(palette.hint)
-        showSoftInputOnFocus = false; background = shape(palette.key, true); setPadding(dp(12), 0, dp(8), 0); minimumHeight = dp(48)
+        showSoftInputOnFocus = false; background = null; setPadding(0, 0, 0, 0); minimumHeight = dp(44); if (android.os.Build.VERSION.SDK_INT >= 29) textCursorDrawable?.setTint(palette.accent)
         addTextChangedListener(object : TextWatcher { override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit; override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { changed(s.toString()) }; override fun afterTextChanged(s: Editable?) = Unit })
         setOnFocusChangeListener { _, focus -> if (focus) { field = this; session++ } }
     }
@@ -407,7 +410,8 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         renderedEditor = true
         isClickable = false
         clearBody(); setBackgroundColor(android.graphics.Color.TRANSPARENT); body.layoutParams.height = -2
-        val stripHeight = if (editor == "Note") (if (tablet) 104 else 152) else 94
+        val stripHeight = 94
+        setPadding(dp(if (tablet) 12 else 4),0,dp(if (tablet) 12 else 4),0)
         typing(true, stripHeight)
         val sheet = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(palette.background) }
         body.addView(sheet, LinearLayout.LayoutParams(-1, dp(stripHeight)))
@@ -424,30 +428,50 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
                 if (android.os.Build.VERSION.SDK_INT >= 29) textCursorDrawable?.setTint(palette.accent)
             }
             pill.addView(search, LayoutParams(-1, dp(44)))
-            pill.addView(label("?", 20f).apply { gravity = Gravity.CENTER; setTextColor(sub); importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }, LayoutParams(dp(36), dp(44), Gravity.START))
-            pill.addView(button("?", "Clear search") { search.setText("") }, LayoutParams(dp(44), dp(44), Gravity.END))
+            pill.addView(label("⌕", 20f).apply { gravity = Gravity.CENTER; setTextColor(sub); importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }, LayoutParams(dp(36), dp(44), Gravity.START))
+            pill.addView(button("×", "Clear search") { search.setText("") }, LayoutParams(dp(44), dp(44), Gravity.END))
             row.addView(pill, LinearLayout.LayoutParams(0, dp(44), 1f)); field = search
             renderResults(sheet); search.requestFocus()
         } else {
-            row.addView(label(if (editingItem == null) "New note" else "Edit ${if (editingItem?.note == true) "note" else "clip"}"), LinearLayout.LayoutParams(0, -1, 1f))
-            row.addView(button("✓ Save", "Save note", true) {
-                retainDraft(); repository.change { s -> val item = editingItem; if (item != null) s.edit(item.id, draftText, draftTitle) else s.note(draftTitle, draftText) }
-                noteDrafts.remove(editingItem?.id ?: "new"); draftText = ""; draftTitle = ""; editingItem = null; restoreKeys(); editor = null; field = null; typing(false, 0); renderPanel()
-            }, LinearLayout.LayoutParams(dp(80), dp(48)))
-            titleField = input(draftTitle, "Title (${ClipboardStore.TITLE_MAX} characters)") { draftTitle = it.take(ClipboardStore.TITLE_MAX) }.apply { filters = arrayOf(android.text.InputFilter.LengthFilter(ClipboardStore.TITLE_MAX)); contentDescription = "Note title"; isSingleLine = true }
-            textField = input(draftText, "Text (%,d characters)".format(ClipboardStore.NOTE_MAX)) { draftText = it }.apply { filters = arrayOf(android.text.InputFilter.LengthFilter(ClipboardStore.NOTE_MAX)); contentDescription = "Note text" }
-            if (tablet) {
-                val fields = LinearLayout(context)
-                fields.addView(titleField, LinearLayout.LayoutParams(0, dp(56), 1f).apply { marginEnd = dp(4) })
-                fields.addView(textField, LinearLayout.LayoutParams(0, dp(56), 2f))
-                sheet.addView(fields, LinearLayout.LayoutParams(-1, dp(56)))
-            } else {
-                sheet.addView(titleField, LinearLayout.LayoutParams(-1, dp(48))); sheet.addView(textField, LinearLayout.LayoutParams(-1, dp(56)))
+            row.addView(label(if (editingItem == null) "New note" else "Edit ${if (editingItem?.note != false) "note" else "clip"}",15f).apply { gravity=Gravity.CENTER; setTypeface(typeface,Typeface.BOLD) }, LinearLayout.LayoutParams(0,dp(44),1f))
+            row.addView(primary("Save") {
+                retainDraft(); repository.change { store -> val item=editingItem; if (item != null) store.edit(item.id,draftText,draftTitle) else store.note(draftTitle,draftText) }
+                noteDrafts.remove(editingItem?.id ?: "new"); draftText=""; draftTitle=""; editingItem=null; titleField=null; textField=null
+                restoreKeys(); editor=null; field=null; typing(false,0); renderPanel()
+            }.apply { background=android.graphics.drawable.InsetDrawable(shape(palette.accent),0,dp(4),0,dp(4)) }, LinearLayout.LayoutParams(dp(72),dp(44)))
+            titleField=null; textField=null
+            val fields=LinearLayout(context)
+            fun noteField(title: Boolean): View {
+                val limit=if (title) ClipboardStore.TITLE_MAX else ClipboardStore.NOTE_MAX
+                val container=LinearLayout(context).apply { gravity=Gravity.CENTER_VERTICAL; setPadding(dp(12),0,dp(12),0); background=shape(fill) }
+                val caption=label(if (title) "Title" else "Text",12f).apply { setTextColor(sub) }
+                val counter=label("",12f).apply { setTextColor(sub); gravity=Gravity.CENTER_VERTICAL or Gravity.END }
+                if (title) titleCounter=counter else textCounter=counter
+                val value=input(if (title) draftTitle else draftText,"") { if (title) draftTitle=it else draftText=it; updateCounters() }.apply {
+                    filters=arrayOf(android.text.InputFilter.LengthFilter(limit)); contentDescription=if (title) "Note title" else "Note text"; isSingleLine=true
+                    setOnFocusChangeListener { _, focused ->
+                        container.background=shape(fill,focused); if (focused) { field=this; session++ }; updateCounters()
+                    }
+                }
+                if (title) titleField=value else textField=value
+                container.addView(caption,LinearLayout.LayoutParams(-2,-1).apply { marginEnd=dp(8) })
+                container.addView(value,LinearLayout.LayoutParams(0,dp(44),1f)); container.addView(counter,LinearLayout.LayoutParams(-2,-1).apply { marginStart=dp(8) })
+                return container
             }
-            field = textField; textField?.requestFocus()
+            if (tablet) fields.addView(noteField(true),LinearLayout.LayoutParams(0,dp(44),1f).apply { marginEnd=dp(6) })
+            fields.addView(noteField(false),LinearLayout.LayoutParams(0,dp(44),if (tablet) 2f else 1f))
+            sheet.addView(fields,LinearLayout.LayoutParams(-1,dp(44)).apply { topMargin=dp(6) }); field=textField; textField?.requestFocus(); updateCounters()
         }
     }
-    private fun retainDraft() { draftTitle = titleField?.text?.toString().orEmpty(); draftText = textField?.text?.toString().orEmpty(); noteDrafts[editingItem?.id ?: "new"] = draftTitle to draftText }
+    private fun updateCounters() {
+        titleCounter?.text = if (titleField?.hasFocus() == true) "${draftTitle.length}/40" else ""
+        textCounter?.text = "${java.text.NumberFormat.getIntegerInstance(java.util.Locale.US).format(draftText.length)}/2,000"
+        textCounter?.setTextColor(if (draftText.length >= ClipboardStore.NOTE_MAX) danger else sub)
+    }
+    private fun retainDraft() {
+        draftTitle=titleField?.text?.toString() ?: draftTitle; draftText=textField?.text?.toString() ?: draftText
+        noteDrafts[editingItem?.id ?: "new"]=draftTitle to draftText
+    }
     private fun renderResults(sheet: LinearLayout) {
         if (sheet.childCount > 1) sheet.removeViewAt(1)
         val row = LinearLayout(context)
@@ -456,7 +480,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
             repository.searchableItems().filter { (it.title + it.text).contains(query, true) }.take(20).forEach { clip -> row.addView(button(clip.title.ifBlank { clip.text.take(30) }, clip.text) { insert(clip.text) }) }
         } else result.forEach { e -> val shown = if (section == "Emoji") defaultSymbol(e) else e; row.addView(button(shown.text, shown.name) { use(shown) }.apply { textSize = if (section == "Emoji") 28f else 16f }, LinearLayout.LayoutParams(if (section == "Emoji") dp(48) else -2, dp(44))) }
         if (row.childCount == 0) {
-            sheet.addView(label("No ${section.lowercase()} for ?$query?", 14f).apply { gravity = Gravity.CENTER; setTextColor(sub) }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) }); return
+            sheet.addView(label("No ${section.lowercase()} for “$query”", 14f).apply { gravity = Gravity.CENTER; setTextColor(sub) }, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) }); return
         }
         val scroll = HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(row) }
         sheet.addView(scroll, LinearLayout.LayoutParams(-1, dp(44)).apply { topMargin = dp(6) })
@@ -543,7 +567,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         else columns.addView(column(notes),LinearLayout.LayoutParams(-1,-1))
         pages.addView(columns,LayoutParams(-1,-1))
         if (tablet) categories.addView(label("",12f).apply {
-            text = if (repository.keep == ClipKeep.FOREVER) "On this device ? kept until you clear it" else "On this device ? clears after ${repository.keep.title}"
+            text = if (repository.keep == ClipKeep.FOREVER) "On this device · kept until you clear it" else "On this device · clears after ${repository.keep.title}"
             setTextColor(sub); gravity=Gravity.CENTER; compoundDrawablePadding=dp(6); setCompoundDrawables(InsertIcon("Lock",sub).apply { setBounds(0,0,dp(14),dp(14)) },null,null,null)
         },LinearLayout.LayoutParams(-1,dp(44)))
         else {
@@ -567,8 +591,12 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         if (editor == null) clipboardChanged()
     }
     private fun showUndo(item: ClipItem,store: ClipboardStore) {
-        val undo=button("${if (item.note) "Note" else "Clip"} deleted ? Undo") { if (store.undo()) repository.change { it.restore(item) }; clipboardChanged() }
-        addView(undo,LayoutParams(-2,dp(44),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=dp(54) }); postDelayed({ removeView(undo) },6_000)
+        undoToast?.let { removeView(it) }
+        val toast=LinearLayout(context).apply { gravity=Gravity.CENTER_VERTICAL; background=shape(palette.text,radius=14); setPadding(dp(16),0,dp(4),0); elevation=dp(8).toFloat() }
+        toast.addView(label("${if (item.note) "Note" else "Clip"} deleted",15f).apply { setTextColor(palette.background) },LinearLayout.LayoutParams(0,dp(48),1f))
+        toast.addView(button("Undo") { if (store.undo()) repository.change { it.restore(item) }; removeView(toast); if (undoToast === toast) undoToast=null; clipboardChanged() }.apply { setTextColor(readable(palette.accent,palette.text)); setTypeface(typeface,Typeface.BOLD) },LinearLayout.LayoutParams(-2,dp(48)))
+        undoToast=toast; addView(toast,LayoutParams(minOf(width-dp(16),dp(400)),dp(48),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=dp(54) })
+        postDelayed({ removeView(toast); if (undoToast === toast) undoToast=null },6_000)
     }
     private fun renderVoice() {
         val col = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(16), dp(8), dp(16), dp(8)) }

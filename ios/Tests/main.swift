@@ -838,7 +838,7 @@ do {
 
 for width in [320.0, 360, 390, 412] {
     let available = width - 8, cols = emojiColumns(width: width - 8, tablet: false)
-    check(cols <= 8 && Double(cols) * 44 <= available && available - Double(cols) * 44 < 44, "emoji targets shrank or overflowed")
+    check(cols <= 8 && Double(cols) * 44 <= available && (cols == 8 || available - Double(cols) * 44 < 44), "emoji targets shrank or overflowed")
 }
 check(emojiColumns(width: 776, tablet: true) == 14 && emojiColumns(width: 576, tablet: true) == 11, "tablet emoji columns")
 
