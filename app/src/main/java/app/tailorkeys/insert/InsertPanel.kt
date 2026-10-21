@@ -214,7 +214,9 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
             symbols = emojiCells()
             (grid.parent as? ViewGroup)?.removeView(grid)
             grid.numColumns = if (tablet) 14 else 8; grid.columnWidth = dp(if (tablet) 56 else 48)
-            pages.addView(HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled = false; addView(grid, ViewGroup.LayoutParams(dp(if (tablet) 14 * 56 else 8 * 48), -1)) }, LayoutParams(-1, -1)); adapter.notifyDataSetChanged()
+            // Directly in the page at full width: a HorizontalScrollView measures with an unbounded width,
+            // which collapses STRETCH_COLUMN_WIDTH columns to nothing.
+            pages.addView(grid, LayoutParams(-1, -1)); adapter.notifyDataSetChanged()
         } else showKaomoji(if (activeCategory == "Recent") recentSymbols(section).ifEmpty { all.filter { it.category == "Happy" } } else all.filter { it.category == activeCategory })
     }
     private fun emojiCells(): List<InsertSymbol> {
