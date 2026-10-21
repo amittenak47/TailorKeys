@@ -99,7 +99,7 @@ fun SettingsScreen(settings: KeyboardSettings, setupStatus: SetupStatus, onSetup
             LocalLayoutEntering provides (testEntry != null)) {
             if (reduced) ReducedLayoutCrossfade(testEntry) { entry ->
                 if (entry == null) SettingsContent(state, setupStatus, onSetup, tab, listStates) {
-                    if (testEntry == null) { state.library.beginTrial(it); testEntry = it }
+                    if (testEntry == null) { testEntry = it }
                 } else TypingTestPage(state, entry, closeTest)
             } else AnimatedContent(testEntry, contentKey = { it != null }, modifier = Modifier.fillMaxSize(),
                 transitionSpec = {
@@ -108,7 +108,7 @@ fun SettingsScreen(settings: KeyboardSettings, setupStatus: SetupStatus, onSetup
                 }, label = "Layout typing test") { entry ->
                 CompositionLocalProvider(LocalLayoutVisibility provides this) {
                     if (entry == null) SettingsContent(state, setupStatus, onSetup, tab, listStates) {
-                        if (testEntry == null) { state.library.beginTrial(it); testEntry = it }
+                        if (testEntry == null) { testEntry = it }
                     } else TypingTestPage(state, entry, closeTest)
                 }
             }

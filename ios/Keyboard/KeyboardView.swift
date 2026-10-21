@@ -305,7 +305,7 @@ final class KeyboardView: UIView {
     }
     private func refreshPreferences() {
         cursorGlow = settings.cursorGlow
-        viewPrefs.highContrast = settings.theme == .highContrast
+        viewPrefs.highContrast = previewPalette == nil && settings.theme == .highContrast
         viewPrefs.keyTint = settings.keyTint; viewPrefs.showHints = settings.showHints
         viewPrefs.smartTargets = settings.smartTargets; viewPrefs.swipeTyping = settings.swipeTyping
         viewPrefs.chording = settings.chording; viewPrefs.typeOnPress = settings.typeOnPress
@@ -350,14 +350,14 @@ final class KeyboardView: UIView {
     init(settings: KeyboardSettings, grid: KeyGrid) {
         self.settings = settings
         self.grid = grid
-        palette = Palette.of(settings.theme, dark: false)
+        palette = Palette.of(settings, dark: false)
         super.init(frame: .zero)
         isMultipleTouchEnabled = true
         addInteraction(UIContextMenuInteraction(delegate: self))
         isAccessibilityElement = false
         isOpaque = true
         contentMode = .redraw
-        palette = Palette.of(settings.theme, dark: traitCollection.userInterfaceStyle == .dark)
+        palette = previewPalette ?? Palette.of(settings, dark: traitCollection.userInterfaceStyle == .dark)
         refreshPreferences()
         prepareDrawingResources()
     }
@@ -378,13 +378,17 @@ final class KeyboardView: UIView {
         updateWiggle()
     }
 
+    var previewPressed = false
+    var previewTargetHeight: CGFloat?
+    var previewPalette: Palette?
+
     func reloadSettings() {
         clearArmedWord()
         cancelTouches()
         refreshMotion()
         state.language = settings.currentLanguage
         dismissPopup()
-        palette = Palette.of(settings.theme, dark: traitCollection.userInterfaceStyle == .dark)
+        palette = previewPalette ?? Palette.of(settings, dark: traitCollection.userInterfaceStyle == .dark)
         refreshPreferences()
         trimDrawingCaches()
         prepareDrawingResources()
@@ -484,7 +488,7 @@ final class KeyboardView: UIView {
         let sameScale = isLandscape && settings.sameOrientations
         let portraitW = Swift.min(screen.width, screen.height)
         let portraitH = Swift.max(screen.width, screen.height)
-        let target = Swift.min((sameScale ? portraitH : screenH) * CGFloat(p.heightPercent) / 100, screenH * 0.72)
+        let target = previewTargetHeight ?? Swift.min((sameScale ? portraitH : screenH) * CGFloat(p.heightPercent) / 100, screenH * 0.72)
         let areaW = sameScale && !split ? Swift.min(width, portraitW * CGFloat(p.widthPercent) / 100) : width * CGFloat(p.widthPercent) / 100
         let areaLeft: CGFloat
         switch p.align {
@@ -1050,7 +1054,7 @@ final class KeyboardView: UIView {
                 ctx.rotate(by: wiggle(pk.item, now))
                 ctx.translateBy(x: -pk.rect.midX, y: -pk.rect.midY)
             }
-            drawKey(ctx, pk.item, pk.shape, isPressed(pk.item), drag?.item === pk.item ? 0.3 : 1)
+            drawKey(ctx, pk.item, pk.shape, isPressed(pk.item) || (previewPressed && pk.item === placed.first?.item), drag?.item === pk.item ? 0.3 : 1)
             drawDropMark(ctx, pk)
             ctx.restoreGState()
         }

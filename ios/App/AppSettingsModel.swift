@@ -13,6 +13,7 @@ final class AppSettingsModel: ObservableObject {
     @Published var grid: KeyGrid
     @Published private(set) var selectedLayoutKey: String
     @Published private(set) var testing = false
+    @Published private(set) var testKeyboard = "tailorkeys"
     private(set) var trialChoice: LayoutChoice?
     @Published var importOpen = false
     @Published var importName = "Imported layout"
@@ -213,11 +214,24 @@ final class AppSettingsModel: ObservableObject {
     }
 
     func beginTest() {
-        guard fullAccessConfirmed, let choice = selectedLayout, library.beginTrial(choice.id, landscape: UIScreen.main.bounds.width > UIScreen.main.bounds.height) else { return }
+        guard fullAccessConfirmed, let choice = selectedLayout else { return }
+        if testKeyboard == "tailorkeys" {
+            guard library.beginTrial(choice.id, landscape: UIScreen.main.bounds.width > UIScreen.main.bounds.height) else { return }
+        }
         editing = false
         trialChoice = choice
         grid = choice.grid
         testing = true
+    }
+
+    func setTestKeyboard(_ id: String) {
+        guard id != testKeyboard, id == "tailorkeys" || id == "other" else { return }
+        testKeyboard = id
+        if testing, let choice = trialChoice {
+            if id == "tailorkeys" { _ = library.beginTrial(choice.id, landscape: UIScreen.main.bounds.width > UIScreen.main.bounds.height) }
+            else { library.restoreTrial() }
+        }
+        changed()
     }
 
     func endTest() {
@@ -228,7 +242,7 @@ final class AppSettingsModel: ObservableObject {
     }
 
     func keepTrialLayout() {
-        guard testing, let choice = trialChoice else { return }
+        guard testing, testKeyboard == "tailorkeys", let choice = trialChoice else { return }
         useLayout(choice.id)
     }
 

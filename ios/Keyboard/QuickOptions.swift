@@ -232,7 +232,7 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
     func showTidy(_ fixes: [TidyFix], apply: @escaping ([TidyFix]) -> Void) {
         review?.removeFromSuperview()
         let scroll = UIScrollView(frame: pages.bounds); scroll.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        scroll.backgroundColor = Palette.of(settings.theme, dark: traitCollection.userInterfaceStyle == .dark).background
+        scroll.backgroundColor = Palette.of(settings, dark: traitCollection.userInterfaceStyle == .dark).background
         let stack = UIStackView(); stack.axis = .vertical; stack.spacing = 6
         var checked = [Bool](repeating: true, count: fixes.count)
         for (index, fix) in fixes.enumerated() {
@@ -272,9 +272,9 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
     func refresh(resetScroll: Bool = false) {
         library.reload()
         if resetScroll { review?.removeFromSuperview(); review = nil; showAll(false, animated: false); hideConfirm(); message.isHidden = true; tileScroll.contentOffset = .zero; scrollToApplied = true }
-        let p = Palette.of(settings.theme, dark: traitCollection.userInterfaceStyle == .dark)
+        let p = Palette.of(settings, dark: traitCollection.userInterfaceStyle == .dark)
         let choices = library.quickTiles
-        let signature = "\(choices.map { $0.choice.id + $0.choice.name + $0.choice.gridJSON })|\(library.appliedKey)|\(settings.theme)|\(traitCollection.userInterfaceStyle.rawValue)|\(settings.profile(landscape))|\(settings.currentLanguage)|\(settings.languages)|\(settings.learning)|\(settings.int(Prefs.curve))|\(settings.int(Prefs.keyGap))|\(settings.int(Prefs.cornerRadius))|\(settings.int(Prefs.textScale))|\(settings.followSystemText)|\(UITraitCollection.current.preferredContentSizeCategory.rawValue)|\(UIScreen.main.bounds.size)"
+        let signature = "\(choices.map { $0.choice.id + $0.choice.name + $0.choice.gridJSON })|\(library.appliedKey)|\(settings.themeID)|\(CustomTheme.encode(settings.customThemes))|\(traitCollection.userInterfaceStyle.rawValue)|\(settings.profile(landscape))|\(settings.currentLanguage)|\(settings.languages)|\(settings.learning)|\(settings.int(Prefs.curve))|\(settings.int(Prefs.keyGap))|\(settings.int(Prefs.cornerRadius))|\(settings.int(Prefs.textScale))|\(settings.followSystemText)|\(UITraitCollection.current.preferredContentSizeCategory.rawValue)|\(UIScreen.main.bounds.size)"
         guard signature != renderedSignature else { if resetScroll { setNeedsLayout() }; return }
         renderedSignature = signature
         backgroundColor = p.background
@@ -420,7 +420,7 @@ final class QuickOptions: UIView, UIScrollViewDelegate {
         all.contentSize = CGSize(width: w, height: paste.frame.maxY + 8)
         newLayoutOutline.frame = newLayout.bounds
         newLayoutOutline.path = UIBezierPath(roundedRect: newLayout.bounds.insetBy(dx: 1, dy: 1), cornerRadius: CGFloat(settings.int(Prefs.cornerRadius))).cgPath
-        newLayoutOutline.strokeColor = Palette.of(settings.theme, dark: traitCollection.userInterfaceStyle == .dark).hint.cgColor
+        newLayoutOutline.strokeColor = Palette.of(settings, dark: traitCollection.userInterfaceStyle == .dark).hint.cgColor
         let boxW = min(380, w - 32)
         let boxH: CGFloat = 180
         confirmBox.frame = CGRect(x: (w - boxW) / 2, y: max(0, (h - boxH) / 2), width: boxW, height: boxH)

@@ -320,7 +320,7 @@ class QuickOptions(
 
     internal fun showTidy(fixes: List<TidyFix>, apply: (List<TidyFix>) -> Unit) {
         review?.let { pages.removeView(it) }
-        val palette = palette ?: Palette.of(context, settings.theme())
+        val palette = palette ?: Palette.of(context, settings)
         val content = LinearLayout(context).apply { orientation = VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8)); setBackgroundColor(palette.background) }
         val checks = fixes.map { fix -> android.widget.CheckBox(context).apply {
             text = "${fix.original} \u2192 ${fix.replacement}"; isChecked = true; setTextColor(palette.text)
@@ -420,11 +420,11 @@ class QuickOptions(
         val l = landscape()
         val next = QuickOptionsState(settings.theme(), resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK,
             settings.int(Prefs.CORNER_RADIUS), settings.split(l), settings.quickOneHand(l), settings.int(Prefs.height(l)),
-            settings.currentLanguage(), settings.languages().size > 1, settings.bool(Prefs.SWIPE_TYPING), settings.bool(Prefs.LEARNING))
+            settings.currentLanguage(), settings.languages().size > 1, settings.bool(Prefs.SWIPE_TYPING), settings.bool(Prefs.LEARNING), settings.themeId() + settings.prefs.getString(Prefs.THEMES_CUSTOM, ""))
         val entries = library.entries()
         val geometry = "${settings.profile(l)}|${settings.int(Prefs.CURVE)}|${settings.int(Prefs.KEY_GAP)}|${settings.bool(Prefs.SAME_ORIENTATIONS)}|${resources.displayMetrics}"
         if (rendered == next && renderedEntries == entries && renderedSelection == library.inUse && renderedGeometry == geometry) return
-        val p = Palette.of(context, next.theme); palette = p
+        val p = Palette.of(context, settings); palette = p
         val ink = p.smallAccent
         setBackgroundColor(p.background)
         for (b in listOf(back, trailing, paste)) b.setTextColor(ink)

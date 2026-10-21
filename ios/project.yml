@@ -23,6 +23,7 @@ targets:
       - Keyboard/KeyText.swift
       - Keyboard/InsertData.swift
       - Keyboard/Theme.swift
+      - Keyboard/CustomThemes.swift
       - Keyboard/KeyboardSettings.swift
       - Keyboard/LearningStore.swift
       - Keyboard/TypingCore.swift

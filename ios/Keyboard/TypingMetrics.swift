@@ -12,6 +12,7 @@ struct SpeedSample {
 struct TypingSession {
     let mode: TypingMode
     let sentence: String
+    let keyboard: String
     private(set) var text = ""
     private(set) var startedAt: TimeInterval?
     private(set) var finishedAt: TimeInterval?
@@ -21,6 +22,13 @@ struct TypingSession {
     private(set) var mistakeTimes: [TimeInterval] = []
     private(set) var slippedPositions = Set<Int>()
     private(set) var samples: [SpeedSample] = []
+
+    init(mode: TypingMode, sentence: String, keyboard: String = "tailorkeys") {
+        self.mode = mode; self.sentence = sentence; self.keyboard = keyboard
+    }
+    func forKeyboard(_ id: String) -> TypingSession {
+        keyboard == id ? self : TypingSession(mode: mode, sentence: sentence, keyboard: id)
+    }
 
     var isComplete: Bool { finishedAt != nil }
     var characterCount: Int { text.count }
@@ -84,7 +92,7 @@ struct TypingSession {
 
     func result(at date: Date) -> TypingResult? {
         guard mode == .test, let end = finishedAt, elapsed(at: end) > 0 else { return nil }
-        return TypingResult(wpm: wpm(at: end), accuracy: accuracy, at: date.timeIntervalSince1970 * 1000)
+        return TypingResult(wpm: wpm(at: end), accuracy: accuracy, at: date.timeIntervalSince1970 * 1000, keyboard: keyboard)
     }
 
     static func misspelledRanges(_ text: String, dictionary: Set<String>) -> [Range<String.Index>] {

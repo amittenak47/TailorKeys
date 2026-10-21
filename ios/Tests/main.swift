@@ -711,3 +711,43 @@ model.logProbs(copiedBranchState, out: &branchOutput); model.logProbs(replayBran
 model.logProbs(liveBranchState, out: &liveAfterBranch)
 check(zip(branchOutput, independentOutput).allSatisfy { abs($0.0 - $0.1) < 0.00001 }, "copied state changed phrase probabilities")
 check(liveBeforeBranch == liveAfterBranch, "phrase scoring advanced live state")
+
+
+// Custom themes share Android's opaque hex JSON and retain identity through saved layouts.
+do {
+    let colors = ThemeColors(background: "#E9E2D6", key: "#FBF8F2", functionKey: "#D3C9B8", text: "#2B2620", accent: "#C2562B", pressed: "#C7BBA6")
+    let theme = CustomTheme(id: "sand", name: "Sand", colors: colors)
+    check(CustomTheme.decode(CustomTheme.encode([theme])) == [theme], "custom theme JSON did not round trip")
+    check(CustomTheme.decode("broken").isEmpty, "invalid theme JSON accepted")
+    check(abs(ThemeColors.contrast("#000000", "#FFFFFF") - 21) < 0.00001, "WCAG endpoints incorrect")
+    check(abs(ThemeColors.contrast("#777777", "#FFFFFF") - 4.478) < 0.001, "WCAG sRGB linearisation incorrect")
+    let suite = "tailorkeys.themes.tests." + UUID().uuidString
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let settings = KeyboardSettings(tablet: true, store: defaults)
+    settings.saveTheme(theme)
+    check(settings.themeID == "custom:sand" && settings.customThemes == [theme], "custom selection not stored")
+    let snapshot = settings.layoutSettings()
+    check(snapshot[Prefs.theme] as? String == "custom:sand", "saved layout lost custom theme id")
+    settings.deleteTheme(theme.id)
+    check(settings.theme == .warm, "deleted selected theme did not fall back to Warm")
+    settings.theme = .light
+    settings.applyLayoutSettings(snapshot)
+    check(settings.theme == .warm, "missing saved-layout theme did not fall back to Warm")
+    defaults.set("dark", forKey: Prefs.theme)
+    check(settings.theme == .dark && settings.themeID == "DARK", "legacy built-in theme migration failed")
+}
+do {
+    let legacy = Data("{\"wpm\":40,\"accuracy\":0.9,\"at\":1}".utf8)
+    let old = try! JSONDecoder().decode(TypingResult.self, from: legacy)
+    check(old.keyboard == "tailorkeys", "legacy typing result not assigned to TailorKeys")
+    let rows = KeyboardAverage.aggregate([old, TypingResult(wpm: 60, accuracy: 1, at: 2), TypingResult(wpm: 30, accuracy: 0.8, at: 3, keyboard: "other")])
+    check(rows.count == 2 && rows[0].keyboard == "tailorkeys" && rows[0].wpm == 50 && rows[0].tests == 2 && rows[0].accuracy == 0.95, "per-keyboard aggregation mixed results")
+    check(rows[1].keyboard == "other" && rows[1].wpm == 30 && rows[1].tests == 1, "Other results missing")
+    var switched = TypingSession(mode: .test, sentence: "hello")
+    switched.update("x", at: 1); switched.update("he", at: 2)
+    switched = switched.forKeyboard("other")
+    check(switched.text.isEmpty && switched.startedAt == nil && switched.slippedPositions.isEmpty && switched.result(at: Date()) == nil, "keyboard switch retained partial sentence")
+    switched.update("h", at: 6); switched.update("hello", at: 10)
+    check(switched.result(at: Date())?.keyboard == "other" && switched.wpm(at: 10) == 15, "switched test retained old timing or keyboard")
+}

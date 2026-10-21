@@ -8,6 +8,9 @@ struct TypingTestScreen: View {
     let namespace: Namespace.ID
     let onBack: () -> Void
     @FocusState private var focused: Bool
+    @State private var comparing = false
+    private var tailorkeys: Bool { model.testKeyboard == "tailorkeys" }
+    private var keyboardLabel: String { tailorkeys ? "TailorKeys" : "Other" }
     @State private var mode = TypingMode.free
     @State private var input = ""
     @State private var sentence: String
@@ -29,8 +32,8 @@ struct TypingTestScreen: View {
         self.onBack = onBack
         let sentence = TypingSentences.next(after: "")
         _sentence = State(initialValue: sentence)
-        _session = State(initialValue: TypingSession(mode: .free, sentence: sentence))
-        _average = State(initialValue: model.library.average(choice.id))
+        _session = State(initialValue: TypingSession(mode: .free, sentence: sentence, keyboard: model.testKeyboard))
+        _average = State(initialValue: model.library.average(choice.id, keyboard: model.testKeyboard))
     }
 
     var body: some View {
@@ -43,10 +46,16 @@ struct TypingTestScreen: View {
                         .frame(maxWidth: .infinity, minHeight: geometry.size.height)
                 }
             }
-            if !keyboardVisible {
+            if !keyboardVisible && tailorkeys {
                 KeyboardPreview(model: model, landscape: nil, permitsEditing: false, previewsSelection: true)
                     .padding(.horizontal, 4).opacity(session.isComplete ? 0.35 : 1)
-                    .layoutMorph("keyboard", in: namespace, enabled: !reduceMotion)
+                    .layoutMorph("keyboard", in: namespace, enabled: tailorkeys && !reduceMotion)
+            }
+            if !keyboardVisible && !tailorkeys {
+                VStack(spacing: 8) {
+                    Image(systemName: "keyboard"); Text("Other keyboard area").font(.headline)
+                    Text("Drawn by the system").font(.caption)
+                }.frame(maxWidth: .infinity).frame(height: 160).background(Color.secondary.opacity(0.08))
             }
         }
         .foregroundColor(LayoutStyle.text)
@@ -61,6 +70,13 @@ struct TypingTestScreen: View {
             keyboardVisible = frame.intersects(UIScreen.main.bounds) && frame.minY < UIScreen.main.bounds.maxY - 40
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in keyboardVisible = false }
+        .onChange(of: model.testKeyboard) { id in
+            session = session.forKeyboard(id)
+            input = ""; recorded = false
+            average = model.library.average(choice.id, keyboard: id)
+            now = ProcessInfo.processInfo.systemUptime
+            focused = true
+        }
         .onChange(of: mode) { _ in reset(newSentence: false) }
         .onChange(of: input, perform: updateInput)
         .task {
@@ -92,9 +108,14 @@ struct TypingTestScreen: View {
                 .buttonStyle(.plain).accessibilityLabel("Back to layouts")
             VStack(alignment: .leading, spacing: 2) {
                 Text("Typing test").font(.title3.weight(.medium)).foregroundColor(LayoutStyle.text)
-                Text(choice.name).font(.caption).foregroundColor(LayoutStyle.secondary)
+                Text(tailorkeys ? "TailorKeys · " + choice.name : "Typing with Other").font(.caption).foregroundColor(LayoutStyle.secondary)
             }
             Spacer()
+            Menu {
+                Button("TailorKeys") { model.setTestKeyboard("tailorkeys") }
+                Button("Other") { model.setTestKeyboard("other") }
+            } label: { Label("Which keyboard?", systemImage: "keyboard").font(.caption) }
+                .accessibilityValue(keyboardLabel)
         }.padding(.horizontal, 12).frame(height: 64)
         .gesture(DragGesture().onEnded { drag in
             if drag.startLocation.x < 44 && drag.translation.width > 60 { leave() }
@@ -103,7 +124,10 @@ struct TypingTestScreen: View {
 
     private func card(wide: Bool) -> some View {
         VStack(alignment: .leading, spacing: wide ? 20 : 12) {
-            if session.isComplete { results(wide: wide) }
+            Text("Hold the globe key to switch keyboards.").font(.caption).foregroundColor(LayoutStyle.secondary)
+            HStack { Spacer(); Button(comparing ? "Back to test" : "Compare") { comparing.toggle(); if comparing { focused = false } } }
+            if comparing { comparison }
+            else if session.isComplete { results(wide: wide) }
             else { typing(wide: wide) }
         }
         .opacity(contentVisible ? 1 : 0)
@@ -112,7 +136,7 @@ struct TypingTestScreen: View {
         .padding(wide ? 28 : 16).frame(maxWidth: 600)
         .background {
             RoundedRectangle(cornerRadius: 28).fill(LayoutStyle.surface)
-                .layoutMorph("tile:" + choice.id, in: namespace, enabled: !reduceMotion)
+                .layoutMorph("tile:" + choice.id, in: namespace, enabled: tailorkeys && !reduceMotion)
         }
     }
 
@@ -150,7 +174,7 @@ struct TypingTestScreen: View {
             }
             .padding(12).background(RoundedRectangle(cornerRadius: 12).fill(LayoutStyle.background))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(LayoutStyle.outline.opacity(0.6), lineWidth: 1))
-            Text("Using another keyboard? Hold the globe key and choose TailorKeys.")
+            Text(tailorkeys ? "Type on the keys below" : "Results save under Other")
                 .font(.caption2).foregroundColor(LayoutStyle.secondary).lineLimit(1).minimumScaleFactor(0.6)
             if wide {
                 HStack(alignment: .top, spacing: 16) {
@@ -172,7 +196,7 @@ struct TypingTestScreen: View {
                     Label(mode == .free ? "Clear" : "New sentence", systemImage: "arrow.clockwise").frame(minHeight: 44)
                 }.buttonStyle(.plain).foregroundColor(LayoutStyle.accent).font(.subheadline.weight(.medium))
                 Spacer(minLength: 8)
-                Text(mode == .free ? "Nothing is saved" : "Type on the keys below")
+                Text(mode == .free ? "Nothing is saved" : (tailorkeys ? "Type on the keys below" : "Results save under Other"))
                     .font(.caption).foregroundColor(LayoutStyle.muted)
             }
             if mode == .free && dictionaryLoaded && dictionary.isEmpty {
@@ -263,7 +287,7 @@ struct TypingTestScreen: View {
                     .padding(.horizontal, 12).frame(height: 28).foregroundColor(LayoutStyle.success)
                     .background(Capsule().fill(LayoutStyle.button))
                 Spacer()
-                Text(choice.name).font(.caption).foregroundColor(LayoutStyle.secondary)
+                Text(tailorkeys ? "TailorKeys · " + choice.name : "Typing with Other").font(.caption).foregroundColor(LayoutStyle.secondary)
             }
             HStack(alignment: .lastTextBaseline, spacing: 12) {
                 Text("\(Int(session.wpm(at: now).rounded()))")
@@ -293,15 +317,40 @@ struct TypingTestScreen: View {
                 annotatedSentence(historical: true).font(.subheadline).lineSpacing(4)
             }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 14).fill(LayoutStyle.background))
+            comparison
             HStack {
                 Button { reset(newSentence: true) } label: { Label("New sentence", systemImage: "arrow.clockwise") }
                     .buttonStyle(LayoutButtonStyle(primary: true))
                 Button(action: model.keepTrialLayout) {
                     Label(choice.id == model.library.appliedKey ? "In use" : "Use layout", systemImage: "checkmark")
-                }.buttonStyle(LayoutButtonStyle()).disabled(choice.id == model.library.appliedKey)
+                }.buttonStyle(LayoutButtonStyle()).disabled(!tailorkeys || choice.id == model.library.appliedKey)
             }.frame(maxWidth: .infinity)
             Button(action: leave) { Label("Back to layouts", systemImage: "arrow.left").frame(maxWidth: .infinity, minHeight: 44) }
                 .buttonStyle(.plain).foregroundColor(LayoutStyle.accent).font(.subheadline.weight(.medium))
+        }
+    }
+
+    private var comparison: some View {
+        let rows = model.library.keyboardAverages()
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("Compare keyboards").font(.headline)
+            Text("Saved Test sentence results").font(.caption2).foregroundColor(LayoutStyle.secondary)
+            if rows.isEmpty { Text("Finish a test sentence to compare keyboards.").font(.subheadline) }
+            HStack {
+                Text("Keyboard").frame(maxWidth: .infinity, alignment: .leading)
+                Text("Avg wpm").frame(width: 70); Text("Accuracy").frame(width: 65); Text("Tests").frame(width: 35)
+            }.font(.caption2)
+            ForEach(rows, id: \.keyboard) { row in
+                HStack {
+                    Text(row.keyboard == "tailorkeys" ? "TailorKeys" : "Other").fontWeight(row.keyboard == "tailorkeys" ? .bold : .regular).frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(spacing: 4) {
+                        Text("\(Int(row.wpm.rounded()))")
+                        ProgressView(value: row.wpm, total: max(1, rows.map(\.wpm).max() ?? 1)).tint(LayoutStyle.accent)
+                    }.frame(width: 70)
+                    Text("\(Int((row.accuracy * 100).rounded()))%").frame(width: 65)
+                    Text("\(row.tests)").frame(width: 35)
+                }.font(.caption).padding(10).background(RoundedRectangle(cornerRadius: 12).fill(row.keyboard == "tailorkeys" ? LayoutStyle.accent.opacity(0.14) : Color.clear))
+            }
         }
     }
 
@@ -330,6 +379,10 @@ struct TypingTestScreen: View {
     }
 
     private func updateInput(_ value: String) {
+        guard session.keyboard == model.testKeyboard else {
+            session = session.forKeyboard(model.testKeyboard); input = ""; recorded = false
+            return
+        }
         now = ProcessInfo.processInfo.systemUptime
         session.update(value, at: now)
         if session.isComplete && !recorded {
@@ -344,8 +397,8 @@ struct TypingTestScreen: View {
         if newSentence { sentence = TypingSentences.next(after: sentence) }
         input = ""
         now = ProcessInfo.processInfo.systemUptime
-        session = TypingSession(mode: mode, sentence: sentence)
-        average = model.library.average(choice.id)
+        session = TypingSession(mode: mode, sentence: sentence, keyboard: model.testKeyboard)
+        average = model.library.average(choice.id, keyboard: model.testKeyboard)
         recorded = false
         focused = true
     }
