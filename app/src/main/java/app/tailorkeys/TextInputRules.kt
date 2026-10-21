@@ -30,7 +30,9 @@ object TextInputRules {
             if (ch in ".,?!:;") return Edit(1, "$ch ")
             if (ch == '\'') return Edit(1, "'")
         }
-        val closer = when (ch) { '(' -> ')'; '[' -> ']'; '{' -> '}'; '"' -> '"'; else -> null }
+        // A quote only opens at the start of a word, so 5" (inches) and mid-word quotes stay single.
+        val opensQuote = before.isEmpty() || before.last().isWhitespace() || before.last() in "([{"
+        val closer = when (ch) { '(' -> ')'; '[' -> ']'; '{' -> '}'; '"' -> if (opensQuote) '"' else null; else -> null }
         return closer?.let { Edit(insert = "$ch$it", move = -1) }
     }
     fun doubleSpace(enabled: Boolean, before: CharSequence, elapsed: Long, password: Boolean = false): Boolean =

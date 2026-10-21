@@ -25,7 +25,9 @@ struct TextInputRules {
             if ch == "'" { return Edit(deleteBefore: 1, insert: "'") }
         }
         let closer: Character?
-        switch ch { case "(": closer = ")"; case "[": closer = "]"; case "{": closer = "}"; case "\"": closer = "\""; default: closer = nil }
+        // A quote only opens at the start of a word, so 5" (inches) and mid-word quotes stay single.
+        let opensQuote = before.last.map { $0.isWhitespace || "([{".contains($0) } ?? true
+        switch ch { case "(": closer = ")"; case "[": closer = "]"; case "{": closer = "}"; case "\"": closer = opensQuote ? "\"" : nil; default: closer = nil }
         return closer.map { Edit(insert: text + String($0), move: -1) }
     }
     static func doubleSpace(_ enabled: Bool, _ before: String, _ elapsed: TimeInterval, password: Bool = false) -> Bool {

@@ -142,6 +142,12 @@ class SwipeInputTest {
             assertNull(TextInputRules.punctuation(open.toString(), "", "", false, true, password = true))
         }
     }
+    @Test fun quotesOnlyPairAtTheStartOfAWord() {
+        assertEquals(TextInputRules.Edit(insert = "\"\"", move = -1), TextInputRules.punctuation("\"", "said ", "", false, true))
+        assertEquals(TextInputRules.Edit(insert = "\"\"", move = -1), TextInputRules.punctuation("\"", "(", "", false, true))
+        assertNull(TextInputRules.punctuation("\"", "5", "", false, true))
+        assertNull(TextInputRules.punctuation("\"", "word", "", false, true))
+    }
     @Test fun doubleSpaceRespectsTimeSettingsAndPassword() {
         assertTrue(TextInputRules.doubleSpace(true, "dog ", 300))
         for (text in listOf(" ", "dog  ", "dog. ", "\n ")) assertFalse(TextInputRules.doubleSpace(true, text, 300))
