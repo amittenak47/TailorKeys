@@ -41,6 +41,9 @@ check(emojiCatalog.search("happy").contains { $0.text == "😀" }, "CLDR keyword
 check(emojiCatalog.search("doctor").contains { $0.name.contains("health worker") }, "CLDR profession keyword failed")
 check(emojiCatalog.search("happy face") == emojiCatalog.search("  HAPPY   FACE  "), "search token/case folding failed")
 check(emojiCatalog.search("no-such-emoji-xyz").isEmpty, "no-results search failed")
+let catResults = emojiCatalog.search("cat")
+check(catResults.prefix(3).allSatisfy { $0.name.split(separator: " ").contains("cat") }, "whole-word name matches do not lead search")
+check((catResults.firstIndex { $0.text == "🥴" } ?? Int.max) > (catResults.firstIndex { $0.text == "🐈" } ?? -1), "keyword substrings outrank names")
 for text in ["👍", "👩‍💻", "🧑‍⚕️", "✌️", "☝️", "✍️"] {
     let variants = emojiCatalog.variants(text)
     check(variants.count == 6 && variants.first?.text == text, "skin-tone family failed")

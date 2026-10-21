@@ -103,7 +103,7 @@ private fun InsertSettingsControls(settings: KeyboardSettings, page: String) {
                         val colors = listOf(0xFFFFCD39, 0xFFF8DCC7, 0xFFEFD09B, 0xFFBE9873, 0xFFA4754D, 0xFF6F4934)
                         InsertPrefs.toneNames.forEachIndexed { index, name ->
                             val selected = prefs.getInt(InsertPrefs.TONE, 0) == index
-                            Column(Modifier.width(56.dp).heightIn(min = 80.dp).selectable(selected, role = Role.RadioButton,
+                            Column(Modifier.widthIn(min = 56.dp).heightIn(min = 80.dp).padding(horizontal = 4.dp).selectable(selected, role = Role.RadioButton,
                                 onClick = { prefs.edit().putInt(InsertPrefs.TONE, index).apply() }), horizontalAlignment = Alignment.CenterHorizontally) {
                                 Box(Modifier.padding(4.dp).size(36.dp).background(Color(colors[index]), CircleShape)
                                     .border(if (selected) 2.dp else 0.dp, MaterialTheme.colorScheme.primary, CircleShape), contentAlignment = Alignment.Center) {
@@ -111,7 +111,7 @@ private fun InsertSettingsControls(settings: KeyboardSettings, page: String) {
                                         Text("✓", color = Color.White)
                                     }
                                 }
-                                Text(name, style = MaterialTheme.typography.labelSmall)
+                                Text(name, style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false)
                             }
                         }
                     }

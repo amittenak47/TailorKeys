@@ -37,8 +37,14 @@ class EmojiCatalog(val entries: List<InsertSymbol>) {
     private val index = primary.associateWith { fold(it.name + " " + it.keywords) }
     fun search(query: String): List<InsertSymbol> {
         val words = fold(query).split(Regex("\\s+")).filter { it.isNotBlank() }
-        return primary.filter { entry -> words.all { it in index.getValue(entry) } }
+        return primary.filter { entry -> words.all { it in index.getValue(entry) } }.sortedBy { rank(it, words) }
     }
+    /** Whole words in the name first, then name word starts, then whole keywords; bare substrings ("cat" in "intoxicated") last. */
+    private fun rank(entry: InsertSymbol, words: List<String>): Int {
+        val name = fold(entry.name).split(nonWord); val keywords = fold(entry.keywords).split(nonWord)
+        return words.sumOf { w -> when { w in name -> 0; name.any { it.startsWith(w) } -> 1; w in keywords -> 2; keywords.any { it.startsWith(w) } -> 3; else -> 4 }.toInt() }
+    }
+    private val nonWord = Regex("[^\\p{L}\\p{N}]+")
     fun variants(text: String): List<InsertSymbol> {
         val family = families[base(text)].orEmpty()
         val plain = family.firstOrNull { !hasTone(it.text) } ?: return emptyList()

@@ -38,6 +38,10 @@ class InsertDataTest {
         assertEquals(data.search("happy face"), data.search("  HAPPY   FACE  "))
         assertEquals(data.entries.size, data.entries.map { it.text }.distinct().size)
         assertTrue(data.search("no-such-emoji-xyz").isEmpty())
+        // Names containing the whole word outrank keyword substrings such as "intoxicated".
+        val cats = data.search("cat")
+        assertTrue(cats.take(3).all { it.name.split(' ').contains("cat") })
+        assertTrue(cats.indexOfFirst { it.text == "🥴" } > cats.indexOfFirst { it.text == "🐈" })
         assertEquals(9, data.primary.map { it.category }.distinct().size)
         assertEquals(150, asset("kaomoji.tsv").readLines().size)
         assertTrue(asset("kaomoji.tsv").readText().any { it.code > 127 })

@@ -28,7 +28,19 @@ final class EmojiCatalog {
     private static func fold(_ text: String) -> String { text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX")) }
     func search(_ query: String) -> [InsertSymbol] {
         let words = Self.fold(query).split(whereSeparator: \.isWhitespace)
-        return primary.filter { entry in let haystack = Self.fold(entry.name + " " + entry.keywords); return words.allSatisfy { haystack.contains($0) } }
+        let found = primary.filter { entry in let haystack = Self.fold(entry.name + " " + entry.keywords); return words.allSatisfy { haystack.contains($0) } }
+        return found.enumerated().sorted { a, b in
+            let ra = Self.rank(a.element, words), rb = Self.rank(b.element, words); return ra != rb ? ra < rb : a.offset < b.offset
+        }.map(\.element)
+    }
+    /// Whole words in the name first, then name word starts, then whole keywords; bare substrings ("cat" in "intoxicated") last.
+    private static func rank(_ entry: InsertSymbol, _ words: [Substring]) -> Int {
+        let split: (String) -> [String] = { fold($0).components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty } }
+        let name = split(entry.name), keywords = split(entry.keywords)
+        return words.reduce(0) { total, w in
+            let word = String(w)
+            return total + (name.contains(word) ? 0 : name.contains { $0.hasPrefix(word) } ? 1 : keywords.contains(word) ? 2 : keywords.contains { $0.hasPrefix(word) } ? 3 : 4)
+        }
     }
     func variants(_ text: String) -> [InsertSymbol] {
         let family = families[Self.base(text)] ?? []

@@ -316,8 +316,8 @@ class QuickOptions(
         tile(second, "Language", null) { language() }
         tile(second, "Settings", R.drawable.ic_settings_tune) { allSettings() }
         val third = row()
-        tile(third, "Pause learning", R.drawable.ic_settings_look) { settings.set(Prefs.LEARNING, !settings.bool(Prefs.LEARNING)) }
-        tile(third, "Tidy", R.drawable.ic_settings_typing) { tidy() }
+        tile(third, "Pause learning", R.drawable.ic_settings_pause) { settings.set(Prefs.LEARNING, !settings.bool(Prefs.LEARNING)) }
+        tile(third, "Tidy", R.drawable.ic_settings_tidy) { tidy() }
         confirmBox.addView(confirmTitle); confirmBox.addView(confirmText)
         val buttons = LinearLayout(context)
         buttons.addView(cancel, LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })

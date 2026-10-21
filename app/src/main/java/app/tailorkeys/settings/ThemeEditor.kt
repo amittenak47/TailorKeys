@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -29,9 +30,12 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -151,9 +155,12 @@ private fun ThemeEditor(state: SettingsState, existing: CustomTheme?, close: () 
                         Text(if (existing == null) "Create theme" else "Edit theme", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
                         Button({ state.settings.saveTheme(CustomTheme(existing?.id ?: UUID.randomUUID().toString(), name, colors)); close() }, enabled = name.isNotBlank()) { Text("✓ Save theme") }
                     }
+                    // The keyboard takes most of the height while the name is typed; a squeezed preview
+                    // is misleading, so it collapses until the keyboard closes. The view itself stays attached.
+                    val imeOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
                     AndroidView(factory = { preview }, update = { it.previewTargetHeight = previewHeight; it.previewPressed = channel == 5; it.previewPalette = colors.palette() },
-                        modifier = Modifier.fillMaxWidth().heightIn(max = this@BoxWithConstraints.maxHeight * .4f).clip(RoundedCornerShape(24.dp)))
-                    Text("Live preview. It changes as you pick colours.", Modifier.padding(horizontal = 20.dp, vertical = 6.dp), style = MaterialTheme.typography.labelSmall)
+                        modifier = Modifier.fillMaxWidth().then(if (imeOpen) Modifier.height(0.dp) else Modifier.heightIn(max = this@BoxWithConstraints.maxHeight * .4f)).clip(RoundedCornerShape(24.dp)))
+                    if (!imeOpen) Text("Live preview. It changes as you pick colours.", Modifier.padding(horizontal = 20.dp, vertical = 6.dp), style = MaterialTheme.typography.labelSmall)
                     Row(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             OutlinedTextField(name, { name = it.take(24) }, label = { Text("Theme name") }, singleLine = true, modifier = Modifier.fillMaxWidth(), supportingText = { Text("${name.length} / 24") })
@@ -259,8 +266,13 @@ private fun ThemeColorPicker(label: String, color: Int, resetColor: Int, suggest
         }
         listOf("Hue", "Saturation", "Value").forEachIndexed { i, title ->
             Text(title, style = MaterialTheme.typography.labelMedium)
-            Slider(hsv[i], { value -> when (i) { 0 -> update(h = value); 1 -> update(s = value); else -> update(v = value) } },
-                valueRange = 0f..(if (i == 0) 360f else 1f), modifier = Modifier.semantics { contentDescription = title })
+            // Each track shows the colours that slider reaches, given the other two channels.
+            val track = when (i) {
+                0 -> (0..6).map { Color(AndroidColor.HSVToColor(floatArrayOf(it * 60f, 1f, 1f))) }
+                1 -> listOf(0f, 1f).map { Color(AndroidColor.HSVToColor(floatArrayOf(hsv[0], it, hsv[2]))) }
+                else -> listOf(0f, 1f).map { Color(AndroidColor.HSVToColor(floatArrayOf(hsv[0], hsv[1], it))) }
+            }
+            GradientSlider(hsv[i], 0f..(if (i == 0) 360f else 1f), track, title) { value -> when (i) { 0 -> update(h = value); 1 -> update(s = value); else -> update(v = value) } }
         }
         suggestion?.let { (readable, ratio) ->
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -269,6 +281,30 @@ private fun ThemeColorPicker(label: String, color: Int, resetColor: Int, suggest
             }
         }
         TextButton({ change(resetColor) }, Modifier.align(Alignment.End)) { Text("↻ Reset") }
+    }
+}
+
+/** A slider whose track is the colour range itself, keeping slider semantics for TalkBack. */
+@Composable
+private fun GradientSlider(value: Float, range: ClosedFloatingPointRange<Float>, track: List<Color>, title: String, change: (Float) -> Unit) {
+    val onChange by rememberUpdatedState(change)
+    val span = range.endInclusive - range.start
+    val fraction = ((value - range.start) / span).coerceIn(0f, 1f)
+    val thumb = 12.dp
+    fun at(x: Float, width: Float, inset: Float) = range.start + ((x - inset) / (width - 2 * inset)).coerceIn(0f, 1f) * span
+    Canvas(Modifier.fillMaxWidth().height(44.dp)
+        .semantics {
+            contentDescription = title
+            progressBarRangeInfo = ProgressBarRangeInfo(value, range)
+            setProgress { target -> onChange(target.coerceIn(range.start, range.endInclusive)); true }
+        }
+        .pointerInput(range) { detectTapGestures { onChange(at(it.x, size.width.toFloat(), thumb.toPx())) } }
+        .pointerInput(range) { detectHorizontalDragGestures { point, _ -> point.consume(); onChange(at(point.position.x, size.width.toFloat(), thumb.toPx())) } }) {
+        val inset = thumb.toPx(); val height = 14.dp.toPx(); val top = (size.height - height) / 2
+        drawRoundRect(Brush.horizontalGradient(track, startX = inset, endX = size.width - inset), Offset(0f, top), Size(size.width, height), CornerRadius(height / 2))
+        val center = Offset(inset + fraction * (size.width - 2 * inset), size.height / 2)
+        drawCircle(Color.White, inset - 1.dp.toPx(), center)
+        drawCircle(Color.Black.copy(alpha = .4f), inset - 1.dp.toPx(), center, style = Stroke(1.5.dp.toPx()))
     }
 }
 

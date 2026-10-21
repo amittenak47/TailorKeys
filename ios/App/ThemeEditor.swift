@@ -244,9 +244,13 @@ private struct ThemeColorPicker: View {
                     update(hsv.0, Double(min(1, max(0, drag.location.x / geometry.size.width))), Double(min(1, max(0, 1 - drag.location.y / geometry.size.height))))
                 })
             }.frame(height: 100)
-            Text("Hue").font(.caption); Slider(value: Binding(get: { hsv.0 }, set: { update($0, hsv.1, hsv.2) }), in: 0...1).accessibilityLabel("Hue")
-            Text("Saturation").font(.caption); Slider(value: Binding(get: { hsv.1 }, set: { update(hsv.0, $0, hsv.2) }), in: 0...1).accessibilityLabel("Saturation")
-            Text("Value").font(.caption); Slider(value: Binding(get: { hsv.2 }, set: { update(hsv.0, hsv.1, $0) }), in: 0...1).accessibilityLabel("Value")
+            // Each track shows the colours that slider reaches, given the other two channels.
+            Text("Hue").font(.caption)
+            GradientSlider(title: "Hue", value: Binding(get: { hsv.0 }, set: { update($0, hsv.1, hsv.2) }), colors: (0...6).map { Color(hue: Double($0) / 6, saturation: 1, brightness: 1) })
+            Text("Saturation").font(.caption)
+            GradientSlider(title: "Saturation", value: Binding(get: { hsv.1 }, set: { update(hsv.0, $0, hsv.2) }), colors: [0.0, 1.0].map { Color(hue: hsv.0, saturation: $0, brightness: hsv.2) })
+            Text("Value").font(.caption)
+            GradientSlider(title: "Value", value: Binding(get: { hsv.2 }, set: { update(hsv.0, hsv.1, $0) }), colors: [0.0, 1.0].map { Color(hue: hsv.0, saturation: hsv.1, brightness: $0) })
             if let suggestion = suggestion {
                 HStack {
                     Text("Closest readable colour \(suggestion.0) reads at \(String(format: "%.1f", suggestion.1)) : 1").font(.caption)
@@ -254,6 +258,34 @@ private struct ThemeColorPicker: View {
                 }
             }
             Button("↻ Reset") { hex = resetColor; entry = resetColor; syncHSV() }.frame(maxWidth: .infinity, minHeight: 44, alignment: .trailing)
+        }
+    }
+}
+
+/// A slider whose track is the colour range itself; VoiceOver adjusts it like a system slider.
+private struct GradientSlider: View {
+    let title: String
+    @Binding var value: Double
+    let colors: [Color]
+    var body: some View {
+        GeometryReader { geometry in
+            let inset: CGFloat = 12, span = max(1, geometry.size.width - 2 * inset)
+            ZStack(alignment: .leading) {
+                Capsule().fill(LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)).frame(height: 14)
+                Circle().fill(Color.white).overlay(Circle().stroke(Color.black.opacity(0.4), lineWidth: 1.5)).frame(width: 22, height: 22)
+                    .offset(x: inset + CGFloat(value) * span - 11)
+            }
+            .frame(maxHeight: .infinity).contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { drag in value = Double(min(1, max(0, (drag.location.x - inset) / span))) })
+        }
+        .frame(height: 44)
+        .accessibilityElement().accessibilityLabel(title).accessibilityValue("\(Int((value * 100).rounded())) percent")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: value = min(1, value + 0.05)
+            case .decrement: value = max(0, value - 0.05)
+            @unknown default: break
+            }
         }
     }
 }

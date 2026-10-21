@@ -265,10 +265,12 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
                 outline.keyId = if (mode == TypingMode.TEST && !comparing) nextTypingKey(it.grid, session.sentence, session.text.length, state.settings.currentLanguage())?.id else null
                 outline.invalidateSelf()
             }, modifier = Modifier.fillMaxWidth().layoutMorph("keyboard-preview").wrapContentHeight(unbounded = true)
-                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)))
+                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                // Like the real IME, keep the keys above the navigation bar; the keyboard colour fills behind it.
+                .background(Color(Palette.of(context, state.settings).background)).navigationBarsPadding())
         }
-        if (!tailorkeys && !imeVisible) Surface(Modifier.fillMaxWidth().height(160.dp), color = colors.surfaceContainer) {
-            Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        if (!tailorkeys && !imeVisible) Surface(Modifier.fillMaxWidth(), color = colors.surfaceContainer) {
+            Column(Modifier.navigationBarsPadding().heightIn(min = 160.dp).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                 Text("$label keyboard area", fontWeight = FontWeight.Medium)
                 Text("Drawn by the system. TailorKeys shows no keys, preview or key hints here.", style = MaterialTheme.typography.bodySmall)
             }

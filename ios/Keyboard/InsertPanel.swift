@@ -74,6 +74,8 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
     private var toneRow: UIStackView?
     private var toneEntries: [InsertSymbol] = []
     private var toneChoice = -1
+    private var toneEntered = false
+    private var toneDefault: InsertSymbol?
     private var expiry: Timer?
     private var footer: UIStackView?
     private var palette: Palette { Palette.of(settings, dark: traitCollection.userInterfaceStyle == .dark) }
@@ -248,7 +250,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
                 if self.section == "Emoji" {
                     let index = cat == "Recent" ? 0 : self.symbols.firstIndex(where: { $0.category == cat }) ?? 0
                     if self.symbols.indices.contains(index) { self.collection.scrollToItem(at: IndexPath(item: index, section: 0), at: .top, animated: !UIAccessibility.isReduceMotionEnabled) }; self.markCategories()
-                } else { self.symbols = cat == "Recent" ? self.kaomojiWithRecents() : all.filter { $0.category == cat }; self.collection.reloadData(); self.kaomojiHeader?.text = cat.uppercased(); self.markCategories() }
+                } else { self.symbols = cat == "Recent" ? self.kaomojiWithRecents() : all.filter { $0.category == cat }; self.collection.reloadData(); self.updateKaomojiEmpty(); self.kaomojiHeader?.text = cat.uppercased(); self.markCategories() }
             }
             if section == "Emoji" {
                 let names = ["clock", "face.smiling", "person", "pawprint", "cup.and.saucer", "car", "sportscourt", "lightbulb", "heart", "flag"]
@@ -260,7 +262,7 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
         symbols = section == "Emoji" ? emojiCells() : category == "Recent" ? kaomojiWithRecents() : all.filter { $0.category == category }
         flow.wrapping = section == "Kaomoji"; flow.minimumLineSpacing = section == "Kaomoji" ? 8 : 0; flow.minimumInteritemSpacing = section == "Kaomoji" ? 8 : 0
         if section == "Kaomoji" { let header = label(category.uppercased(), size: 12); header.font = .systemFont(ofSize: 12, weight: .semibold); header.textColor = sub; header.heightAnchor.constraint(equalToConstant: 26).isActive = true; kaomojiHeader = header; main.addArrangedSubview(header); main.setCustomSpacing(0, after: header) }
-        collection.removeFromSuperview(); main.addArrangedSubview(collection); collection.reloadData(); makeBottom(tabScroll)
+        collection.removeFromSuperview(); main.addArrangedSubview(collection); collection.reloadData(); updateKaomojiEmpty(); makeBottom(tabScroll)
     }
     private func emojiCells() -> [InsertSymbol] {
         let cols = emojiColumns(width: Double(max(44, main.bounds.width)), tablet: tablet); var result: [InsertSymbol] = []
@@ -314,17 +316,26 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
             category = symbols[index.item].category; markCategories()
         }
     }
+    /// Pinned faces first, then recents. The Recent tab shows only these, like every other category.
     private func kaomojiWithRecents() -> [InsertSymbol] {
-        var seen = Set<String>(); let recent = (repository.pinned("Kaomoji").compactMap { kaomojiByText[$0] } + recents()).filter { seen.insert($0.text).inserted }
-        return recent + InsertAssets.kaomoji.filter { entry in !recent.contains { $0.text == entry.text } }
+        var seen = Set<String>(); return (repository.pinned("Kaomoji").compactMap { kaomojiByText[$0] } + recents()).filter { seen.insert($0.text).inserted }
+    }
+    /// An empty Recent tab explains itself instead of showing a blank page.
+    private func updateKaomojiEmpty() {
+        guard section == "Kaomoji", symbols.isEmpty else { collection.backgroundView = nil; return }
+        let hint = label("Faces you use or pin show up here.", size: 14); hint.textColor = sub; hint.textAlignment = .center; collection.backgroundView = hint
     }
     private func use(_ entry: InsertSymbol) {
         let which = section
         repository.insertSymbol(which, entry) { [weak self] in self?.onInsert?($0) }
         guard mode == nil, section == which else { return }
-        category = "Recent"; kaomojiHeader?.text = category.uppercased(); markCategories()
-        symbols = which == "Emoji" ? emojiCells() : kaomojiWithRecents()
-        collection.reloadData(); collection.setContentOffset(.zero, animated: false)
+        // Refresh recents in place only while they are on screen; elsewhere the grid stays where the
+        // user is picking, and recents are rebuilt the next time the panel opens.
+        if which == "Emoji", let first = collection.indexPathsForVisibleItems.min(by: { $0.item < $1.item }), symbols.indices.contains(first.item), symbols[first.item].category == "Recent" {
+            symbols = emojiCells(); collection.reloadData(); collection.setContentOffset(.zero, animated: false)
+        } else if which == "Kaomoji", category == "Recent" {
+            symbols = kaomojiWithRecents(); collection.reloadData(); updateKaomojiEmpty()
+        }
     }
     @objc private func holdEmoji(_ gesture: UILongPressGestureRecognizer) {
         guard mode == nil else { return }
@@ -353,12 +364,18 @@ final class InsertPanel: UIView, UICollectionViewDataSource, UICollectionViewDel
             let caption = label("✓  " + InsertPrefs.toneNames[tone] + " is your default · change it in Settings", size: 12); caption.textColor = sub; caption.textAlignment = .center; pop.addArrangedSubview(caption)
             pop.backgroundColor = palette.key; pop.layer.cornerRadius = 16; pop.layer.borderWidth = 1; pop.layer.borderColor = palette.keyOutline.cgColor; pop.layer.shadowOpacity = 0.2; pop.layer.shadowRadius = 8
             let point = gesture.location(in: self), width = CGFloat(toneEntries.count) * 52
-            pop.frame = CGRect(x: min(max(0, point.x-width/2), max(0, bounds.width-width)), y: max(0, point.y-90), width: width, height: 84)
-            addSubview(pop); tonePopover = pop; toneRow = row; toneChoice = -1
+            pop.frame = CGRect(x: min(max(8, point.x-width/2), max(8, bounds.width-width-8)), y: max(0, point.y-90), width: width, height: 84)
+            addSubview(pop); tonePopover = pop; toneRow = row; toneChoice = -1; toneEntered = false
+            toneDefault = toneEntries.first { $0.text == defaultText } ?? toneEntries.first
         } else if gesture.state == .changed, let row = toneRow {
             let point = gesture.location(in: row); toneChoice = row.bounds.contains(point) ? min(toneEntries.count-1, max(0, Int(point.x/52))) : -1
+            if toneChoice >= 0 { toneEntered = true }
             for (i, view) in row.arrangedSubviews.enumerated() { view.backgroundColor = i == toneChoice || view.layer.borderWidth == 2 ? fillHi : .clear }
-        } else if gesture.state == .ended { if toneEntries.indices.contains(toneChoice) { use(toneEntries[toneChoice]) }; dismissOverlay() }
+        } else if gesture.state == .ended {
+            // Lifting before reaching the popover inserts the emoji as shown; lifting after leaving it cancels.
+            if toneEntries.indices.contains(toneChoice) { use(toneEntries[toneChoice]) } else if !toneEntered, let entry = toneDefault { use(entry) }
+            dismissOverlay()
+        }
         else if gesture.state == .cancelled { dismissOverlay() }
     }
     private func kaomojiActions(_ entry: InsertSymbol) -> [String] { [repository.pinned("Kaomoji").contains(entry.text) ? "Unpin from Recent" : "Pin to Recent", "Copy"] }

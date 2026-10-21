@@ -60,7 +60,6 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
     private val noteDrafts = HashMap<String, Pair<String, String>>()
     private var query = ""
     private var gridPosition = 0
-    private var gridOffset = 0
     private var field: EditText? = null
     private var titleField: EditText? = null
     private var textField: EditText? = null
@@ -323,13 +322,13 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
     private fun markCategories() { categoryButtons.forEach { (name, b) ->
         b.isSelected = name == activeCategory
         if (b.isSelected && b.width > 0) b.requestRectangleOnScreen(android.graphics.Rect(0,0,b.width,b.height),true)
-        b.background = categoryShape(b.isSelected); b.setTextColor(if (b.isSelected) palette.text else sub); b.setTypeface(b.typeface, if (b.isSelected) Typeface.BOLD else Typeface.NORMAL)
+        // setTypeface(typeface, NORMAL) keeps an already-bold typeface bold, so set the face itself.
+        b.background = categoryShape(b.isSelected); b.setTextColor(if (b.isSelected) palette.text else sub); b.typeface = if (b.isSelected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         if (section == "Emoji") icon(b,if (name == "Recent") "Recent" else categoryIcons.getValue(name),if (b.isSelected) palette.text else sub)
     } }
-    private fun kaomojiWithRecents(): List<InsertSymbol> {
-        val recent = (repository.pinned("Kaomoji").mapNotNull { kaomojiByText[it] } + recentSymbols("Kaomoji")).distinctBy { it.text }
-        return recent + kaomoji.filter { entry -> recent.none { it.text == entry.text } }
-    }
+    /** Pinned faces first, then recents. The Recent tab shows only these, like every other category. */
+    private fun kaomojiWithRecents(): List<InsertSymbol> =
+        (repository.pinned("Kaomoji").mapNotNull { kaomojiByText[it] } + recentSymbols("Kaomoji")).distinctBy { it.text }
     private fun showKaomoji(items: List<InsertSymbol>) {
         pages.removeAllViews()
         val flow = ChipFlow(context, dp(8))
@@ -344,6 +343,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         }
         val page=LinearLayout(context).apply { orientation=LinearLayout.VERTICAL }
         page.addView(sectionHeader(activeCategory),LinearLayout.LayoutParams(-1,dp(26)))
+        if (items.isEmpty()) page.addView(label("Faces you use or pin show up here.").apply { setTextColor(sub) },LinearLayout.LayoutParams(-1,dp(44)))
         page.addView(ScrollView(context).apply { addView(flow) },LinearLayout.LayoutParams(-1,0,1f))
         pages.addView(page,LayoutParams(-1,-1))
     }
@@ -376,10 +376,11 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         val which = section
         repository.insertSymbol(which, entry, insert)
         if (editor != null || section != which) return
-        activeCategory = "Recent"; markCategories()
-        if (which == "Emoji") {
+        // Refresh recents in place only while they are on screen; elsewhere the grid stays where the
+        // user is picking, and recents are rebuilt the next time the panel opens.
+        if (which == "Emoji" && symbols.getOrNull(grid.firstVisiblePosition)?.category == "Recent") {
             symbols = emojiCells(); adapter.notifyDataSetChanged(); grid.setSelection(0)
-        } else if (which == "Kaomoji") showKaomoji(kaomojiWithRecents())
+        } else if (which == "Kaomoji" && activeCategory == "Recent") showKaomoji(kaomojiWithRecents())
     }
     private fun showTones(anchor: View, entry: InsertSymbol): Boolean {
         val variants = (emoji ?: return false).variants(entry.text).withIndex().filter { supported(it.value.text) }
@@ -394,15 +395,22 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         toneLayer.addView(row)
         toneLayer.addView(label("✓  ${InsertPrefs.toneNames.getOrElse(default) { "Default" }} is your default · change it in Settings", 12f).apply { setTextColor(sub); setPadding(dp(10),0,dp(10),0) }, LinearLayout.LayoutParams(-1,dp(32)))
         val point = IntArray(2); val origin = IntArray(2); anchor.getLocationOnScreen(point); getLocationOnScreen(origin)
-        (toneLayer.layoutParams as LayoutParams).apply { width = cell * variants.size; leftMargin = (point[0]-origin[0]-width/2+anchor.width/2).coerceIn(0,(this@InsertPanel.width-width).coerceAtLeast(0)); topMargin = (point[1]-origin[1]-dp(90)).coerceAtLeast(0) }
+        (toneLayer.layoutParams as LayoutParams).apply { width = cell * variants.size; leftMargin = (point[0]-origin[0]-width/2+anchor.width/2).coerceIn(dp(8),(this@InsertPanel.width-width-dp(8)).coerceAtLeast(dp(8))); topMargin = (point[1]-origin[1]-dp(90)).coerceAtLeast(0) }
         toneLayer.visibility = VISIBLE
         anchor.parent?.requestDisallowInterceptTouchEvent(true)
+        // Lifting before the finger reaches the popover inserts the held emoji as shown (the default
+        // tone); lifting after leaving the popover cancels.
+        var entered = false
         anchor.setOnTouchListener { _, event ->
             if (event.actionMasked in listOf(MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP)) {
                 val loc = IntArray(2); row.getLocationOnScreen(loc)
                 val chosen = if (event.rawY >= loc[1] && event.rawY < loc[1]+row.height && event.rawX >= loc[0] && event.rawX < loc[0]+row.width) ((event.rawX-loc[0])/cell).toInt().takeIf { it in variants.indices } ?: -1 else -1
+                if (chosen >= 0) entered = true
                 for (i in 0 until row.childCount) row.getChildAt(i).background = if (i == chosen || variants[i].index == default) shape(fillHi, variants[i].index == default) else null
-                if (event.actionMasked == MotionEvent.ACTION_UP) { if (chosen >= 0) use(variants[chosen].value); dismissOverlay(); anchor.setOnTouchListener(null); anchor.parent?.requestDisallowInterceptTouchEvent(false) }
+                if (event.actionMasked == MotionEvent.ACTION_UP) {
+                    if (chosen >= 0) use(variants[chosen].value) else if (!entered) use(defaultSymbol(entry))
+                    dismissOverlay(); anchor.setOnTouchListener(null); anchor.parent?.requestDisallowInterceptTouchEvent(false)
+                }
             } else if (event.actionMasked == MotionEvent.ACTION_CANCEL) { dismissOverlay(); anchor.setOnTouchListener(null); anchor.parent?.requestDisallowInterceptTouchEvent(false) }
             true
         }
@@ -416,7 +424,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         savedLayer?.let { inputState.layer = it; inputState.shift = savedShift; inputState.capsLock = savedCaps }
         savedLayer = null; session++
     }
-    private fun startSearch() { voice.cancel(); listening=false; if (section == "Emoji") { gridPosition = grid.firstVisiblePosition; gridOffset = grid.getChildAt(0)?.top ?: 0 }; prepareKeys(); editor = "Search"; session++; renderEditor() }
+    private fun startSearch() { voice.cancel(); listening=false; if (section == "Emoji") gridPosition = grid.firstVisiblePosition; prepareKeys(); editor = "Search"; session++; renderEditor() }
     private fun edit(item: ClipItem? = null) {
         prepareKeys(); editingItem = item; editor = "Note"; session++
         val draft = noteDrafts[item?.id ?: "new"]
@@ -443,7 +451,8 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         row.addView(button("Cancel", "Back to ${section.lowercase()}") {
             val search = editor == "Search"
             if (editor == "Note") retainDraft(); restoreKeys(); editor = null; field = null; typing(false, 0); renderPanel()
-            if (search && section == "Emoji") grid.post { grid.setSelectionFromTop(gridPosition, gridOffset) }
+            // setSelectionFromTop is ignored by GridView in touch mode; setSelection restores the row.
+            if (search && section == "Emoji") grid.post { grid.setSelection(gridPosition) }
         }.apply { setTextColor(palette.smallAccent) }, LinearLayout.LayoutParams(dp(72), dp(44)))
         if (editor == "Search") {
             val pill = FrameLayout(context).apply { background = shape(fill) }
@@ -594,7 +603,7 @@ class InsertPanel(context: Context, private val settings: KeyboardSettings,
         if (tablet) categories.addView(label("",12f).apply {
             text = if (repository.keep == ClipKeep.FOREVER) "On this device · kept until you clear it" else "On this device · clears after ${repository.keep.title}"
             setTextColor(sub); gravity=Gravity.CENTER; compoundDrawablePadding=dp(6); setCompoundDrawables(InsertIcon("Lock",sub).apply { setBounds(0,0,dp(14),dp(14)) },null,null,null)
-        },LinearLayout.LayoutParams(-1,dp(44)))
+        }.also { categories.gravity=Gravity.CENTER },LinearLayout.LayoutParams(-2,dp(44)))
         else {
             val switch = LinearLayout(context).apply { background=shape(fill); gravity=Gravity.CENTER; setPadding(dp(2),0,dp(2),0) }
             listOf("Clips","Notes").forEachIndexed { i,name -> switch.addView(button(name,selected=notes == (i == 1)) { notes=i == 1; clipboardChanged() }.apply { background=if (notes == (i == 1)) android.graphics.drawable.InsetDrawable(shape(palette.key,radius=9),0,dp(5),0,dp(5)) else null },LinearLayout.LayoutParams(dp(72),dp(44))) }
