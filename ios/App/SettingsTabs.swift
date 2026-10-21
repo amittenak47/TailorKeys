@@ -84,7 +84,9 @@ struct SettingsScreen: View {
         case .layout: EmptyView()
         case .size: sizeOptions
         case .look: lookOptions
-        case .settings: typingOptions
+        case .settings:
+            if let page = model.insertSettingsPage { InsertSettingsOptions(model: model, page: page) { model.insertSettingsPage = nil } }
+            else { typingOptions }
         }
     }
 
@@ -257,6 +259,13 @@ struct SettingsScreen: View {
                               value: model.integer(Prefs.longPressMs), suffix: " ms")
             }
             .disabled(!model.fullAccessConfirmed)
+            Section(header: Text("Panels").textCase(nil)) {
+                let repository = InsertRepository(defaults: { prefs.insertDefaults })
+                let tone = min(max(prefs.insertDefaults.integer(forKey: InsertPrefs.tone), 0), 5)
+                insertLink("Emoji", "\(InsertPrefs.toneNames[tone]) skin tone, recents \(prefs.insertDefaults.boolDefault(InsertPrefs.recents, true) ? "on" : "off")", "face.smiling")
+                insertLink("Clipboard and notes", "History \(prefs.insertDefaults.bool(forKey: InsertPrefs.history) ? "on" : "off"), keeps \(repository.keep.title), \(repository.store().notes.count) notes", "doc.on.clipboard")
+                insertLink("Dictation", "Use the system microphone below the keyboard", "mic")
+            }
             Section(footer: Text("Hold and push in the empty space to move the cursor.")) {
                 Picker("Cursor control", selection: Binding(get: { prefs.cursorControl }, set: { value in
                     prefs.cursorControl = value; model.changed()
@@ -303,6 +312,20 @@ struct SettingsScreen: View {
                 Button("Reset settings", role: .destructive) { confirmReset = true }
                     .disabled(!model.fullAccessConfirmed)
             }
+        }
+    }
+
+    private func insertLink(_ title: String, _ summary: String, _ icon: String) -> some View {
+        Button { model.insertSettingsPage = title } label: {
+            HStack(spacing: 12) {
+                Image(systemName: icon).frame(width: 24)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).foregroundColor(.primary)
+                    Text(summary).font(.footnote).foregroundColor(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").font(.caption).foregroundColor(.secondary)
+            }.frame(minHeight: 48)
         }
     }
 

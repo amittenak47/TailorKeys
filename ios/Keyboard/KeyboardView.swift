@@ -263,6 +263,7 @@ final class KeyboardView: UIView {
     private var leftSpace: CGRect?
     private var rightSpace: CGRect?
     var suggestionStripHeight: CGFloat { stripH }
+    var insertStripHeight: CGFloat = 0 { didSet { if insertStripHeight != oldValue { relayout() } } }
     private var stripH: CGFloat = 0
     private var unit: CGFloat = 0
     private var letterCentres: [Character: CGPoint] = [:]
@@ -410,7 +411,7 @@ final class KeyboardView: UIView {
                 ctx.saveGState()
                 ctx.concatenate(key.t)
                 let code = key.item.keys[key.item.idx]
-                (code == Keys.enter ? palette.accent : ((KeyText.isLayerKey(code) || code == Keys.backspace) ? palette.functionKey : palette.key)).setFill()
+                (code == Keys.enter ? palette.accent : ((KeyText.isLayerKey(code) || code == Keys.backspace || code == Keys.insert) ? palette.functionKey : palette.key)).setFill()
                 ctx.addPath(key.shape.body)
                 ctx.fillPath()
                 if highContrast {
@@ -463,6 +464,7 @@ final class KeyboardView: UIView {
         let n = grid.rows
         let gap = CGFloat(settings.int(Prefs.keyGap))
         stripH = max(screenH < 500 ? 34 : 40, 22 * labelScale + 8)
+        if insertStripHeight > 0 { stripH = insertStripHeight }
         let handleH: CGFloat = 14
         let pad: CGFloat = 4
         let bottomPad = CGFloat(p.bottomPadding)
@@ -1104,7 +1106,7 @@ final class KeyboardView: UIView {
         if highContrast { bg = palette.key }
         else if pressed { bg = palette.pressed }
         else if accentBg { bg = palette.accent }
-        else if KeyText.isLayerKey(code) || code == Keys.backspace { bg = palette.functionKey }
+        else if KeyText.isLayerKey(code) || code == Keys.backspace || code == Keys.insert { bg = palette.functionKey }
         else { bg = palette.key }
         ctx.saveGState()
         ctx.setAlpha(keyAlpha)
@@ -1175,6 +1177,13 @@ final class KeyboardView: UIView {
         let icon = Swift.min(r.width, r.height) * 0.42 * viewPrefs.textScale
         let center = CGPoint(x: r.midX, y: r.midY)
         switch code {
+        case Keys.insert:
+            let smile = UIBezierPath(ovalIn: CGRect(x: center.x - icon * 0.65, y: center.y - icon * 0.65, width: icon * 1.3, height: icon * 1.3))
+            color.setStroke(); smile.lineWidth = 1.75; smile.stroke()
+            color.setFill()
+            for dx in [CGFloat(-0.22), CGFloat(0.22)] { UIBezierPath(ovalIn: CGRect(x: center.x + icon * dx - 1, y: center.y - icon * 0.18 - 1, width: 2, height: 2)).fill() }
+            let mouth = UIBezierPath(); mouth.move(to: CGPoint(x: center.x - icon * 0.28, y: center.y + icon * 0.15)); mouth.addQuadCurve(to: CGPoint(x: center.x + icon * 0.28, y: center.y + icon * 0.15), controlPoint: CGPoint(x: center.x, y: center.y + icon * 0.5)); mouth.lineWidth = 1.75; mouth.stroke()
+            if insertStripHeight > 0 { palette.accent.setStroke(); let circle = UIBezierPath(ovalIn: CGRect(x: center.x - icon, y: center.y - icon, width: icon * 2, height: icon * 2)); circle.lineWidth = 1.5; circle.stroke() }
         case Keys.backspace: drawIcon(Self.deletePaths, center, icon, color)
         case Keys.enter:
             if let l = enterLabel { drawText(l, center: center, size: r.height * 0.3 * scale, color: color, maxWidth: r.width * 0.85, maxHeight: r.height * 0.85) }

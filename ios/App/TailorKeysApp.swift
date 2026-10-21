@@ -56,6 +56,8 @@ struct RootView: View {
         .onOpenURL { url in
             if url.scheme == "tailorkeys" && url.host == "settings" {
                 model.sheet = nil
+                let panel = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "panel" }?.value
+                model.insertSettingsPage = panel == "clipboard" ? "Clipboard and notes" : panel == "emoji" ? "Emoji" : nil
                 selection = .settings
             }
         }
