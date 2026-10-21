@@ -129,7 +129,7 @@ final class InsertRepository {
     func change(_ action: (ClipboardStore) -> Void) { let s = store(); action(s); save(s) }
     func recent(_ section: String) -> [String] { prefs.boolDefault(InsertPrefs.recents, true) ? prefs.stringArray(forKey: "insert_recent_" + section) ?? [] : [] }
     func used(_ section: String, _ text: String) {
-        guard ["Emoji", "Kaomoji"].contains(section), !text.isEmpty else { return }
+        guard ["Emoji", "Kaomoji"].contains(section), !text.isEmpty, prefs.boolDefault(InsertPrefs.recents, true) else { return }
         var r = InsertRecents(prefs.stringArray(forKey: "insert_recent_" + section) ?? []); r.use(text)
         prefs.set(r.values, forKey: "insert_recent_" + section)
     }

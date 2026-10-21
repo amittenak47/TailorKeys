@@ -33,7 +33,7 @@ class InsertRepository(val prefs: SharedPreferences) {
     }
     fun recent(section: String): List<String> = runCatching { val a = JSONArray(prefs.getString("insert_recent_$section", "[]")); (0 until a.length()).map { a.getString(it) } }.getOrDefault(emptyList())
     fun used(section: String, text: String) {
-        if (section !in listOf("Emoji", "Kaomoji") || text.isEmpty()) return
+        if (section !in listOf("Emoji", "Kaomoji") || text.isEmpty() || !prefs.getBoolean(InsertPrefs.RECENTS, true)) return
         val recent = InsertRecents(recent(section)); recent.use(text)
         prefs.edit().putString("insert_recent_$section", JSONArray(recent.values()).toString()).apply()
     }

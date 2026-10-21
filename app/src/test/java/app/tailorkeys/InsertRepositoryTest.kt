@@ -43,7 +43,8 @@ class InsertRepositoryTest {
         prefs.edit().putBoolean(InsertPrefs.RECENTS, false).apply()
         repository.insertSymbol("Emoji", plain) {}
         prefs.edit().putBoolean(InsertPrefs.RECENTS, true).apply()
-        assertEquals(listOf(plain.text, toned.text), repository.recent("Emoji"))
+        // With recents off nothing is recorded, so the order is unchanged.
+        assertEquals(listOf(toned.text, plain.text), repository.recent("Emoji"))
         repeat(40) { repository.insertSymbol("Kaomoji", InsertSymbol("face$it", "face", "Happy")) {} }
         assertEquals(32, repository.recent("Kaomoji").size)
         assertEquals(2, repository.recent("Emoji").size)

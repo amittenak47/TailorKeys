@@ -69,7 +69,7 @@ do {
     defaults.set(false, forKey: InsertPrefs.recents); repo.insertSymbol("Emoji", plain) { _ in }
     check(repo.recent("Emoji").isEmpty, "hidden recents still displayed")
     defaults.set(true, forKey: InsertPrefs.recents)
-    check(repo.recent("Emoji") == [plain.text, toned.text], "hidden recents were not recorded")
+    check(repo.recent("Emoji") == [toned.text, plain.text], "recents recorded while turned off")
     for i in 0..<40 { repo.insertSymbol("Kaomoji", InsertSymbol("face\(i)", "face", "Happy")) { _ in } }
     check(repo.recent("Kaomoji").count == 32 && repo.recent("Emoji").count == 2, "recents cap crossed sections")
     repo.change { $0.capture("copied", enabled: true, sensitive: false, password: false) }; repo.change { $0.clear() }
