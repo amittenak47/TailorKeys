@@ -109,6 +109,7 @@ final class ClipboardStore {
 
 enum InsertPrefs {
     static let history = "insert_history", keep = "insert_keep", tone = "insert_tone", recents = "insert_recents", section = "insert_section"
+    static let kaomoji = "insert_kaomoji"
     static let toneNames = ["Default", "Light", "Medium-light", "Medium", "Medium-dark", "Dark"]
     static let promptSeen = "insert_key_prompt_v1"
     static let hadClips = "insert_had_clips"

@@ -835,3 +835,5 @@ do {
     switched.update("h", at: 6); switched.update("hello", at: 10)
     check(switched.result(at: Date())?.keyboard == "other" && switched.wpm(at: 10) == 15, "switched test retained old timing or keyboard")
 }
+
+check(InsertPrefs.kaomoji == "insert_kaomoji", "Kaomoji preference wire key differs")

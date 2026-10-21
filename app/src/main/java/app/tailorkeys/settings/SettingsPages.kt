@@ -246,9 +246,6 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
             SettingSlider("Long-press time", time, Prefs.LONG_PRESS_MS, "$time ms") { state.set(Prefs.LONG_PRESS_MS, it) }
         }
     }
-    item("panels") {
-        Column { GroupTitle("Panels"); InsertSettingsLinks(onPanel) }
-    }
     item("cursorControl") {
         Column {
             SettingsDropdown("Cursor control", state.cursorControl().title, CursorControl.entries.map { it.title }) {
@@ -271,6 +268,9 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
                 SettingSlider("Extra tap area", slack, Prefs.TOUCH_SLACK, "$slack dp") { state.set(Prefs.TOUCH_SLACK, it) }
             }
         }
+    }
+    item("panels") {
+        Column { GroupTitle("Panels"); InsertSettingsLinks(onPanel) }
     }
     item("assist") {
         var open by remember { mutableStateOf(false) }

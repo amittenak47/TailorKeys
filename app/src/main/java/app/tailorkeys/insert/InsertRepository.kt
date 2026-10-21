@@ -9,6 +9,7 @@ object InsertPrefs {
     const val KEEP = "insert_keep"
     const val TONE = "insert_tone"
     const val RECENTS = "insert_recents"
+    const val KAOMOJI = "insert_kaomoji"
     const val VOICE = "insert_voice"
     const val DEVICE_ONLY = "insert_device_only"
     const val STORE = "insert_clips"

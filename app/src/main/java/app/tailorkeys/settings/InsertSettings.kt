@@ -12,6 +12,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
@@ -30,6 +31,7 @@ import app.tailorkeys.KeyboardSettings
 import app.tailorkeys.SettingsActivity
 import app.tailorkeys.insert.*
 import kotlinx.coroutines.delay
+import java.util.Locale
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -54,7 +56,8 @@ internal fun InsertSettingsLinks(open: (String) -> Unit) {
     val summaries = listOf(
         "Emoji" to "${InsertPrefs.toneNames.getOrElse(prefs.getInt(InsertPrefs.TONE, 0)) { "Default" }} skin tone, recents ${if (prefs.getBoolean(InsertPrefs.RECENTS, true)) "on" else "off"}",
         "Clipboard and notes" to "History ${if (prefs.getBoolean(InsertPrefs.HISTORY, false)) "on" else "off"}, keeps ${repository.keep.title}, ${repository.store().notes().size} notes",
-        "Voice typing" to if (!prefs.getBoolean(InsertPrefs.VOICE, true)) "Off" else if (prefs.getBoolean(InsertPrefs.DEVICE_ONLY, true)) "On-device only" else "Online recognition allowed")
+        "Voice typing" to if (!prefs.getBoolean(InsertPrefs.VOICE, true)) "Off" else
+            "${if (prefs.getBoolean(InsertPrefs.DEVICE_ONLY, true)) "On-device" else "Online recognition allowed"}, ${voiceLanguage(settings)}")
     OptionGroup { summaries.forEach { (title, summary) ->
         TextButton({ open(title) }, Modifier.fillMaxWidth().heightIn(min = 64.dp), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)) {
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
@@ -65,6 +68,9 @@ internal fun InsertSettingsLinks(open: (String) -> Unit) {
         }
     } }
 }
+
+private fun voiceLanguage(settings: KeyboardSettings): String =
+    Locale.forLanguageTag(settings.currentLanguage()).getDisplayName(Locale.getDefault())
 
 @Composable
 private fun InsertSettingsControls(settings: KeyboardSettings, page: String) {
@@ -89,8 +95,11 @@ private fun InsertSettingsControls(settings: KeyboardSettings, page: String) {
         when (page) {
             "Emoji" -> {
                 OptionGroup {
-                    Text("Default skin tone", Modifier.padding(16.dp))
-                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
+                    Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Default skin tone")
+                        Text(InsertPrefs.toneNames.getOrElse(prefs.getInt(InsertPrefs.TONE, 0)) { "Default" }, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Row(Modifier.fillMaxWidth().selectableGroup().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp)) {
                         val colors = listOf(0xFFFFCD39, 0xFFF8DCC7, 0xFFEFD09B, 0xFFBE9873, 0xFFA4754D, 0xFF6F4934)
                         InsertPrefs.toneNames.forEachIndexed { index, name ->
                             val selected = prefs.getInt(InsertPrefs.TONE, 0) == index
@@ -98,7 +107,9 @@ private fun InsertSettingsControls(settings: KeyboardSettings, page: String) {
                                 onClick = { prefs.edit().putInt(InsertPrefs.TONE, index).apply() }), horizontalAlignment = Alignment.CenterHorizontally) {
                                 Box(Modifier.padding(4.dp).size(36.dp).background(Color(colors[index]), CircleShape)
                                     .border(if (selected) 2.dp else 0.dp, MaterialTheme.colorScheme.primary, CircleShape), contentAlignment = Alignment.Center) {
-                                    if (selected) Text("✓", color = MaterialTheme.colorScheme.onSurface)
+                                    if (selected) Box(Modifier.size(22.dp).background(Color(0xFF242424), CircleShape), contentAlignment = Alignment.Center) {
+                                        Text("✓", color = Color.White)
+                                    }
                                 }
                                 Text(name, style = MaterialTheme.typography.labelSmall)
                             }
@@ -117,26 +128,39 @@ private fun InsertSettingsControls(settings: KeyboardSettings, page: String) {
                     }
                 }
                 OptionGroup {
-                    ToggleRow("Show recents", prefs.getBoolean(InsertPrefs.RECENTS, true)) { prefs.edit().putBoolean(InsertPrefs.RECENTS, it).apply() }
-                    ActionRow("Clear emoji and kaomoji recents") { repository.clearRecents() }
+                    ToggleRow("Show recent emoji", prefs.getBoolean(InsertPrefs.RECENTS, true), note = "Recents come first in the panel") { prefs.edit().putBoolean(InsertPrefs.RECENTS, it).apply() }
+                    InsertClearRow("Clear recent emoji", "Removes ${repository.recent("Emoji").size} recents") {
+                        prefs.edit().remove("insert_recent_Emoji").apply()
+                    }
+                    ToggleRow("Show Kaomoji tab", prefs.getBoolean(InsertPrefs.KAOMOJI, true), note = "Faces such as (^_^) next to emoji") { prefs.edit().putBoolean(InsertPrefs.KAOMOJI, it).apply() }
                 }
             }
             "Clipboard and notes" -> {
                 OptionGroup { ToggleRow("Clipboard history", prefs.getBoolean(InsertPrefs.HISTORY, false), note = "Keep what you copy so you can paste it again.") { prefs.edit().putBoolean(InsertPrefs.HISTORY, it).apply() } }
                 GroupTitle("Keep items for")
-                OptionGroup { ClipKeep.entries.forEachIndexed { index, keep ->
-                    TextButton({ prefs.edit().putInt(InsertPrefs.KEEP, index).apply(); repository.change { } }, Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text((if (repository.keep == keep) "◉  " else "○  ") + keep.title) }
-                } }
+                OptionGroup { Column(Modifier.selectableGroup()) { ClipKeep.entries.forEachIndexed { index, keep ->
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(repository.keep == keep, role = Role.RadioButton,
+                        onClick = { prefs.edit().putInt(InsertPrefs.KEEP, index).apply(); repository.change { } }).padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(repository.keep == keep, onClick = null)
+                        Text(keep.title, Modifier.padding(start = 12.dp))
+                    }
+                } } }
                 OptionGroup {
-                    ActionRow("Clear clipboard history now", destructive = true) { repository.change { it.clear() } }
-                    Text("Pinned items stay until you delete them.", Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall)
+                    InsertClearRow("Clear clipboard history now", "Removes ${repository.store().clips().count { !it.pinned }} items. Pinned items stay.") { repository.change { it.clear() } }
                     ActionRow("Manage notes · ${repository.store().notes().size}") { managing = true }
                 }
-                Text("Items stay on this device and clear after ${repository.keep.title}. Notes and pins stay until you delete them. Sensitive clips and text copied in password fields are never saved.", Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall)
+                OptionGroup {
+                    Text("Private by design", Modifier.padding(start = 16.dp, top = 12.dp), style = MaterialTheme.typography.labelLarge)
+                    Text("Items stay on this device and clear after ${repository.keep.title}. Notes and pins stay until you delete them. Sensitive clips and text copied in password fields are never saved.", Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall)
+                }
             }
             else -> {
                 OptionGroup {
-                    ToggleRow("Voice typing", prefs.getBoolean(InsertPrefs.VOICE, true)) { prefs.edit().putBoolean(InsertPrefs.VOICE, it).apply() }
+                    ToggleRow("Voice typing", prefs.getBoolean(InsertPrefs.VOICE, true), note = "Adds a Voice tab to the Insert panel") { prefs.edit().putBoolean(InsertPrefs.VOICE, it).apply() }
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Language")
+                        Text(voiceLanguage(settings), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     ToggleRow("Use on-device only", prefs.getBoolean(InsertPrefs.DEVICE_ONLY, true), note = "Audio stays on this device and works offline. Turn off to allow online recognition.") { prefs.edit().putBoolean(InsertPrefs.DEVICE_ONLY, it).apply() }
                 }
                 val allowed = context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -144,10 +168,22 @@ private fun InsertSettingsControls(settings: KeyboardSettings, page: String) {
                     if (!allowed) context.startActivity(Intent(context, SettingsActivity::class.java).putExtra("request_microphone", true))
                     else context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
                 } }
+                Text("On iPhone and iPad, Apple does not let keyboards use the microphone.", Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall)
             }
         }
     }
     if (managing) NotesManager(repository) { managing = false }
+}
+
+@Composable
+private fun InsertClearRow(title: String, subtitle: String, clear: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        OutlinedButton(clear, Modifier.heightIn(min = 44.dp)) { Text("Clear", color = MaterialTheme.colorScheme.error) }
+    }
 }
 
 @Composable
