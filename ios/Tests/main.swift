@@ -1,6 +1,19 @@
 // Run on a Mac with: bash ios/test-safety.sh
 // This executable deliberately avoids UIKit, Xcode projects, signing and real preference domains.
 import Foundation
+
+for width in [240, 320, 390, 600, 800, 1200] {
+    for height in [160, 192, 230, 307, 384, 460, 600, 845] {
+        let header = width >= 600 ? 56 : 48
+        let g = QuickPanelGeometry.fit(width: width, height: height, header: header)
+        let content = (width < 260 ? 5 : 3) * (g.tile + 6) + 4
+        check(g.tile >= 60 && g.strip >= 56, "quick controls became too small")
+        if g.viewport < content {
+            check(g.viewport % (g.tile + 6) == 18 && g.viewport >= g.tile + 6 + 18, "quick row clipped through its label")
+            check(header + g.top + g.strip + g.gap + g.viewport <= height, "quick grid exceeds panel")
+        } else { check(g.viewport == content, "outer quick scroll lost rows") }
+    }
+}
 import CoreGraphics
 
 // KeyboardSettings only needs this value type; the production palette imports UIKit.
