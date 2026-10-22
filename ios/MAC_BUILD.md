@@ -2,6 +2,15 @@
 
 The iOS code has been reviewed but never compiled, so expect a few compile errors on the first build (see step 6).
 
+**Updated 22 Oct 2026.** About 7,000 lines of Swift have landed since the first version of this guide (19 Oct), all mirrored from the Android app, which has been tested on a tablet. None of the new Swift has been compiled yet either. New since 19 Oct:
+- **Insert panel:** emoji (search, skin tones, recents), kaomoji with pins, clipboard with pinned clips and notes, and a Dictate page that points to the iOS mic.
+- **Themes:** custom keyboard themes with a theme editor, next to the built-in ones.
+- **Typing test:** free typing and test sentences, live speed and accuracy, and Compare across keyboards.
+- **Layout library:** save, rename, share and delete layouts, with thumbnails.
+- **Layout editor:** while you drag, a live preview slides the other keys into place. Removed keys wait as mini keys in a tray below the layout. A full row shows "Row is full" and the key snaps back. The trash deletes tray keys for good.
+- **Typing:** corrections that remember rejections, bounded learning, "Guess the word" and "Type the letters" swipe styles, and automatic space and punctuation.
+- **Tests:** `test-safety.sh` now compiles and checks the editor tray, themes, the layout library, typing metrics, swipe traces and text rules too.
+
 ## 1. What you need
 - Xcode from the Mac App Store. Open it once and let it install its components.
 - Access to the private GitHub repo `amittenak47/TailorKeys`.
@@ -19,7 +28,7 @@ cd TailorKeys
 ```
 
 ## 3. Run the quick safety checks
-These compile the plain-logic Swift files for the Mac and check layout codes, reset, streaming and the model file.
+These compile the plain-logic Swift files for the Mac and check layout codes, the editor tray, reset, streaming, the model file, themes, the layout library, typing metrics, swipe traces and text rules. It prints a few "… checks passed" lines and no errors. If it fails, send the output the same way as a build log (step 6).
 
 ```bash
 bash ios/test-safety.sh
@@ -89,6 +98,21 @@ Send the errors back, and fixes will be pushed to `main`:
 - [ ] Import and share a TK1- layout code; reset all settings.
 - [ ] The guide's last page has a practice box.
 - [ ] Rotate: keys keep their size.
+
+New since 19 Oct:
+- [ ] Insert key: emoji search and skin tones, kaomoji pins, clipboard pins and notes. Dictate shows the arrow to the iOS mic.
+- [ ] Look: pick each built-in theme, then Create a custom theme and edit its colours. The keyboard follows.
+- [ ] Typing test: finish a test sentence ("✓ Test complete" is readable in light and dark mode), then Compare.
+- [ ] Layout library: save, rename, share and delete a layout. Thumbnails match the layouts.
+- [ ] Layout editor, drag a key:
+  - Between two keys, the neighbours slide apart and a dashed slot opens.
+  - Onto a full row, "Row is full" shows and the key snaps back.
+  - Into the tray, it waits there as a mini key and its row closes up.
+  - From the tray, it can go back into the layout. Dropped on the trash, it's gone for good.
+- [ ] Combine two keys into a swipe key, then separate them: the extra face goes to the tray.
+- [ ] Curve and tilt on (Size): spacebars sit square under the keys above them.
+- [ ] Swipe typing: "Guess the word" adds a space after the word. "Type the letters" types just the letters, with no space. With Type on press on, Swipe typing and Chords show as off.
+- [ ] Automatic space: picking a suggestion adds a space, unless Swipe style is "Type the letters".
 - [ ] Optional: Product › Profile › Allocations on the keyboard; memory stays under about 60 MB.
 
 ## 10. Getting fixes later
