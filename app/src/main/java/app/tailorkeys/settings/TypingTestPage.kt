@@ -39,7 +39,6 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.*
@@ -49,11 +48,10 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.*
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import app.tailorkeys.DictionaryWords
-import app.tailorkeys.KeyboardView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -66,7 +64,6 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
     val keyboard = LocalSoftwareKeyboardController.current
     val view = LocalView.current
     val focus = remember { FocusRequester() }
-    val reduced = LocalLayoutReducedMotion.current
     var mode by remember { mutableStateOf(TypingMode.FREE) }
     var sentenceIndex by remember { mutableIntStateOf(SentenceBank.sentences.indices.random()) }
     var generation by remember { mutableIntStateOf(0) }
@@ -112,8 +109,8 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
         if (tailorkeys) state.library.beginTrial(entry) else state.library.restoreTrial()
         onDispose { state.library.restoreTrial() }
     }
+    // Ask for the real keyboard straight away, so it slides in once while the page opens.
     LaunchedEffect(session, comparing) {
-        delay(if (reduced) 120 else 360)
         if (!session.complete && !comparing) {
             focus.requestFocus()
             keyboard?.show()
@@ -127,26 +124,28 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
     }
     val metrics = session.metrics(tick)
     val progress = session.progress
-    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val colors = MaterialTheme.colorScheme
     fun restart() {
         sentenceIndex = (sentenceIndex + 1) % SentenceBank.sentences.size
         generation++
     }
     Column(Modifier.fillMaxSize().background(colors.background)
-        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)).imePadding()) {
+        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+        .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom))) {
         Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onBack, Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = "Back to layouts" }) { Text("←", fontSize = 24.sp) }
-            Column(Modifier.weight(1f)) { Text("Typing test", color = colors.onSurface, style = MaterialTheme.typography.titleLarge); Text(if (tailorkeys) "TailorKeys · ${entry.name}" else "Typing with $label", color = colors.onSurfaceVariant, style = MaterialTheme.typography.labelMedium) }
+            Column(Modifier.weight(1f)) {
+                Text("Typing test", color = colors.onSurface, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (tailorkeys) "TailorKeys · ${entry.name}" else "Typing with $label", color = colors.onSurfaceVariant, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            if (!finished) TextButton({ comparing = !comparing; if (comparing) keyboard?.hide() }) { Text(if (comparing) "Back to test" else "Compare") }
             TextButton({ context.getSystemService(InputMethodManager::class.java).showInputMethodPicker() }) { Text("Switch keyboard") }
         }
-        Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp), contentAlignment = Alignment.Center) {
+        // Top-aligned, so the keyboard opening or closing only changes the space below the card.
+        Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp), contentAlignment = Alignment.TopCenter) {
             Surface(Modifier.widthIn(max = 600.dp).fillMaxWidth().then(if (tailorkeys) Modifier.layoutMorph(entry.key) else Modifier),
                 shape = RoundedCornerShape(28.dp), color = colors.surfaceContainerHigh, shadowElevation = 8.dp) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton({ comparing = !comparing; if (comparing) keyboard?.hide() }) { Text(if (comparing) "Back to test" else "Compare") }
-                    }
                     if (comparing) {
                         KeyboardComparison(state.library.keyboardAverages(), ::keyboardLabel, thisTest)
                     } else if (finished) {
@@ -257,24 +256,6 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
                 }
             }
         }
-        // Hand the moving preview over to the real system IME when focus arrives.
-        if (tailorkeys && !imeVisible) {
-            val preview = remember(entry.key) { KeyboardView(context, state.settings).apply { previewSplit = entry.split; grid = entry.grid(); setOnTouchListener { _, _ -> true } } }
-            val outline = remember(preview) { NextKeyOutline(preview, state.settings) }
-            AndroidView(factory = { preview.apply { overlay.add(outline) } }, update = {
-                outline.keyId = if (mode == TypingMode.TEST && !comparing) nextTypingKey(it.grid, session.sentence, session.text.length, state.settings.currentLanguage())?.id else null
-                outline.invalidateSelf()
-            }, modifier = Modifier.fillMaxWidth().layoutMorph("keyboard-preview").wrapContentHeight(unbounded = true)
-                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-                // Like the real IME, keep the keys above the navigation bar; the keyboard colour fills behind it.
-                .background(Color(Palette.of(context, state.settings).background)).navigationBarsPadding())
-        }
-        if (!tailorkeys && !imeVisible) Surface(Modifier.fillMaxWidth(), color = colors.surfaceContainer) {
-            Column(Modifier.navigationBarsPadding().heightIn(min = 160.dp).padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                Text("$label keyboard area", fontWeight = FontWeight.Medium)
-                Text("Drawn by the system. TailorKeys shows no keys, preview or key hints here.", style = MaterialTheme.typography.bodySmall)
-            }
-        }
     }
 }
 
@@ -311,33 +292,6 @@ private fun KeyboardComparison(averages: List<KeyboardAverage>, label: (String) 
             Text(summary.description() + if (summaries.size > 1) " than ${label(summary.other)}" else "", style = MaterialTheme.typography.bodySmall)
         }
     }
-}
-
-/** Settings-only overlay, using the preview's public accessibility bounds for its actual layout. */
-private class NextKeyOutline(private val preview: KeyboardView, private val settings: KeyboardSettings) : android.graphics.drawable.Drawable() {
-    var keyId: Int? = null
-    private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        style = android.graphics.Paint.Style.STROKE
-        strokeWidth = 2 * preview.resources.displayMetrics.density
-    }
-    init {
-        preview.addOnLayoutChangeListener { _, _, _, right, bottom, _, _, _, _ -> setBounds(0, 0, right, bottom); invalidateSelf() }
-    }
-    override fun draw(canvas: android.graphics.Canvas) {
-        val id = keyId ?: return
-        val index = preview.grid.items.filter { it.r < preview.grid.rows }.indexOfFirst { it.id == id }
-        if (index < 0) return
-        val node = preview.accessibilityNodeProvider?.createAccessibilityNodeInfo(index) ?: return
-        val bounds = android.graphics.Rect().also { node.getBoundsInParent(it) }
-        node.recycle()
-        val rect = android.graphics.RectF(bounds).apply { inset(paint.strokeWidth / 2, paint.strokeWidth / 2) }
-        paint.color = Palette.of(preview.context, settings).accent
-        val radius = settings.int(Prefs.CORNER_RADIUS) * preview.resources.displayMetrics.density
-        canvas.drawRoundRect(rect, radius, radius, paint)
-    }
-    override fun setAlpha(alpha: Int) { paint.alpha = alpha }
-    override fun setColorFilter(filter: android.graphics.ColorFilter?) { paint.colorFilter = filter }
-    @Deprecated("Deprecated in Android") override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
 }
 
 @Composable

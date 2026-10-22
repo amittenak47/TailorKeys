@@ -1,6 +1,18 @@
 import Foundation
 
 enum AutocorrectMode: Int { case off, confident, aggressive }
+/** What each Autocorrect choice does, shown under the setting. */
+enum AutocorrectDetails {
+    static let modes = [
+        "Never changes what you type. Suggestions still appear.",
+        "Fixes clear typos: one wrong, missing or swapped letter (teh → the) and missing spaces (ofthe → of the). Real words stay as typed.",
+        "Also fixes several slips onto nearby keys (watwe → water), real words that don't fit the sentence (are you form → from) and stray spaces (key board → keyboard).",
+    ]
+    static func text(_ mode: Int) -> String {
+        let detail = modes[min(max(mode, 0), modes.count - 1)]
+        return mode == 0 ? detail : detail + " Fixes happen when you press space; backspace right after undoes one."
+    }
+}
 enum CorrectionRules {
     static func eligible(_ word: String) -> Bool {
         (1...32).contains(word.count) && word.allSatisfy { $0.isLetter || $0 == "'" } && !word.dropFirst().contains { $0.isUppercase }

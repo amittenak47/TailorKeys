@@ -378,8 +378,20 @@ final class Predictor {
             let letters = Array(p)
             var older = [Int](repeating: 1000, count: letters.count + 1), previous = older, current = older
             let spatial = taps?.hasTaps(word) == true ? taps : nil
-            let ranked = candidates(p, prev, prev2, taps, scores)
-                .filter { !history.blocked(word, $0.word) && abs($0.word.count - p.count) <= 1 && CorrectionRules.smallEdit(p, $0.word) }
+            // Aggressive also repairs unknown words with several slips onto neighbouring keys
+            // (watwe -> water, plabge -> plants): about one slip per two letters, common words only.
+            // Eligibility and lookup use layout neighbours; tap distances still rank the candidates below.
+            let slips = mode == .aggressive && !known && p.count >= 5
+            let found = candidates(p, prev, prev2, taps, scores)
+            var pool = found
+            if slips && spatial != nil {
+                let seen = Set(found.map { $0.word })
+                pool += candidates(p, prev, prev2, nil, scores).filter { !seen.contains($0.word) }
+            }
+            let ranked = pool
+                .filter { !history.blocked(word, $0.word) && abs($0.word.count - p.count) <= 1 &&
+                    (CorrectionRules.smallEdit(p, $0.word) || slips && common($0.word) &&
+                        cost(letters, CompactLetters($0.word), 22, &older, &previous, &current, nil, complete: true) <= 4 * (p.count / 2)) }
                 .filter { candidate in
                     if p.count > 3 { return true }
                     if p.count == 3 && common(candidate.word) && CorrectionRules.transposition(p, candidate.word) { return true }

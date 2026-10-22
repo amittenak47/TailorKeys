@@ -319,7 +319,7 @@ final class SettingsPanel: UIView, UIGestureRecognizerDelegate {
         stack.addArrangedSubview(menuRow("Autocorrect", current: ["Off", "Confident", "Aggressive"][settings.int(Prefs.autocorrect)], options: ["Off", "Confident", "Aggressive"]) { [weak self] value in
             self?.settings.set(Prefs.autocorrect, ["Off", "Confident", "Aggressive"].firstIndex(of: value) ?? 1); self?.changed(rebuild: true)
         })
-        addNote("Fix typos when you press space. Backspace right after undoes it.")
+        addNote(AutocorrectDetails.text(settings.int(Prefs.autocorrect)))
         stack.addArrangedSubview(switchRow("Learn from my typing", settings.learning) { [weak self] value in self?.settings.set(Prefs.learning, value); self?.changed() })
         stack.addArrangedSubview(linkButton("Forget learned words") { [weak self] in self?.forgetConfirm = true; self?.build() })
         if forgetConfirm {

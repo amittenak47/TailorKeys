@@ -166,8 +166,14 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
     item("typing") {
         OptionGroup {
             val mode = state.int(Prefs.AUTOCORRECT)
-            SettingsDropdown("Autocorrect", listOf("Off", "Confident", "Aggressive")[mode], listOf("Off", "Confident", "Aggressive")) { state.set(Prefs.AUTOCORRECT, it) }
-            Text("Fix typos when you press space. Backspace right after undoes it.", Modifier.padding(20.dp, 8.dp), style = MaterialTheme.typography.bodySmall)
+            val modes = listOf("Off", "Confident", "Aggressive")
+            val details = listOf(
+                "Never changes what you type. Suggestions still appear.",
+                "Fixes clear typos: one wrong, missing or swapped letter (teh → the) and missing spaces (ofthe → of the). Real words stay as typed.",
+                "Also fixes several slips onto nearby keys (watwe → water), real words that don't fit the sentence (are you form → from) and stray spaces (key board → keyboard).")
+            SettingsDropdown("Autocorrect", modes[mode], modes, details = details) { state.set(Prefs.AUTOCORRECT, it) }
+            Text(details[mode] + if (mode == 0) "" else " Fixes happen when you press space; backspace right after undoes one.",
+                Modifier.padding(20.dp, 8.dp), style = MaterialTheme.typography.bodySmall)
             ToggleRow("Auto-capitalize", state.bool(Prefs.AUTO_CAP)) { state.set(Prefs.AUTO_CAP, it) }
             val vibrator = LocalContext.current.getSystemService(android.os.Vibrator::class.java)
             if (vibrator?.hasVibrator() == true) {

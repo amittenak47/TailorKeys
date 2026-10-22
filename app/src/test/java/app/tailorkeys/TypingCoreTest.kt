@@ -31,6 +31,19 @@ class TypingCoreTest {
         p.updateContext("i am from new york and you are form", word)
         assertEquals("from", p.autocorrect(word, AutocorrectMode.AGGRESSIVE, "are", "you"))
     }
+    @Test fun aggressiveFixesSeveralNeighbouringKeySlips() {
+        for (neural in listOf(true, false)) {
+            val p = Predictor({ File("src/main/assets", it).inputStream() }, Files.createTempDirectory("tk-slips").toFile(), enableModel = neural).apply { setLayout(SplitTaps.grid) }
+            for ((text, original, fix) in listOf(Triple("watwe", "watwe", "water"), Triple("I need to watwe", "watwe", "water"),
+                    Triple("watwe the plabge", "plabge", "plants"))) {
+                assertEquals("$neural $text", WordCorrection(original, fix), p.correction(text, AutocorrectMode.AGGRESSIVE))
+                assertEquals("$neural $text taps", WordCorrection(original, fix), p.correction(text, AutocorrectMode.AGGRESSIVE, SplitTaps.word(original)))
+                assertNull("$neural $text", p.correction(text, AutocorrectMode.CONFIDENT))
+            }
+            // Several slips only land on common words: rare look-alikes stay as typed.
+            for (word in listOf("gotta", "covid")) assertNull("$neural $word", p.correction("I said $word", AutocorrectMode.AGGRESSIVE))
+        }
+    }
     @Test fun protectedInputsAndLearning() {
         val p = model()
         assertFalse(CorrectionRules.allowed(true, true, false, false))

@@ -347,8 +347,16 @@ class Predictor internal constructor(
         fun decide(scores: EnglishContext.Scores?): String? {
             val rows = Array(3) { IntArray(p.length + 1) }
             val spatial = taps?.takeIf { it.hasTaps(word) }
-            val ranked = candidates(p, prev, prev2, taps, scores).asSequence()
-                .filter { !history.blocked(word, it.word) && kotlin.math.abs(it.word.length - p.length) <= 1 && CorrectionRules.smallEdit(p, it.word) }
+            // Aggressive also repairs unknown words with several slips onto neighbouring keys
+            // (watwe -> water, plabge -> plants): about one slip per two letters, common words only.
+            // Eligibility and lookup use layout neighbours; tap distances still rank the candidates below.
+            val slips = mode == AutocorrectMode.AGGRESSIVE && !known && p.length >= 5
+            val found = candidates(p, prev, prev2, taps, scores)
+            val pool = if (slips && spatial != null) found.map { it.word }.toHashSet().let { seen ->
+                found + candidates(p, prev, prev2, null, scores).filter { it.word !in seen } } else found
+            val ranked = pool.asSequence()
+                .filter { !history.blocked(word, it.word) && kotlin.math.abs(it.word.length - p.length) <= 1 &&
+                    (CorrectionRules.smallEdit(p, it.word) || slips && common(it.word) && cost(p, it.word, 22, rows, null, complete = true) <= 4 * (p.length / 2)) }
                 .filter {
                     if (p.length > 3) true
                     else if (p.length == 3 && common(it.word) && CorrectionRules.transposition(p, it.word)) true

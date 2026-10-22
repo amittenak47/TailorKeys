@@ -62,7 +62,7 @@ internal fun ToggleRow(label: String, checked: Boolean, enabled: Boolean = true,
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SettingsDropdown(label: String, value: String, choices: List<String>, modifier: Modifier = Modifier,
-    containerColor: Color = MaterialTheme.colorScheme.surfaceContainerHigh, onSelect: (Int) -> Unit) {
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainerHigh, details: List<String>? = null, onSelect: (Int) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     ExposedDropdownMenuBox(expanded, { expanded = it }, modifier.fillMaxWidth()) {
         TextField(value, {}, readOnly = true, singleLine = true, label = { Text(label) },
@@ -79,7 +79,13 @@ internal fun SettingsDropdown(label: String, value: String, choices: List<String
         ExposedDropdownMenu(expanded, { expanded = false }, shape = RoundedCornerShape(16.dp),
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh) {
             choices.forEachIndexed { index, choice ->
-                DropdownMenuItem(text = { Text(choice) },
+                DropdownMenuItem(text = {
+                        val detail = details?.getOrNull(index)
+                        if (detail == null) Text(choice) else Column(Modifier.widthIn(max = 360.dp).padding(vertical = 6.dp)) {
+                            Text(choice)
+                            Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    },
                     onClick = { expanded = false; onSelect(index) },
                     trailingIcon = if (value == choice) { { SettingsIcon(R.drawable.ic_settings_check) } } else null)
             }

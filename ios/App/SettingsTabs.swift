@@ -223,7 +223,7 @@ struct SettingsScreen: View {
                 Picker("Autocorrect", selection: Binding(get: { prefs.int(Prefs.autocorrect) }, set: { prefs.set(Prefs.autocorrect, $0); model.changed() })) {
                     Text("Off").tag(0); Text("Confident").tag(1); Text("Aggressive").tag(2)
                 }
-                Text("Fix typos when you press space. Backspace right after undoes it.").font(.footnote).foregroundColor(.secondary)
+                Text(AutocorrectDetails.text(prefs.int(Prefs.autocorrect))).font(.footnote).foregroundColor(.secondary)
                 Toggle("Auto-capitalize", isOn: model.bool(Prefs.autoCap, default: true))
                 VStack(alignment: .leading, spacing: 4) {
                     Toggle("Automatic space", isOn: model.bool(Prefs.automaticSpace, default: true))
