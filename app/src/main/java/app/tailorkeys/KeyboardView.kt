@@ -1269,6 +1269,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun drawToolbar(canvas: Canvas) {
+        if (drag != null && drag?.target?.type == T_FULL) {
+            // Over a full row the strip says so instead of offering the trash; the key will snap back.
+            drawLabel(canvas, hintRect, "Row is full", 14 * resources.displayMetrics.scaledDensity, palette.smallAccent, 255)
+            return
+        }
         if (drag != null) {
             val active = drag?.target?.type == T_REMOVE
             // Deleting a tray key is final, so that target fills with ink instead of the accent.

@@ -1412,6 +1412,11 @@ final class KeyboardView: UIView {
 
     private func drawToolbar() {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
+        if drag?.target?.type == .full {
+            // Over a full row the strip says so instead of offering the trash; the key will snap back.
+            drawText("Row is full", center: CGPoint(x: hintRect.midX, y: hintRect.midY), size: 14, color: palette.smallAccent, maxWidth: hintRect.width * 0.95)
+            return
+        }
         if drag != nil {
             let active = drag?.target?.type == .remove
             // Deleting a tray key is final, so that target fills with ink instead of the accent.
