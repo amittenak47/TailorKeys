@@ -5,8 +5,8 @@ enum AutocorrectMode: Int { case off, confident, aggressive }
 enum AutocorrectDetails {
     static let modes = [
         "Never changes what you type. Suggestions still appear.",
-        "Fixes clear typos: one wrong, missing or swapped letter (teh → the) and missing spaces (ofthe → of the). Real words stay as typed.",
-        "Also fixes several slips onto nearby keys (watwe → water), real words that don't fit the sentence (are you form → from) and stray spaces (key board → keyboard).",
+        "Fixes clear typos: one wrong, missing or swapped letter (teh → the), wrong keys when your taps landed close to the right ones, and missing spaces (ofthe → of the). Real words stay as typed.",
+        "Also fixes several wrong neighbouring keys (watwe → water), real words that don't fit the sentence (are you form → from) and stray spaces (key board → keyboard).",
     ]
     static func text(_ mode: Int) -> String {
         let detail = modes[min(max(mode, 0), modes.count - 1)]

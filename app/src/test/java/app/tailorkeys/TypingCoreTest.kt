@@ -31,18 +31,41 @@ class TypingCoreTest {
         p.updateContext("i am from new york and you are form", word)
         assertEquals("from", p.autocorrect(word, AutocorrectMode.AGGRESSIVE, "are", "you"))
     }
-    @Test fun aggressiveFixesSeveralNeighbouringKeySlips() {
+    /** Each tap lands [lean] of the way from the typed key's centre toward the intended key's. */
+    private fun leaningTaps(typed: String, intended: String, lean: Float) = ComposingTaps().also { taps ->
+        for ((i, ch) in typed.withIndex()) {
+            val (x, y) = SplitTaps.centres.getValue(ch); val (tx, ty) = SplitTaps.centres.getValue(intended[i])
+            taps.append(taps.word, ch.toString(), SplitTaps.distances(x + lean * (tx - x), y + lean * (ty - y)))
+        }
+    }
+    @Test fun severalWrongKeysFollowTheTaps() {
         for (neural in listOf(true, false)) {
             val p = Predictor({ File("src/main/assets", it).inputStream() }, Files.createTempDirectory("tk-slips").toFile(), enableModel = neural).apply { setLayout(SplitTaps.grid) }
-            for ((text, original, fix) in listOf(Triple("watwe", "watwe", "water"), Triple("I need to watwe", "watwe", "water"),
-                    Triple("watwe the plabge", "plabge", "plants"))) {
+            for ((text, original, fix) in listOf(Triple("I need to watwe", "watwe", "water"), Triple("watwe the plabge", "plabge", "plants"),
+                    Triple("say hwllp", "hwllp", "hello"), Triple("a smakk", "smakk", "small"))) {
+                // Without taps (pasted or edited text), Aggressive counts layout neighbours.
                 assertEquals("$neural $text", WordCorrection(original, fix), p.correction(text, AutocorrectMode.AGGRESSIVE))
-                assertEquals("$neural $text taps", WordCorrection(original, fix), p.correction(text, AutocorrectMode.AGGRESSIVE, SplitTaps.word(original)))
                 assertNull("$neural $text", p.correction(text, AutocorrectMode.CONFIDENT))
+                // Taps near the edge of the intended keys point at the word in both modes.
+                for (mode in listOf(AutocorrectMode.CONFIDENT, AutocorrectMode.AGGRESSIVE))
+                    assertEquals("$neural $mode $text", WordCorrection(original, fix), p.correction(text, mode, leaningTaps(original, fix, .45f)))
             }
-            // Several slips only land on common words: rare look-alikes stay as typed.
-            for (word in listOf("gotta", "covid")) assertNull("$neural $word", p.correction("I said $word", AutocorrectMode.AGGRESSIVE))
+            // Taps in the middle of the wrong keys are evidence against the word.
+            assertNull(p.correction("watwe the plabge", AutocorrectMode.AGGRESSIVE, leaningTaps("plabge", "plants", 0f)))
+            assertNull(p.correction("the watwe", AutocorrectMode.CONFIDENT, leaningTaps("watwe", "water", 0f)))
+            // A far key is not a slip, wherever the tap landed, and rare look-alikes stay as typed.
+            assertNull(p.correction("run the teadt", AutocorrectMode.AGGRESSIVE, leaningTaps("teadt", "tests", .45f)))
+            for (word in listOf("gotta", "covid")) for (mode in listOf(AutocorrectMode.CONFIDENT, AutocorrectMode.AGGRESSIVE)) {
+                assertNull("$neural $word", p.correction("I said $word", mode))
+                assertNull("$neural $word", p.correction("I said $word", mode, SplitTaps.word(word)))
+            }
         }
+    }
+    @Test fun earlierWordsChooseBetweenFixes() {
+        val p = model()
+        for ((text, fix) in listOf("I want to eat a burget" to "burger", "we need to cut the burget" to "budget",
+                "Lunch was great. I had a cheese burget" to "burger", "We met the finance team. They cut the burget" to "budget"))
+            assertEquals(text, WordCorrection("burget", fix), p.correction(text, AutocorrectMode.CONFIDENT))
     }
     @Test fun protectedInputsAndLearning() {
         val p = model()
