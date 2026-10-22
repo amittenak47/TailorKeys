@@ -666,6 +666,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         }
     }
 
+    /** The face one swipe step away from the shown face, wrapping both ways. */
+    private fun stackStep(item: GridKey, step: Int): Int {
+        val shown = shownIdx(item)
+        val code = item.keys[shown]
+        return StackSwipe.next(shown, item.keys.size, step, !KeyText.isLayerKey(code) || KeyText.layerOf(code) == state.layer)
+    }
+
     /** The face a swipe key shows: the one you swiped to, unless another key switched to a different layer. */
     private fun shownIdx(item: GridKey): Int {
         val n = item.keys.size
@@ -883,7 +890,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     return true
                 }
                 if (!item.isStack) return false
-                item.idx = (shownIdx(item) + step + item.keys.size) % item.keys.size
+                item.idx = stackStep(item, step)
                 listener?.onStackFace(item.keys[item.idx])
             }
         }
@@ -1145,9 +1152,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val dy = sw?.dy ?: 0f
         drawFace(canvas, code, rect, dy, fg, keyAlpha)
         if (item.isStack && dy != 0f) {
-            val n = item.keys.size
-            drawFace(canvas, item.keys[(face + 1) % n], rect, rect.height() + dy, fg, keyAlpha)
-            drawFace(canvas, item.keys[(face + n - 1) % n], rect, -rect.height() + dy, fg, keyAlpha)
+            drawFace(canvas, item.keys[stackStep(item, 1)], rect, rect.height() + dy, fg, keyAlpha)
+            drawFace(canvas, item.keys[stackStep(item, -1)], rect, -rect.height() + dy, fg, keyAlpha)
         }
         canvas.restore()
 
@@ -1634,7 +1640,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         }
     }
 
-    private class Swipe(val item: GridKey) { var dy = 0f; var stepped = false }
+    private class Swipe(val item: GridKey, val downAt: Long) { var dy = 0f; var stepped = false }
 
     private val timers = Handler(Looper.getMainLooper())
     private val trackers = LinkedHashMap<Int, Tracker>()
@@ -1811,7 +1817,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         if (chordKey == null) haptic(HapticFeedbackConstants.KEYBOARD_TAP)
         if (pk.item.isStack) {
             trackers[id] = Tracker(K_STACK, pk).also { it.x0 = x; it.y0 = y; it.tapX = x; it.tapY = y; pressLetter(it); timers.postDelayed(it.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong()) }
-            swipe = Swipe(pk.item)
+            swipe = Swipe(pk.item, time)
             invalidate()
             return
         }
@@ -1932,26 +1938,16 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 invalidateWave(t.waveX, t.waveX, t.select)
             }
             K_STACK -> {
-                // One swipe moves exactly one face; the rest of the gesture is ignored.
+                // One swipe moves exactly one face; the rest of the gesture is ignored. Small wobbles stay a tap.
                 val sw = swipe ?: return
                 if (t.consumed || sw.stepped) return
-                val dy = y - t.y0
-                if (abs(dy) > 5 * density) t.moved = true
+                val dx = (x - t.x0) / density
+                val dy = (y - t.y0) / density
+                if (!t.moved && StackSwipe.moved(dx, dy)) { t.moved = true; timers.removeCallbacks(t.longPress) }
                 if (!t.moved) return
-                timers.removeCallbacks(t.longPress)
                 val h = t.pk!!.rect.height()
-                sw.dy = dy.coerceIn(-h, h)
-                if (abs(dy) > h * 0.5f) {
-                    val item = sw.item
-                    val n = item.keys.size
-                    val j = (shownIdx(item) + (if (dy < 0) 1 else -1) + n) % n
-                    item.idx = j
-                    sw.stepped = true
-                    sw.dy = 0f
-                    listener?.onStackFace(item.keys[j])
-                    accessibilityEvent(placed.indexOf(t.pk), AccessibilityEvent.TYPE_VIEW_SELECTED)
-                    haptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                }
+                sw.dy = (y - t.y0).coerceIn(-h, h)
+                StackSwipe.direction(dx, dy, h / density).takeIf { it != 0 }?.let { stepStack(t, sw, it) }
                 invalidate()
             }
             K_KEY -> {
@@ -2024,8 +2020,15 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             }
             K_HANDLE -> if (t.moved && abs(t.lastX - t.x0) > 36 * density) slideKeyboard(t.lastX < t.x0)
             K_STACK -> {
-                if (swipe?.item === t.pk?.item) swipe = null
-                if (!t.moved && !t.consumed) emitKey(t.pk!!.item.keys[shownIdx(t.pk!!.item)], t.tapX, t.tapY)
+                val sw = swipe?.takeIf { it.item === t.pk?.item }
+                val dx = (t.tapX - t.x0) / density
+                val dy = (t.tapY - t.y0) / density
+                val moved = t.moved || StackSwipe.moved(dx, dy)
+                // A quick flick can lift before the finger travels far, e.g. downward off the bottom row.
+                if (sw != null && moved && !sw.stepped && !t.consumed)
+                    StackSwipe.flick(dx, dy, time - sw.downAt).takeIf { it != 0 }?.let { stepStack(t, sw, it) }
+                if (sw != null) swipe = null
+                if (!moved && !t.consumed) emitKey(t.pk!!.item.keys[shownIdx(t.pk!!.item)], t.tapX, t.tapY)
             }
             K_KEY -> if (!t.consumed) commit(t)
             K_GEAR -> listener?.onQuickOptions()
@@ -2110,6 +2113,16 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             }
             listener?.onTapKey(code, tapDistances)
         } else listener?.onKey(code)
+    }
+
+    private fun stepStack(t: Tracker, sw: Swipe, step: Int) {
+        val item = sw.item
+        item.idx = stackStep(item, step)
+        sw.stepped = true
+        sw.dy = 0f
+        listener?.onStackFace(item.keys[item.idx])
+        accessibilityEvent(placed.indexOf(t.pk), AccessibilityEvent.TYPE_VIEW_SELECTED)
+        haptic(HapticFeedbackConstants.KEYBOARD_TAP)
     }
 
     private fun pressLetter(t: Tracker) {
