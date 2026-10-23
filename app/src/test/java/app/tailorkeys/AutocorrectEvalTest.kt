@@ -123,6 +123,81 @@ class AutocorrectEvalTest {
         println("TK_AC_EVAL correction time: median %.2f ms, p95 %.2f ms over ${times.size} calls (desktop JVM)".format(times[times.size / 2] / 1e6, times[times.size * 95 / 100] / 1e6))
     }
 
+    /**
+     * TK_AC_EVAL=1 TK_AC_LOOKBACK=1: whole held-out sentences typed word by word as the keyboard does it (correct
+     * each word at its space, then look back one word). Clean sentences measure wrong revisions; sentences with
+     * one real-word slip (fits typed as fire) measure how often look-back repairs it.
+     */
+    @Test fun lookBackReport() {
+        assumeTrue(System.getenv("TK_AC_EVAL") == "1" && System.getenv("TK_AC_LOOKBACK") == "1")
+        val data = File(System.getenv("TK_LM_DATA") ?: "../../tk-lm-data")
+        val predictor = Predictor({ File(assets, it).inputStream() }, Files.createTempDirectory("tk-ac-lookback").toFile()).apply { setLayout(SplitTaps.grid) }
+        val r = Random(System.getenv("TK_AC_SEED")?.toInt() ?: 11)
+        val tokens = Regex(""""t":\[([^\]]*)]""")
+        val sentences = listOf("soda", "tatoeba", "common_voice").flatMap { source ->
+            java.util.zip.GZIPInputStream(File(data, "processed/$source.eval.jsonl.gz").inputStream()).bufferedReader().useLines { lines ->
+                lines.mapNotNull { line -> tokens.find(line)?.groupValues?.get(1)?.split(',')?.map { it.trim().trim('"') } }
+                    .filter { it.size in 4..16 && it.all { t -> t.isNotEmpty() && t.all { c -> c in centres } } }.take(250).toList()
+            }
+        }
+        /** Types [typed] (with [taps]) as the keyboard would; returns the final words and the time look-back took. */
+        var revisions = 0
+        val revisionExamples = ArrayList<String>()
+        fun typeSentence(typed: List<Typed>, times: MutableList<Long>): List<String> {
+            val words = ArrayList<String>()
+            for (i in typed.indices) {
+                val before = words.joinToString("") { "$it " }
+                val word = predictor.correction(before + typed[i].text, AutocorrectMode.AGGRESSIVE, typed[i].taps, allowJoin = false)?.replacement ?: typed[i].text
+                if (i > 0) {
+                    val start = System.nanoTime()
+                    predictor.lookBack(before, typed[i - 1].text, typed[i - 1].taps, word, AutocorrectMode.AGGRESSIVE)?.let {
+                        revisions++
+                        if (revisionExamples.size < 15) revisionExamples += "${words[i - 1]} $word -> $it $word"
+                        words[i - 1] = it
+                    }
+                    times += System.nanoTime() - start
+                }
+                words += word
+            }
+            return words
+        }
+        val times = ArrayList<Long>()
+        var cleanWords = 0; var cleanRevised = 0; var cleanLookBacks = 0
+        var slipped = 0; var repaired = 0; var wrong = 0
+        val examples = ArrayList<String>()
+        for (sentence in sentences) {
+            // Careful typing: every tap near its own key.
+            val revisionsBefore = revisions
+            val clean = typeSentence(sentence.map { type(noisy(it, .12f, r)) }, times)
+            cleanLookBacks += revisions - revisionsBefore
+            cleanWords += sentence.size
+            cleanRevised += sentence.indices.count { clean[it] != sentence[it] && clean.size == sentence.size }
+            // One word slips onto another real word, the taps leaning back toward the meant keys.
+            val i = sentence.indices.filter { it < sentence.lastIndex && sentence[it].length in 3..10 }.randomOrNull(r) ?: continue
+            val meant = sentence[i]
+            val slip = (0 until 200).firstNotNullOfOrNull {
+                val points = noisy(meant, .42f, r)
+                val text = points.joinToString("") { (x, y) -> nearest(x, y).toString() }
+                if (text != meant && predictor.hasWord(text)) points.mapIndexed { k, (x, y) ->
+                    val (cx, cy) = centre(meant[k]); val (tx, ty) = centre(text[k])
+                    // Land 45% of the way from the typed key back toward the meant one.
+                    if (text[k] == meant[k]) x to y else tx + .45f * (cx - tx) to ty + .45f * (cy - ty)
+                } else null
+            } ?: continue
+            val typed = sentence.mapIndexed { k, w -> if (k == i) type(slip) else type(noisy(w, .12f, r)) }
+            val result = typeSentence(typed, times)
+            slipped++
+            when (result[i]) { meant -> repaired++; typed[i].text -> {}; else -> wrong++ }
+            if (result[i] != meant && examples.size < 12) examples += "...${sentence.subList(maxOf(0, i - 2), minOf(sentence.size, i + 2)).joinToString(" ")}: ${typed[i].text} -> ${result[i]}"
+        }
+        times.sort()
+        println("TK_AC_EVAL careful sentences: $cleanRevised of $cleanWords correct words changed in all, $cleanLookBacks of them by look-back")
+        revisionExamples.forEach { println("TK_AC_EVAL   revised: $it") }
+        println("TK_AC_EVAL look-back on real-word slips: repaired $repaired of $slipped (${100 * repaired / maxOf(1, slipped)}%), wrong $wrong")
+        println("TK_AC_EVAL look-back time: median %.2f ms, p95 %.2f ms (desktop JVM)".format(times[times.size / 2] / 1e6, times[times.size * 95 / 100] / 1e6))
+        examples.forEach { println("TK_AC_EVAL   missed: $it") }
+    }
+
     @Test fun report() {
         assumeTrue(System.getenv("TK_AC_EVAL") == "1")
         val predictor = Predictor({ File(assets, it).inputStream() }, Files.createTempDirectory("tk-ac-eval").toFile(),

@@ -16,6 +16,12 @@ class ComposingTaps {
 
     fun clear() { sync(""); revision++ }
 
+    /** An independent copy, kept for look-back after the word is finished and these rows are reused. */
+    fun copy() = ComposingTaps().also { c ->
+        costs.copyInto(c.costs); known.copyInto(c.known); entered.copyInto(c.entered)
+        c.count = count; c.enteredCount = enteredCount; c.word = word
+    }
+
     fun sync(prefix: String) {
         if (word == prefix) return
         known.fill(false); entered.fill(false)

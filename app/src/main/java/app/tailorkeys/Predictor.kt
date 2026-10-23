@@ -368,28 +368,9 @@ class Predictor internal constructor(
             // of the intended key costs almost nothing, one in the middle of a neighbouring key about 4.
             // Confident only follows taps that point at the word; Aggressive allows about one full slip per
             // two letters (watwe -> water), using layout neighbours when there are no taps. Common words only.
-            // Four-letter words get two slips only when taps back them (dewr -> fear).
-            val slips = when {
-                known || p.length < 4 -> -1
-                p.length == 4 -> if (mode == AutocorrectMode.AGGRESSIVE && spatial != null) 8 else -1
-                mode == AutocorrectMode.AGGRESSIVE -> 4 * (p.length / 2)
-                spatial != null -> p.length
-                else -> -1
-            }
-            // With taps, one skipped key plus half the slips may shift the rest of the word (betwrn -> between).
-            // Not an extra key: dropping a clean tap is weak evidence (teadt stays), and one extra key alone is
-            // already a small edit.
-            // Without taps a guessed shift is too weak against same-length readings (plabge is plants, not plane).
-            // The top 5,000 words take the full budget; less common ones only half, so clean taps on the wrong
-            // keys can't land on them (covid stays, not civic) while taps leaning their way still do.
-            fun slipBudget(w: String): Int {
-                val r = rank[w] ?: Int.MAX_VALUE
-                val budget = if (r < 5000) slips else if (r < MULTI_SLIP_RANK) slips / 2 else return -1
-                return when (w.length - p.length) { 0 -> budget; 1 -> if (spatial != null) budget / 2 + 12 else -1; else -> -1 }
-            }
+            val slips = if (known) -1 else slips(p, mode, spatial)
             val ranked = candidates(p, prev, prev2, taps, scores).asSequence()
-                .filter { !history.blocked(word, it.word) && kotlin.math.abs(it.word.length - p.length) <= 1 &&
-                    (CorrectionRules.smallEdit(p, it.word) || slips >= 0 && cost(p, it.word, 22, rows, spatial, complete = true) <= slipBudget(it.word)) }
+                .filter { !history.blocked(word, it.word) && reachable(p, it.word, slips, spatial, rows) }
                 .filter {
                     if (p.length > 3) true
                     else if (p.length == 3 && common(it.word) && CorrectionRules.transposition(p, it.word)) true
@@ -433,6 +414,79 @@ class Predictor internal constructor(
             return result?.let { matchCase(it.first, word) }
         }
         return if (english != null) english.withScores { decide(it) } else decide(null)
+    }
+
+    /**
+     * How many tenths of slips an unknown word may carry. Four-letter words get two slips only when taps back them
+     * (dewr -> fear); Confident only follows taps that point at the word; Aggressive allows about one full slip per
+     * two letters (watwe -> water), using layout neighbours when there are no taps.
+     */
+    private fun slips(p: String, mode: AutocorrectMode, spatial: ComposingTaps?) = when {
+        p.length < 4 -> -1
+        p.length == 4 -> if (mode == AutocorrectMode.AGGRESSIVE && spatial != null) 8 else -1
+        mode == AutocorrectMode.AGGRESSIVE -> 4 * (p.length / 2)
+        spatial != null -> p.length
+        else -> -1
+    }
+
+    /**
+     * Whether typed [p] could have been meant as [w]: one small edit, or within the slip budget.
+     * The top 5,000 words take the full budget; less common ones only half, so clean taps on the wrong keys can't
+     * land on them (covid stays, not civic) while taps leaning their way still do. With taps, one skipped key plus
+     * half the slips may shift the rest of the word (betwrn -> between). Not an extra key: dropping a clean tap is
+     * weak evidence (teadt stays), and one extra key alone is already a small edit. Without taps a guessed shift is
+     * too weak against same-length readings (plabge is plants, not plane).
+     */
+    private fun reachable(p: String, w: String, slips: Int, spatial: ComposingTaps?, rows: Array<IntArray>): Boolean {
+        if (abs(w.length - p.length) > 1) return false
+        if (CorrectionRules.smallEdit(p, w)) return true
+        if (slips < 0) return false
+        val r = rank[w] ?: Int.MAX_VALUE
+        val budget = if (r < 5000) slips else if (r < MULTI_SLIP_RANK) slips / 2 else return false
+        val limit = when (w.length - p.length) { 0 -> budget; 1 -> if (spatial != null) budget / 2 + 12 else return false; else -> return false }
+        return cost(p, w, 22, rows, spatial, complete = true) <= limit
+    }
+
+    /**
+     * Look-back: once the next word is finished, re-checks the previous one against the words on both sides
+     * (chair fire perfectly -> chair fits perfectly). Real words count too: here the next word is the evidence.
+     * [before] is the text up to and including the previous word and one space; [typed] is what was tapped for it
+     * (it may have been autocorrected since), [taps] its tap rows and [next] the word just finished.
+     * Returns the previous word's replacement, or null to leave it. English model only.
+     */
+    fun lookBack(before: String, typed: String, taps: ComposingTaps?, next: String, mode: AutocorrectMode): String? {
+        val english = english ?: return null
+        if (mode == AutocorrectMode.OFF || !before.endsWith(" ")) return null
+        val committed = before.dropLast(1).takeLastWhile(TextInputRules::wordChar)
+        val p = typed.lowercase(); val current = committed.lowercase(); val following = next.lowercase()
+        if (p.length < 3 || following.isEmpty() || !CorrectionRules.eligible(typed) || !CorrectionRules.eligible(committed) ||
+            !CorrectionRules.eligible(next) || isLearned(p) && !rank.containsKey(p) || typedTwice(p)) return null
+        updateContext(before, "")
+        return english.withScores { scores ->
+            if (scores == null || scores.lastWord != current) return@withScores null
+            val rows = Array(3) { IntArray(p.length + 1) }
+            val spatial = taps?.takeIf { it.hasTaps(typed) }
+            val slips = slips(p, AutocorrectMode.AGGRESSIVE, spatial)
+            fun typo(w: String) = if (w == p) 0.0 else TYPO_WEIGHT * cost(p, w, 22, rows, spatial, complete = true) / 10.0
+            fun left(w: String) = scores.preceding(w, rank[w]) - typo(w) - history.penalty(w) -
+                if (rank.containsKey(w) || user.containsKey(w)) 0.0 else UNKNOWN_WORD_DOUBT
+            // Each right-side score steps the model once, so only the best few by the left side get one.
+            val pool = candidates(p, null, null, spatial, null).asSequence().map { it.word }
+                .filter { it != current && !history.blocked(committed, it) && reachable(p, it, slips, spatial, rows) }
+                .sortedByDescending(::left).take(LOOK_BACK_CANDIDATES).toList()
+            if (pool.isEmpty()) return@withScores null
+            val rightRank = rank[following]
+            val keep = left(current) + scores.following(current, following, rightRank)
+            val margin = if (mode == AutocorrectMode.CONFIDENT) 4.5 else LOOK_BACK_MARGIN
+            // A log probability is at most 0, so a candidate whose left side alone can't clear the margin never
+            // will: most words stop here after one model step instead of one per candidate.
+            val hopeful = pool.filter { left(it) - keep >= margin }
+            if (hopeful.isEmpty()) return@withScores null
+            val ranked = hopeful.map { it to left(it) + scores.following(it, following, rightRank) }.sortedByDescending { it.second }
+            val best = ranked.first()
+            if (best.second - keep < margin || ranked.getOrNull(1)?.let { best.second - it.second < 1.0 } == true) null
+            else matchCase(best.first, committed)
+        }
     }
 
     /** A bounded editor span, used by both IMEs so joins share ordinary correction undo. */
@@ -714,6 +768,9 @@ class Predictor internal constructor(
         // words (perfectly #6657, beside #5474, fits #9978). 30,000 fixed slightly more but let slang become rare
         // words (gotta -> goths #28061).
         const val MULTI_SLIP_RANK = 15_000
+        /** Look-back revises the previous word only when both sides together prefer another by this many nats. */
+        const val LOOK_BACK_MARGIN = 3.0
+        const val LOOK_BACK_CANDIDATES = 6
         /** Layout neighbours: centres within this many key sizes. */
         const val NEAR = 1.5f
     }

@@ -231,6 +231,9 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private var chosenAfter: String? = null
     private var chosenSelection = 0 to 0
     private var armedUndo: ReversibleCommit? = null
+    /** A word finished with a space: what was tapped, its taps, and the text ending with it, for look-back. */
+    private class FinishedWord(val typed: String, val taps: ComposingTaps?, val tail: String)
+    private var lastWord: FinishedWord? = null
 
     override fun onWheelChosen() = editorPhase { onWheelChosenPhase() }
 
@@ -267,6 +270,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val ic = currentInputConnection ?: return false
         val restore = undo.undo(editor().before.takeLast(64), editor().after.take(64), editor().selected) ?: return false
         armedUndo = null // Reverting discards the deferred learning increment.
+        lastWord = null
         clearTaps()
         clearChoice(); clearGlide()
         ic.beginBatchEdit()
@@ -592,6 +596,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         super.onStartInputView(info, restarting)
         if (info.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0) learn = false
         onChoiceInterrupted()
+        lastWord = null
         clearTaps()
         models.values.forEach { it.predictor.resetContext() }
         val cls = info.inputType and InputType.TYPE_MASK_CLASS
@@ -741,10 +746,15 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         if (code == Keys.BACKSPACE) { armedUndo = null; pendingLearning = null }
         else if (code == Keys.SPACE || code == Keys.ENTER || code.length == 1) { keepPendingLearning(); finishArmedLearning() }
         val separator = if (code == Keys.SPACE) " " else code.takeIf { it.length == 1 && it[0] in ".,?!;:" }
+        // Taken before the word is corrected or picked, while its taps still describe it.
+        val finishing = if (separator == " ") finishingWord() else null
+        if (separator != " ") lastWord = null
         if (separator != null && commitArmed(separator)) {
+            lastWord = null
             updateSuggestions(); keyboardView?.refreshInputState(); return
         }
         if (separator != null && correctWord(separator)) {
+            lookBack(finishing)
             updateSuggestions(); keyboardView?.refreshInputState(); return
         }
         clearChoice()
@@ -790,8 +800,47 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             }
         }
         if (endedBefore != null) deferLearning(endingGlide ?: currentWord(endedBefore), previousWord(endedBefore), previousWord2(endedBefore))
+        if (separator == " ") lookBack(finishing)
         updateSuggestions(letterCommitted)
         keyboardView?.refreshInputState()
+    }
+
+    private fun finishingWord(): FinishedWord? {
+        if (state.layer != Layer.ABC || currentGlide()) return null
+        val word = editor().before.takeLastWhile(TextInputRules::wordChar).takeIf { it.isNotEmpty() } ?: return null
+        return FinishedWord(word, taps.takeIf { it.hasTaps(word) }?.copy(), "")
+    }
+
+    /**
+     * Look-back: with the word just finished by a space, re-checks the one before it against both neighbours
+     * (chair fire perfectly -> chair fits perfectly), then remembers this word for the next space. Only when the
+     * text still ends exactly as both words were left; backspace right after undoes it like an autocorrection.
+     */
+    private fun lookBack(finished: FinishedWord?) {
+        val previous = lastWord
+        lastWord = null
+        if (finished == null) return
+        val read = editor()
+        val before = read.before
+        val word = before.dropLast(1).takeLastWhile(TextInputRules::wordChar)
+        if (!before.endsWith(" ") || word.isEmpty() || read.selected) return
+        val head = before.dropLast(word.length + 1)
+        val old = head.dropLast(1).takeLastWhile(TextInputRules::wordChar)
+        if (previous != null && modelReady && correctAllowed && old.isNotEmpty() && head.endsWith(previous.tail) &&
+            read.after.firstOrNull()?.let(TextInputRules::wordChar) != true) {
+            val fix = predictor.lookBack(head, previous.typed, previous.taps, word, AutocorrectMode.entries[settings.int(Prefs.AUTOCORRECT)])
+            val ic = currentInputConnection
+            if (fix != null && fix != old && ic != null) {
+                val rest = " $word "
+                ic.beginBatchEdit()
+                ic.deleteSurroundingText(old.length + rest.length, 0)
+                ic.commitText(fix + rest, 1)
+                editorRead = null
+                ic.endBatchEdit()
+                armedUndo = ReversibleCommit("$old $word", fix + rest, " ", editor().before.takeLast(64), editor().after.take(64), correction = true) {}
+            }
+        }
+        lastWord = FinishedWord(finished.typed, finished.taps, editor().before.takeLast(48))
     }
 
     override fun onSelectMode(on: Boolean) {

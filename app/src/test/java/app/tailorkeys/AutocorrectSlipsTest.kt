@@ -36,6 +36,16 @@ class AutocorrectSlipsTest {
         assertEquals(null, predictor.correction("knw", AutocorrectMode.AGGRESSIVE, taps("knw", "---")))
     }
 
+    @Test fun lookBackRevisesARealWordOnceTheNextWordShowsItIsWrong() {
+        // "fire" is a real word, so it survives its own space; "perfectly" after it gives it away.
+        val fire = taps("fire", "--ts")
+        assertEquals(null, predictor.correction("this small wooden chair fire", AutocorrectMode.AGGRESSIVE, fire))
+        assertEquals("fits", predictor.lookBack("this small wooden chair fire ", "fire", fire, "perfectly", AutocorrectMode.AGGRESSIVE))
+        // A word that fits both sides stays.
+        assertEquals(null, predictor.lookBack("we sat by the fire ", "fire", taps("fire", "----"), "tonight", AutocorrectMode.AGGRESSIVE))
+        assertEquals(null, predictor.lookBack("this small wooden chair fire ", "fire", fire, "perfectly", AutocorrectMode.OFF))
+    }
+
     @Test fun aSkippedKeyPlusASlipShiftsToTheWord() {
         assertEquals("between", fix("betwrn", "----e-"))
         assertEquals("between", fix("bwtwen", "-e----"))
