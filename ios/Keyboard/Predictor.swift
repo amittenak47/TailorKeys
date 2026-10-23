@@ -61,6 +61,13 @@ final class Predictor {
     private var cachedScores: EnglishContext.Scores?
     private var cachedScoreVersion: UInt64?
     private static let persistence = LearningStore.queue
+    // Autocorrect's final ranking with the English model, tuned with the Android AutocorrectEvalTest (simulated
+    // sloppy taps, skipped and extra keys, unseen words held out). Tap costs are about 0.5 nats per unit; at the old
+    // 2.5 per ten, very common short words outvoted taps that clearly pointed elsewhere (notr -> not, not note).
+    // Without the model (other languages) the untuned 2.5 and 4.6 stay.
+    static let typoWeight = 4.0
+    /// How much less an unknown typed word is believed than a dictionary word; was 4.6.
+    static let unknownWordDoubt = 6.5
     private static let wordLimit = 5000, contextLimit = 256, followerLimit = 32
     private var learningDirty = false
     private var saveWork: DispatchWorkItem?
@@ -234,7 +241,7 @@ final class Predictor {
         let prefixLength = min(p.count, w.count)
         if p.count - prefixLength > band { return 1000 }
         let whole = abs(w.count - p.count) <= 2
-        let end = min(whole ? w.count : prefixLength, p.count + band)
+        let end = min(whole ? w.count : min(w.count, prefixLength + 1), p.count + band)
         for j in previous.indices { older[j] = 1000; previous[j] = 1000; current[j] = 1000 }
         for j in 0...min(p.count, band) { previous[j] = j * edit }
         var previousMin = 0
@@ -257,7 +264,11 @@ final class Predictor {
                 current[j] = value
                 rowMin = min(rowMin, value)
             }
-            if (!complete && i == prefixLength) || whole && i == w.count { best = min(best, current[p.count]) }
+            // A prefix may also match one letter more or less of the word: a skipped or extra key shifts the
+            // rest of it, and that should cost one edit, not a slip on every later letter.
+            if !complete && i == prefixLength { best = min(best, current[p.count]) }
+            if !complete && (i == p.count - 1 || i == p.count + 1) && i != prefixLength { best = min(best, current[p.count] + 4) }
+            if whole && i == w.count { best = min(best, current[p.count]) }
             // A transposition can jump over one over-budget row, but never two.
             if rowMin > bound && previousMin > bound { break }
             previousMin = rowMin
@@ -395,15 +406,29 @@ final class Predictor {
             // of the intended key costs almost nothing, one in the middle of a neighbouring key about 4.
             // Confident only follows taps that point at the word; Aggressive allows about one full slip per
             // two letters (watwe -> water), using layout neighbours when there are no taps. Common words only.
+            // Four-letter words get two slips only when taps back them (dewr -> fear).
             let slips: Int
-            if known || p.count < 5 { slips = -1 }
+            if known || p.count < 4 { slips = -1 }
+            else if p.count == 4 { slips = mode == .aggressive && spatial != nil ? 8 : -1 }
             else if mode == .aggressive { slips = 4 * (p.count / 2) }
             else if spatial != nil { slips = p.count }
             else { slips = -1 }
+            // With taps, one skipped key plus half the slips may shift the rest of the word (betwrn -> between).
+            // Not an extra key: dropping a clean tap is weak evidence (teadt stays), and one extra key alone is
+            // already a small edit. Without taps a guessed shift is too weak (plabge is plants, not plane).
             let ranked = candidates(p, prev, prev2, taps, scores)
-                .filter { !history.blocked(word, $0.word) && abs($0.word.count - p.count) <= 1 &&
-                    (CorrectionRules.smallEdit(p, $0.word) || $0.word.count == p.count && common($0.word) &&
-                        cost(letters, CompactLetters($0.word), 22, &older, &previous, &current, spatial, complete: true) <= slips) }
+                .filter { candidate in
+                    guard !history.blocked(word, candidate.word) && abs(candidate.word.count - p.count) <= 1 else { return false }
+                    if CorrectionRules.smallEdit(p, candidate.word) { return true }
+                    guard slips >= 0 && common(candidate.word) else { return false }
+                    let budget: Int
+                    switch candidate.word.count - p.count {
+                    case 0: budget = slips
+                    case 1: budget = spatial != nil ? slips / 2 + 12 : -1
+                    default: budget = -1
+                    }
+                    return cost(letters, CompactLetters(candidate.word), 22, &older, &previous, &current, spatial, complete: true) <= budget
+                }
                 .filter { candidate in
                     if p.count > 3 { return true }
                     if p.count == 3 && common(candidate.word) && CorrectionRules.transposition(p, candidate.word) { return true }
@@ -415,9 +440,10 @@ final class Predictor {
                 }
                 .map { candidate -> (String, Double) in
                     let distance = cost(letters, CompactLetters(candidate.word), 22, &older, &previous, &current, spatial, complete: true)
-                    return (candidate.word, candidate.score + (scores != nil ? 32.0 : 2.5) * Double(candidate.distance) / 10 - 2.5 * Double(distance) / 10 - history.penalty(candidate.word))
+                    return (candidate.word, candidate.score + (scores != nil ? 32.0 : 2.5) * Double(candidate.distance) / 10 -
+                        (scores != nil ? Predictor.typoWeight : 2.5) * Double(distance) / 10 - history.penalty(candidate.word))
                 }.sorted { $0.1 > $1.1 }
-            let keep = wordScore(p, prev, prev2, scores) - (known ? 0 : 4.6)
+            let keep = wordScore(p, prev, prev2, scores) - (known ? 0 : scores != nil ? Predictor.unknownWordDoubt : 4.6)
             let margin = mode == .confident ? 1.2 : 0.8
             var result: (String, Double)?
             if let best = ranked.first {

@@ -62,7 +62,8 @@ internal class CandidateIndex(words: Collection<String>) {
             }
             // At this depth every descendant can use the same prefix match. Final scoring still
             // applies the original first-letter gate, extra cost and whole-word rules unchanged.
-            if (depth == prefix.length && current[prefix.length] <= limit) { collect(node); return }
+            // One level either side too: a skipped or extra key shifts the typed prefix (decl -> del).
+            if (depth >= prefix.length - 1 && depth <= prefix.length + 1 && current[prefix.length] <= limit) { collect(node); return }
             if (node.terminal && current[prefix.length] <= limit) correction(words[node.from])
             if (rowMin > limit && previousMin > limit || depth >= prefix.length + band) return
             if (depth == DEPTH) {

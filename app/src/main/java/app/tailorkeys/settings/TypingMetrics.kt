@@ -36,7 +36,8 @@ internal class TypingSession(val mode: TypingMode, val sentence: String = "", va
     private var assistedEdit: Pair<String, String>? = null
     var peakWpm = 0.0; private set
     val samples: List<SpeedSample> get() = history
-    val complete get() = mode == TypingMode.TEST && text.length >= sentence.length && sentence.isNotEmpty()
+    // "door " isn't finished when the sentence ends "door.": the space waits for automatic punctuation.
+    val complete get() = mode == TypingMode.TEST && text.trimEnd().length >= sentence.length && sentence.isNotEmpty()
     val slips: Set<Int> get() = wrongPositions
     val progress: Float get() = if (mode == TypingMode.TEST && sentence.isNotEmpty())
         (text.length.toFloat() / sentence.length).coerceIn(0f, 1f) else 0f
@@ -78,7 +79,7 @@ internal class TypingSession(val mode: TypingMode, val sentence: String = "", va
         typedCharacters += (added - removed).coerceAtLeast(0)
         if (startedAt != null) progressPoints.add(ProgressPoint(now, typedCharacters))
         if (mode == TypingMode.TEST) for (i in prefix until next.length - suffix) {
-            if (i >= sentence.length || !next[i].equals(sentence[i], ignoreCase = true)) {
+            if (slip(next, i)) {
                 wrongPositions += i
                 wrongKeystrokes++
                 mistake = true
@@ -91,11 +92,19 @@ internal class TypingSession(val mode: TypingMode, val sentence: String = "", va
 
     fun metrics(now: Long): TypingMetrics {
         val elapsed = startedAt?.let { ((finishedAt ?: now) - it).coerceAtLeast(0) } ?: 0
-        val wrong = if (mode == TypingMode.TEST) text.indices.count { it >= sentence.length || !text[it].equals(sentence[it], true) } else 0
+        val typed = text.trimEnd()
+        val wrong = if (mode == TypingMode.TEST) typed.indices.count { slip(typed, it) } else 0
         val accuracy = if (mode == TypingMode.TEST) {
-            if (text.isEmpty()) 1.0 else (text.length - wrong).toDouble() / text.length
+            if (typed.isEmpty()) 1.0 else (typed.length - wrong).toDouble() / typed.length
         } else if (inserted == 0) 1.0 else (inserted - corrections).coerceAtLeast(0).toDouble() / inserted
         return TypingMetrics(wpm(text.length, elapsed), accuracy, if (mode == TypingMode.TEST) wrongKeystrokes else corrections, elapsed)
+    }
+
+    /** Spaces past the end, and one where the final punctuation goes (automatic punctuation replaces it), aren't slips. */
+    private fun slip(typed: CharSequence, i: Int): Boolean = when {
+        i >= sentence.length -> !typed[i].isWhitespace()
+        typed[i].equals(sentence[i], ignoreCase = true) -> false
+        else -> !(i == sentence.lastIndex && typed[i].isWhitespace() && !sentence[i].isLetterOrDigit())
     }
 
     fun sample(now: Long, mistake: Boolean = false) {

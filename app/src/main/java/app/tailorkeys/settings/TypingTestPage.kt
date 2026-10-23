@@ -57,7 +57,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: () -> Unit) {
     val context = LocalContext.current
@@ -77,11 +77,16 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
     var finished by remember(session) { mutableStateOf(false) }
     var thisTest by remember(session) { mutableStateOf<TypingResult?>(null) }
     var applied by remember { mutableStateOf(entry.key == state.library.inUse) }
+    // Opening runs as a pipeline, one stage at a time: the morph alone, then the trial layout, then the IME,
+    // and the dictionary only once you type.
+    val settled = rememberLayoutSettled()
+    var wantWords by remember { mutableStateOf(false) }
     fun keyboardLabel(id: String): String = if (isTailorKeysIme(id)) "TailorKeys" else
         context.getSystemService(InputMethodManager::class.java).inputMethodList.firstOrNull { it.id == id }?.loadLabel(context.packageManager)?.toString() ?: id.substringBefore('/').substringAfterLast('.').ifBlank { "Keyboard" }
-    val label = keyboardLabel(keyboardId)
+    val label = remember(keyboardId) { keyboardLabel(keyboardId) }
     val average = remember(entry.key, generation, mode, keyboardId) { state.library.results(entry.key).filter { keyboardGroup(it.keyboard) == keyboardGroup(keyboardId) }.map { it.wpm }.average().takeIf { it.isFinite() } }
-    val words by produceState<Set<String>>(emptySet(), state.settings.currentLanguage()) {
+    val words by produceState<Set<String>>(emptySet(), state.settings.currentLanguage(), wantWords) {
+        if (!wantWords) return@produceState
         value = withContext(Dispatchers.IO) {
             DictionaryWords.read({ context.assets.open(it) }, state.settings.currentLanguage(), unique = true).toHashSet()
         }
@@ -105,12 +110,15 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
             context.contentResolver.unregisterContentObserver(observer); lifecycle.removeObserver(events)
         }
     }
-    DisposableEffect(tailorkeys, entry.key) {
-        if (tailorkeys) state.library.beginTrial(entry) else state.library.restoreTrial()
+    // The trial writes preferences synchronously and makes both keyboards reload, so it waits for the morph.
+    DisposableEffect(tailorkeys, entry.key, settled) {
+        if (settled) { if (tailorkeys) state.library.beginTrial(entry) else state.library.restoreTrial() }
         onDispose { state.library.restoreTrial() }
     }
-    // Ask for the real keyboard straight away, so it slides in once while the page opens.
-    LaunchedEffect(session, comparing) {
+    LaunchedEffect(session, comparing, settled) {
+        if (!settled) return@LaunchedEffect
+        // Give the trial layout's reload its own frame, then slide the keyboard in once, already showing it.
+        withFrameNanos { }
         if (!session.complete && !comparing) {
             focus.requestFocus()
             keyboard?.show()
@@ -130,8 +138,11 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
         generation++
     }
     Column(Modifier.fillMaxSize().background(colors.background)
-        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
-        .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom))) {
+        // safeDrawing without the IME, whose bottom-only animation would still invalidate this padding every frame.
+        .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+        // The keyboard's final height, not its animated one: the card is top-aligned, so following the slide
+        // frame by frame only relaid out the page on every frame of it.
+        .windowInsetsPadding(WindowInsets.imeAnimationTarget.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom))) {
         Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onBack, Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = "Back to layouts" }) { Text("←", fontSize = 24.sp) }
             Column(Modifier.weight(1f)) {
@@ -212,6 +223,7 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
                                     val active = currentIme()
                                     if (active != keyboardId) { session = session.forKeyboard(active); keyboardId = active; return@BasicTextField }
                                     fieldValue = next
+                                    if (next.text.isNotEmpty()) wantWords = true
                                     tick = SystemClock.elapsedRealtime()
                                     if (next.text.isNotEmpty()) session.startTyping(tick)
                                     if (next.composition == null) {

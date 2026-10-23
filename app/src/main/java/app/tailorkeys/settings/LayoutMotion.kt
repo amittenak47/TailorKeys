@@ -14,12 +14,15 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.graphics.graphicsLayer
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 internal val LocalLayoutSharedScope = staticCompositionLocalOf<SharedTransitionScope?> { null }
 internal val LocalLayoutVisibility = staticCompositionLocalOf<AnimatedVisibilityScope?> { null }
 internal val LocalLayoutReducedMotion = staticCompositionLocalOf { false }
-internal val LocalLayoutEntering = staticCompositionLocalOf { true }
+// Dynamic: flipping it on Try must only recompose the morphing cards, not the whole settings tree.
+internal val LocalLayoutEntering = compositionLocalOf { true }
 internal val LayoutEmphasis = CubicBezierEasing(.2f, 0f, 0f, 1f)
 
 /** System animation scale zero must still allow the specified short, stationary cross-fade. */
@@ -48,6 +51,32 @@ internal fun ReducedLayoutCrossfade(target: LayoutEntry?, content: @Composable (
             }) { content(entry) }
         } }
     }
+}
+
+/**
+ * False during most of the page's enter transition, then true. Work that would compete with the morph for
+ * frames (preference writes, the IME sliding in, big loads) waits for it. It starts at 65% of the morph: with
+ * the emphasized easing the card has covered about 95% of its path by then, so a short hitch is hard to see
+ * and the IME slide overlaps the morph's tail instead of starting after it.
+ */
+@OptIn(ExperimentalAnimationApi::class)
+@Composable
+internal fun rememberLayoutSettled(): Boolean {
+    val visibility = LocalLayoutVisibility.current
+    val reduced = LocalLayoutReducedMotion.current
+    var settled by remember { mutableStateOf(visibility == null && !reduced) }
+    LaunchedEffect(visibility) {
+        if (visibility != null) snapshotFlow {
+            visibility.transition.run {
+                !isRunning && currentState == EnterExitState.Visible ||
+                    targetState == EnterExitState.Visible && totalDurationNanos > 0 && playTimeNanos >= totalDurationNanos * 13 / 20
+            }
+        }.first { it }
+        // The reduced cross-fade runs unscaled for 120ms.
+        else if (reduced) delay(120)
+        settled = true
+    }
+    return settled
 }
 
 @Composable

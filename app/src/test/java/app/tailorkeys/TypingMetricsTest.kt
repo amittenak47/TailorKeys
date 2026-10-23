@@ -23,6 +23,18 @@ class TypingMetricsTest {
         assertSame(key, nextTypingKey(grid, ",", 0))
         assertNull(nextTypingKey(grid, "🙂", 0))
     }
+    @Test fun testWaitsForAutomaticPunctuationAfterTheLastWord() {
+        val s = TypingSession(TypingMode.TEST, "Go home.")
+        s.update("Go home", 1_000)
+        s.update("Go home ", 2_000)
+        assertFalse(s.complete)
+        // Automatic punctuation replaces the space: "home " -> "home. "
+        s.update("Go home. ", 3_000)
+        assertTrue(s.complete)
+        assertEquals(0, s.metrics(3_000).mistakes)
+        assertEquals(1.0, s.metrics(3_000).accuracy, .0001)
+        assertNotNull(s.takeResult(3_000))
+    }
     @Test fun wpmUsesFiveCharactersAndElapsedMinutes() {
         assertEquals(60.0, TypingSession.wpm(300, 60_000), 0.0)
         assertEquals(60.0, TypingSession.wpm(75, 15_000), 0.0)

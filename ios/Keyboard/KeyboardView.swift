@@ -47,7 +47,8 @@ final class ComposingTaps {
         revision &+= 1
     }
     func hasInput(_ prefix: String) -> Bool { word == prefix && enteredCount > 0 }
-    func hasTaps(_ prefix: String) -> Bool { word == prefix && count > 0 }
+    // Taps are recorded as typed ("Fesr" after auto-capitalization) but the predictor looks words up lowercased.
+    func hasTaps(_ prefix: String) -> Bool { word.lowercased() == prefix.lowercased() && count > 0 }
     func hasTap(_ index: Int) -> Bool { index < Self.maxLength && known[index] }
     func cost(_ index: Int, _ letter: Character) -> Int {
         guard let code = letter.unicodeScalars.first?.value, code < UInt32(Self.letters) else { return 10 }

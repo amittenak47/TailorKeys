@@ -54,6 +54,9 @@ tasks.withType<Test>().configureEach {
     inputs.property("integratedLmSamples", providers.environmentVariable("TK_LM_EVAL_SENTENCES").orElse("256"))
     inputs.property("integratedLmData", providers.environmentVariable("TK_LM_DATA").orElse("../../tk-lm-data"))
     inputs.property("integratedLmTuning", providers.environmentVariable("TK_LM_EVAL_TUNE").orElse("0"))
+    inputs.property("autocorrectEval", providers.environmentVariable("TK_AC_EVAL").orElse("0"))
+    inputs.property("autocorrectEvalSeed", providers.environmentVariable("TK_AC_SEED").orElse("7"))
+    inputs.property("autocorrectEvalWords", providers.environmentVariable("TK_AC_WORDS").orElse("500"))
 }
 
 dependencies {

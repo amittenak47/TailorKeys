@@ -203,7 +203,7 @@ class Predictor internal constructor(
         val prefixLength = minOf(p.length, w.length)
         if (p.length - prefixLength > band) return 1000
         val whole = abs(w.length - p.length) <= 2
-        val end = minOf(if (whole) w.length else prefixLength, p.length + band)
+        val end = minOf(if (whole) w.length else minOf(w.length, prefixLength + 1), p.length + band)
         var older = rows[0]
         var previous = rows[1]
         var current = rows[2]
@@ -232,7 +232,11 @@ class Predictor internal constructor(
                 current[j] = value
                 rowMin = minOf(rowMin, value)
             }
-            if ((!complete && i == prefixLength) || whole && i == w.length) best = minOf(best, current[p.length])
+            // A prefix may also match one letter more or less of the word: a skipped or extra key shifts the
+            // rest of it, and that should cost one edit, not a slip on every later letter.
+            if (!complete && i == prefixLength) best = minOf(best, current[p.length])
+            if (!complete && (i == p.length - 1 || i == p.length + 1) && i != prefixLength) best = minOf(best, current[p.length] + 4)
+            if (whole && i == w.length) best = minOf(best, current[p.length])
             // A transposition can jump over one over-budget row, but never two.
             if (rowMin > bound && previousMin > bound) break
             previousMin = rowMin
@@ -364,16 +368,22 @@ class Predictor internal constructor(
             // of the intended key costs almost nothing, one in the middle of a neighbouring key about 4.
             // Confident only follows taps that point at the word; Aggressive allows about one full slip per
             // two letters (watwe -> water), using layout neighbours when there are no taps. Common words only.
+            // Four-letter words get two slips only when taps back them (dewr -> fear).
             val slips = when {
-                known || p.length < 5 -> -1
+                known || p.length < 4 -> -1
+                p.length == 4 -> if (mode == AutocorrectMode.AGGRESSIVE && spatial != null) 8 else -1
                 mode == AutocorrectMode.AGGRESSIVE -> 4 * (p.length / 2)
                 spatial != null -> p.length
                 else -> -1
             }
+            // With taps, one skipped key plus half the slips may shift the rest of the word (betwrn -> between).
+            // Not an extra key: dropping a clean tap is weak evidence (teadt stays), and one extra key alone is
+            // already a small edit.
+            // Without taps a guessed shift is too weak against same-length readings (plabge is plants, not plane).
             val ranked = candidates(p, prev, prev2, taps, scores).asSequence()
                 .filter { !history.blocked(word, it.word) && kotlin.math.abs(it.word.length - p.length) <= 1 &&
-                    (CorrectionRules.smallEdit(p, it.word) || it.word.length == p.length && common(it.word) &&
-                        cost(p, it.word, 22, rows, spatial, complete = true) <= slips) }
+                    (CorrectionRules.smallEdit(p, it.word) || slips >= 0 && common(it.word) &&
+                        cost(p, it.word, 22, rows, spatial, complete = true) <= when (it.word.length - p.length) { 0 -> slips; 1 -> if (spatial != null) slips / 2 + 12 else -1; else -> -1 }) }
                 .filter {
                     if (p.length > 3) true
                     else if (p.length == 3 && common(it.word) && CorrectionRules.transposition(p, it.word)) true
@@ -383,9 +393,9 @@ class Predictor internal constructor(
                         scores.probability(it.word, rank[it.word]) - scores.probability(p, rank[p]) >= 5.0
                 }
                 .map { it.word to (it.score + (if (scores != null) MODEL_TYPO_WEIGHT else 2.5) * it.distance / 10.0 -
-                    2.5 * cost(p, it.word, 22, rows, spatial, complete = true) / 10.0 - history.penalty(it.word)) }
+                    (if (scores != null) TYPO_WEIGHT else 2.5) * cost(p, it.word, 22, rows, spatial, complete = true) / 10.0 - history.penalty(it.word)) }
                 .sortedByDescending { it.second }.toList()
-            val keep = wordScore(p, prev, prev2, scores) - if (known) 0.0 else 4.6
+            val keep = wordScore(p, prev, prev2, scores) - if (known) 0.0 else if (scores != null) UNKNOWN_WORD_DOUBT else 4.6
             val margin = if (mode == AutocorrectMode.CONFIDENT) 1.2 else .8
             var result = ranked.firstOrNull()?.takeIf { best -> best.second - keep >= margin &&
                 (ranked.getOrNull(1)?.let { best.second - it.second >= if (p.length <= 3 && !CorrectionRules.transposition(p, best.first)) 3.0 else margin } != false) }
@@ -682,6 +692,13 @@ class Predictor internal constructor(
     internal companion object {
         // Calibrated with real candidate generation; spatial tap costs remain in tenths.
         const val MODEL_TYPO_WEIGHT = 32.0
+        // Autocorrect's final ranking with the English model, tuned with AutocorrectEvalTest (simulated sloppy taps,
+        // skipped and extra keys, unseen words held out). Tap costs are about 0.5 nats per unit; at the old 2.5 per
+        // ten, very common short words outvoted taps that clearly pointed elsewhere (notr -> not instead of note).
+        // Without the model (other languages) the untuned 2.5 and 4.6 stay.
+        const val TYPO_WEIGHT = 4.0
+        // How much less an unknown typed word is believed than a dictionary word; was 4.6.
+        const val UNKNOWN_WORD_DOUBT = 6.5
         /** Layout neighbours: centres within this many key sizes. */
         const val NEAR = 1.5f
     }

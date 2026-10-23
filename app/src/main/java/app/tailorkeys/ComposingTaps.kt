@@ -54,7 +54,8 @@ class ComposingTaps {
     }
 
     fun hasInput(prefix: String) = word == prefix && enteredCount > 0
-    fun hasTaps(prefix: String) = word == prefix && count > 0
+    // Taps are recorded as typed ("Fesr" after auto-capitalization) but the predictor looks words up lowercased.
+    fun hasTaps(prefix: String) = word.equals(prefix, ignoreCase = true) && count > 0
     fun hasTap(index: Int) = index < MAX_LENGTH && known[index]
     fun cost(index: Int, letter: Char): Int =
         if (letter.code < LETTERS) costs[index * LETTERS + letter.code].toInt() else 10
