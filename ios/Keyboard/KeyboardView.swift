@@ -65,6 +65,8 @@ protocol KeyboardViewDelegate: AnyObject {
     func forwardDelete()
     func keyTapped(_ code: String)
     func keyTapped(_ code: String, distances: [Float])
+    /// The letter keys as drawn, for the predictor's layout neighbours.
+    func letterLayout(_ spots: [KeySpot])
     func replacePressText(_ original: String, following: String, replacement: String)
     func longPressText(_ text: String)
     func stackFace(_ code: String)
@@ -91,6 +93,7 @@ extension KeyboardViewDelegate {
     func forwardDelete() {}
     func editDone() {}
     func keyTapped(_ code: String, distances: [Float]) { keyTapped(code) }
+    func letterLayout(_ spots: [KeySpot]) {}
     func openQuickOptions() {}
     func wheelChosen() {}
     func choiceInterrupted() {}
@@ -114,7 +117,9 @@ final class KeyboardView: UIView {
     var state = InputState() { didSet { refreshInputState() } }
     var keyWeights: [Character: Double] = [:] { didSet { if keyWeights != oldValue { setNeedsDisplay() } } }
     /// Setting a new grid from outside clears the undo history; `undo()` and `replaceGrid(_:)` keep it.
-    var grid: KeyGrid { didSet { if !keepHistory { history.removeAll() }; cancelTouches(); relayout() } }
+    var grid: KeyGrid { didSet { if !keepHistory { history.removeAll() }; letterSpots = nil; cancelTouches(); relayout() } }
+    /// The letter keys from the last layout of `grid`; nil until it has been laid out.
+    private(set) var letterSpots: [KeySpot]?
     var enterLabel: String? { didSet { rebuildAccessibilityElements(); setNeedsDisplay() } }
     var editMode = false { didSet { if editMode != oldValue { clearArmedWord(); delegate?.choiceInterrupted(); editHint = nil; cancelTouches(); updateWiggle(); relayout() } } }
 
@@ -786,6 +791,20 @@ final class KeyboardView: UIView {
         for pk in letters { letterCentres[pk.item.keys[0].lowercased().first!] = CGPoint(x: pk.rect.midX, y: pk.rect.midY).applying(pk.t) }
         let widths = letters.map { $0.rect.width }.sorted()
         letterWidth = widths.isEmpty ? 1 : widths[widths.count / 2]
+        // Layout neighbours for corrections without taps: the drawn keys with tilt and curve undone (rects are
+        // block-local) and the blocks pushed together, so the split gap and an empty center column don't count.
+        var spots: [KeySpot] = []
+        var offset: CGFloat = 0
+        for ct in conts {
+            let inBlock = placed.filter { $0.item.c >= ct.c0 && $0.item.c < ct.c0 + ct.cols }
+            for pk in inBlock {
+                guard let k = pk.item.keys.first, k.count == 1, k.first!.isLetter else { continue }
+                spots.append(KeySpot(letter: k.lowercased().first!, x: Double(offset + pk.rect.midX), y: Double(pk.rect.midY),
+                                     w: Double(pk.rect.width + gap), h: Double(pk.rect.height + gap)))
+            }
+            if !inBlock.isEmpty { offset += ct.u * CGFloat(ct.cols) }
+        }
+        if spots != letterSpots { letterSpots = spots; delegate?.letterLayout(spots) }
         let nextCenter = areaLeft + areaW / 2
         if !editMode, slideViewWidth == width, let previousWidth = slideProfileWidth,
            previousWidth != p.widthPercent || slideAlign != p.align {

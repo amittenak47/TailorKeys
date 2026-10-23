@@ -60,7 +60,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         if (model != null) {
             predictor = model.predictor
             gestureDecoder = model.decoder
-            predictor.setLayout(grid)
+            predictor.setLayout(grid, keySpots)
         } else if (loading.add(lang)) {
             loader.execute {
                 val loaded = makeModel(lang)
@@ -124,6 +124,9 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private var editingLayoutKey: String? = null
     private val state = InputState()
     private var grid: KeyGrid = KeyGrid.default()
+        set(value) { if (value !== field) keySpots = null; field = value }
+    /** The letter keys as the view last drew them, until [grid] changes; the predictor's layout neighbours. */
+    private var keySpots: List<Pair<Char, KeySpot>>? = null
     private var lastSpaceAt = 0L
     private var lastAbcTap = 0L
     private var selStart = 0
@@ -377,7 +380,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             if (g.toJson() != grid.toJson()) {
                 clearTaps()
                 grid = g
-                if (modelReady) predictor.setLayout(g)
+                if (modelReady) predictor.setLayout(g, keySpots)
                 keyboardView?.grid = g
             }
         }
@@ -463,7 +466,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
                     keyboard.editTitle = title
                     grid = settings.loadGrid()
                     keyboard.grid = grid
-                    if (modelReady) predictor.setLayout(grid)
+                    if (modelReady) predictor.setLayout(grid, keySpots)
                     keyboard.editMode = true
                     keyboard.announceForAccessibility(title)
                 },
@@ -719,6 +722,12 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     override fun onKey(code: String) { if (!insertKey(code)) handleKey(code, null) }
 
     override fun onTapKey(code: String, distances: FloatArray) { if (!insertKey(code)) handleKey(code, distances) }
+
+    override fun onLetterLayout(spots: List<Pair<Char, KeySpot>>) {
+        if (spots == keySpots) return
+        keySpots = spots
+        if (modelReady) predictor.setLayout(grid, spots)
+    }
 
     private fun handleKey(code: String, distances: FloatArray?) = editorPhase { handleKeyPhase(code, distances) }
 
@@ -1127,7 +1136,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     override fun onEdited() {
         clearTaps()
         grid = keyboardView?.grid ?: return
-        if (modelReady) predictor.setLayout(grid)
+        if (modelReady) predictor.setLayout(grid, keySpots)
         val library = LayoutLibrary(settings) { resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE }
         val key = editingLayoutKey?.takeIf { it == library.inUse }
         if (key != null) library.edit(key, grid) else settings.saveGrid(grid)

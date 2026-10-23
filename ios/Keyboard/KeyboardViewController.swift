@@ -59,7 +59,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             self.predictor = model.predictor; self.gestureDecoder = model.decoder
             self.keyboard?.chordLibrary = model.chords
             self.modelReady = true
-            if let kb = self.keyboard { model.predictor.setLayout(kb.grid) }
+            if let kb = self.keyboard { model.predictor.setLayout(kb.grid, kb.letterSpots) }
             self.beginDocumentOperation()
             defer { self.endDocumentOperation() }
             self.updateAutoCap(); self.updateSuggestions()
@@ -534,6 +534,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     func keyTapped(_ code: String) { handleKey(code, nil) }
     func keyTapped(_ code: String, distances: [Float]) { handleKey(code, distances) }
+    func letterLayout(_ spots: [KeySpot]) { if let grid = keyboard?.grid { predictor?.setLayout(grid, spots) } }
 
     private func handleKey(_ code: String, _ distances: [Float]?) {
         if code == Keys.insert { openInsert(); return }
@@ -893,7 +894,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             self.editingLayoutKey = key
             self.keyboard.editTitle = title
             self.keyboard.grid = self.settings.loadGrid()
-            self.predictor?.setLayout(self.keyboard.grid)
+            self.predictor?.setLayout(self.keyboard.grid, self.keyboard.letterSpots)
             self.keyboard.editMode = true
             UIAccessibility.post(notification: .announcement, argument: title)
         }
@@ -904,7 +905,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             if self.state.language != self.settings.currentLanguage { self.activateLanguage() }
             let grid = self.settings.loadGrid()
             if !LayoutLibrary.sameGrid(grid, self.keyboard.grid) {
-                self.clearTaps(); self.keyboard.grid = grid; self.predictor?.setLayout(grid)
+                self.clearTaps(); self.keyboard.grid = grid; self.predictor?.setLayout(grid, self.keyboard.letterSpots)
             }
             if self.predictor?.refreshLearning() == true { self.armedUndo = nil; self.pendingLearning = nil; self.liveGlide = nil; self.clearGlide() }
             if !self.settings.learning { self.pendingLearning = nil; self.armedUndo = nil }
@@ -1013,7 +1014,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             if self.settings.numberRow { g.setNumberRow(true) }
             self.settings.saveGrid(g)
             self.keyboard.grid = g
-            self.predictor?.setLayout(g)
+            self.predictor?.setLayout(g, self.keyboard.letterSpots)
         }
         p.onNumberRow = { [weak self] on in
             guard let self = self else { return false }
@@ -1023,7 +1024,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
             self.settings.saveGrid(g)
             self.settings.set(Prefs.numberRow, on)
             self.keyboard.grid = g
-            self.predictor?.setLayout(g)
+            self.predictor?.setLayout(g, self.keyboard.letterSpots)
             return true
         }
         p.translatesAutoresizingMaskIntoConstraints = false
@@ -1051,7 +1052,7 @@ final class KeyboardViewController: UIInputViewController, KeyboardViewDelegate 
 
     func gridEdited() {
         clearTaps()
-        predictor?.setLayout(keyboard.grid)
+        predictor?.setLayout(keyboard.grid, keyboard.letterSpots)
         let library = settings.makeLayoutLibrary()
         if let key = editingLayoutKey, key == library.appliedKey { library.update(key, grid: keyboard.grid) }
         else { settings.saveGrid(keyboard.grid) }

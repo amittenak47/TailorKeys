@@ -63,6 +63,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         fun onForwardDelete() {}
         fun onKey(code: String)
         fun onTapKey(code: String, distances: FloatArray) { onKey(code) }
+        fun onLetterLayout(spots: List<Pair<Char, KeySpot>>) {}
         fun onReplacePressText(original: String, following: String, replacement: String) {}
         fun onLongPressText(text: String)
         fun onStackFace(code: String)
@@ -563,6 +564,22 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             pk.item.keys[0][0].lowercaseChar() to GestureDecoder.Point(pt[0], pt[1])
         }
         letterWidth = letters.map { it.rect.width() }.sorted().let { if (it.isEmpty()) 1f else it[it.size / 2] }
+        // Layout neighbours for corrections without taps: the drawn keys with tilt and curve undone (rects are
+        // block-local) and the blocks pushed together, so the split gap and an empty center column don't count.
+        if (profile == null) {
+            val spots = ArrayList<Pair<Char, KeySpot>>()
+            var offset = 0f
+            for (ct in conts) {
+                val inBlock = placed.filter { it.item.c >= ct.c0 && it.item.c < ct.c0 + ct.cols }
+                for (pk in inBlock) {
+                    val face = pk.item.keys.firstOrNull()?.singleOrNull()?.takeIf { it.isLetter() } ?: continue
+                    spots += face.lowercaseChar() to KeySpot(offset + pk.rect.centerX(), pk.rect.centerY(),
+                        pk.rect.width() + gap, pk.rect.height() + gap)
+                }
+                if (inBlock.isNotEmpty()) offset += ct.u * ct.cols
+            }
+            listener?.onLetterLayout(spots)
+        }
         val nextProfile = p.widthPercent to p.align
         val nextCenter = areaLeft + areaW / 2
         if (!editMode && slideViewWidth == width && slideProfile != null && slideProfile != nextProfile) {

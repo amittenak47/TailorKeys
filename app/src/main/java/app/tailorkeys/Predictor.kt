@@ -109,17 +109,20 @@ class Predictor internal constructor(
     fun updateContext(before: CharSequence, prefix: String) { english?.update(before, prefix.length) }
     fun resetContext() { english?.reset() }
 
-    fun setLayout(grid: KeyGrid) {
+    /**
+     * Layout neighbours for corrections without taps. [spots] are the keys as the view drew them; until the
+     * view has laid out [grid], positions come from the grid's cells instead.
+     */
+    fun setLayout(grid: KeyGrid, spots: List<Pair<Char, KeySpot>>? = null) {
         cachedCandidates = null
         neighbours.clear()
-        val letters = grid.items.filter { it.keys.firstOrNull()?.let { k -> k.length == 1 && k[0].isLetter() } == true }
-        for (a in letters) for (b in letters) {
-            if (a === b || abs(a.r - b.r) > 1) continue
-            val nearColumns = a.c <= b.c + b.w && b.c <= a.c + a.w
-            val acrossCenter = a.c + a.w - 1 == 4 && b.c == 6 || b.c + b.w - 1 == 4 && a.c == 6
-            if (nearColumns || acrossCenter) {
-                neighbours.getOrPut(a.keys[0][0].lowercaseChar()) { HashSet() }.add(b.keys[0][0].lowercaseChar())
-            }
+        val keys = spots ?: gridSpots(grid)
+        for ((a, sa) in keys) for ((b, sb) in keys) {
+            if (a == b) continue
+            val dx = (sa.x - sb.x) / ((sa.w + sb.w) / 2)
+            val dy = (sa.y - sb.y) / ((sa.h + sb.h) / 2)
+            // Beside, above, below and diagonal (about 1.41 keys) count; two keys over (2) does not.
+            if (dx * dx + dy * dy <= NEAR * NEAR) neighbours.getOrPut(a) { HashSet() }.add(b)
         }
         gridCosts.fill(10)
         for (c in 0 until ComposingTaps.LETTERS) gridCosts[c * ComposingTaps.LETTERS + c] = 0
@@ -128,6 +131,16 @@ class Predictor internal constructor(
                 gridCosts[a.code * ComposingTaps.LETTERS + b.code] = 4
             }
         }
+    }
+
+    /** One spot per letter key at its cell centre. The view closes an empty center column, so the halves meet. */
+    private fun gridSpots(grid: KeyGrid): List<Pair<Char, KeySpot>> {
+        val centerUsed = grid.items.any { it.c == KeyGrid.CENTER && it.r < grid.rows }
+        return grid.items.filter { it.r < grid.rows && it.keys.firstOrNull()?.let { k -> k.length == 1 && k[0].isLetter() } == true }
+            .map { key ->
+                val shift = if (!centerUsed && key.c > KeyGrid.CENTER) 1 else 0
+                key.keys[0][0].lowercaseChar() to KeySpot(key.c - shift + key.w / 2f, key.r + .5f, key.w.toFloat(), 1f)
+            }
     }
 
     private fun gridCost(a: Char, b: Char): Int = when {
@@ -669,8 +682,15 @@ class Predictor internal constructor(
     internal companion object {
         // Calibrated with real candidate generation; spatial tap costs remain in tenths.
         const val MODEL_TYPO_WEIGHT = 32.0
+        /** Layout neighbours: centres within this many key sizes. */
+        const val NEAR = 1.5f
     }
 
     internal fun rankedCandidates(prefix: String, prev: String?, prev2: String?, taps: ComposingTaps?) =
         candidates(prefix, prev, prev2, taps).map { Triple(it.word, it.score, it.correction) }
+
+    internal fun isNeighbour(a: Char, b: Char) = neighbours[a]?.contains(b) == true
 }
+
+/** A letter key's centre and cell size in any one unit, with tilt and curve undone and the split gap closed. */
+data class KeySpot(val x: Float, val y: Float, val w: Float, val h: Float)

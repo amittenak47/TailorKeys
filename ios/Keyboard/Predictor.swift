@@ -121,20 +121,17 @@ final class Predictor {
         seedTables = SeedTables(pairs, triples, frequencies, common)
     }
 
-    func setLayout(_ grid: KeyGrid) {
+    /// Layout neighbours for corrections without taps. `spots` are the keys as the view drew them; until the
+    /// view has laid out `grid`, positions come from the grid's cells instead.
+    func setLayout(_ grid: KeyGrid, _ spots: [KeySpot]? = nil) {
         cachedCandidates = nil
         neighbours.removeAll()
-        let letters = grid.items.filter { key in
-            guard let k = key.keys.first else { return false }
-            return k.count == 1 && k.first!.isLetter
-        }
-        for a in letters { for b in letters {
-            if a === b || abs(a.r - b.r) > 1 { continue }
-            let nearColumns = a.c <= b.c + b.w && b.c <= a.c + a.w
-            let acrossCenter = a.c + a.w - 1 == 4 && b.c == 6 || b.c + b.w - 1 == 4 && a.c == 6
-            if nearColumns || acrossCenter {
-                neighbours[a.keys[0].lowercased().first!, default: []].insert(b.keys[0].lowercased().first!)
-            }
+        let keys = spots ?? Predictor.gridSpots(grid)
+        for a in keys { for b in keys where a.letter != b.letter {
+            let dx = (a.x - b.x) / ((a.w + b.w) / 2)
+            let dy = (a.y - b.y) / ((a.h + b.h) / 2)
+            // Beside, above, below and diagonal (about 1.41 keys) count; two keys over (2) does not.
+            if dx * dx + dy * dy <= Predictor.near * Predictor.near { neighbours[a.letter, default: []].insert(b.letter) }
         } }
         for i in gridCosts.indices { gridCosts[i] = 10 }
         for c in 0..<ComposingTaps.letters { gridCosts[c * ComposingTaps.letters + c] = 0 }
@@ -145,6 +142,22 @@ final class Predictor {
             }
         } }
     }
+
+    /// Layout neighbours: centres within this many key sizes.
+    static let near = 1.5
+
+    /// One spot per letter key at its cell centre. The view closes an empty center column, so the halves meet.
+    private static func gridSpots(_ grid: KeyGrid) -> [KeySpot] {
+        let centerUsed = grid.items.contains { $0.c == KeyGrid.center && $0.r < grid.rows }
+        return grid.items.compactMap { key in
+            guard key.r < grid.rows, let k = key.keys.first, k.count == 1, k.first!.isLetter else { return nil }
+            let shift = !centerUsed && key.c > KeyGrid.center ? 1 : 0
+            return KeySpot(letter: k.lowercased().first!, x: Double(key.c - shift) + Double(key.w) / 2,
+                           y: Double(key.r) + 0.5, w: Double(key.w), h: 1)
+        }
+    }
+
+    func isNeighbour(_ a: Character, _ b: Character) -> Bool { neighbours[a]?.contains(b) == true }
 
     func updateContext(_ before: String, _ prefix: String) { english?.update(before, prefix) }
     func resetContext() { english?.reset() }
@@ -740,6 +753,12 @@ final class Predictor {
         let wordBoost = log(1 + Double(user[word] ?? 0) * 0.05 * Double((rank[word] ?? 5000) + 10))
         return wordBoost + 2.25 * log(1 + Double(pair)) + 2.7 * log(1 + Double(triple))
     }
+}
+
+/// A letter key's centre and cell size in any one unit, with tilt and curve undone and the split gap closed.
+struct KeySpot: Equatable {
+    let letter: Character
+    let x: Double, y: Double, w: Double, h: Double
 }
 
 /// Small seeded random generator, so a prefix always produces the same explore list.
