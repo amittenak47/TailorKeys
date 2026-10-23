@@ -65,6 +65,64 @@ class AutocorrectEvalTest {
         return cases to clean
     }
 
+    /** Taps for [word] with exactly [slips] wrong keys, or null if the noise wouldn't produce that. */
+    private fun slipped(word: String, slips: Int, r: Random): Typed? {
+        repeat(60) {
+            val typed = type(noisy(word, .42f, r))
+            if (typed.text.length == word.length && word.indices.count { typed.text[it] != word[it] } == slips) return typed
+        }
+        return null
+    }
+
+    /**
+     * TK_AC_EVAL=1 TK_AC_CONTEXT=1: the same finger errors on words inside held-out conversational sentences
+     * (tk-lm-data eval splits), corrected the way the keyboard does it: with the sentence so far, and without it.
+     */
+    @Test fun contextReport() {
+        assumeTrue(System.getenv("TK_AC_EVAL") == "1" && System.getenv("TK_AC_CONTEXT") == "1")
+        val data = File(System.getenv("TK_LM_DATA") ?: "../../tk-lm-data")
+        val predictor = Predictor({ File(assets, it).inputStream() }, Files.createTempDirectory("tk-ac-context").toFile()).apply { setLayout(SplitTaps.grid) }
+        val r = Random(System.getenv("TK_AC_SEED")?.toInt() ?: 11)
+        val tokens = Regex(""""t":\[([^\]]*)]""")
+        val sentences = listOf("soda", "tatoeba", "common_voice").flatMap { source ->
+            java.util.zip.GZIPInputStream(File(data, "processed/$source.eval.jsonl.gz").inputStream()).bufferedReader().useLines { lines ->
+                lines.mapNotNull { line -> tokens.find(line)?.groupValues?.get(1)?.split(',')?.map { it.trim().trim('"') } }
+                    .filter { it.size in 4..20 && it.none { t -> t.startsWith("<") } }.take(400).toList()
+            }
+        }
+        val kinds = listOf("1 wrong key, 4 letters", "2 wrong keys, 4 letters", "2 wrong keys, 5+ letters", "skipped letter", "skipped + 1 wrong key")
+        val withContext = kinds.associateWith { Tally() }; val without = kinds.associateWith { Tally() }
+        val times = ArrayList<Long>()
+        for (sentence in sentences) {
+            val index = sentence.indices.filter { i -> i > 0 && sentence[i].length in 4..10 && sentence[i].all { it in centres } }.randomOrNull(r) ?: continue
+            val word = sentence[index]; val before = sentence.take(index).joinToString(" ") + " "
+            val cases = listOfNotNull(
+                (if (word.length == 4) "1 wrong key, 4 letters" else null)?.let { k -> slipped(word, 1, r)?.let { k to it } },
+                (if (word.length == 4) "2 wrong keys, 4 letters" else "2 wrong keys, 5+ letters").let { k -> slipped(word, 2, r)?.let { k to it } },
+                (1 + r.nextInt(word.length - 2)).let { i -> "skipped letter" to type(noisy(word.removeRange(i, i + 1), .15f, r)) },
+                (1 + r.nextInt(word.length - 2)).let { i -> "skipped + 1 wrong key" to type(noisy(word.removeRange(i, i + 1), .15f, r).toMutableList().also { p ->
+                    val j = if (i + 1 < p.size) i + 1 else 0; p[j] = p[j].first + .85f to p[j].second }) })
+            for ((kind, typed) in cases) {
+                if (typed.text == word) continue
+                for ((tally, text) in listOf(withContext.getValue(kind) to before + typed.text, without.getValue(kind) to typed.text)) {
+                    val start = System.nanoTime()
+                    val fix = predictor.correction(text, AutocorrectMode.AGGRESSIVE, typed.taps, allowJoin = false)?.replacement?.lowercase()
+                    times += System.nanoTime() - start
+                    tally.n++
+                    when (fix) { word -> tally.fixed++; null -> tally.none++; else -> tally.wrong++ }
+                    if (tally === withContext[kind] && fix != word && kind.startsWith("skipped") && tally.n % 7 == 0)
+                        println("TK_AC_EX $kind: ...${before.takeLast(25)}[${typed.text}] -> ${fix ?: "-"} ($word)${if (predictor.hasWord(typed.text)) " typed-is-a-word" else ""}")
+                }
+            }
+        }
+        for (kind in kinds) {
+            println("TK_AC_EVAL " + withContext.getValue(kind).line("with context: $kind"))
+            println("TK_AC_EVAL " + without.getValue(kind).line("no context:   $kind"))
+        }
+        times.sort()
+        println("TK_AC_EVAL correction time: median %.2f ms, p95 %.2f ms over ${times.size} calls (desktop JVM)".format(times[times.size / 2] / 1e6, times[times.size * 95 / 100] / 1e6))
+    }
+
     @Test fun report() {
         assumeTrue(System.getenv("TK_AC_EVAL") == "1")
         val predictor = Predictor({ File(assets, it).inputStream() }, Files.createTempDirectory("tk-ac-eval").toFile(),

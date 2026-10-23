@@ -387,6 +387,11 @@ class Predictor internal constructor(
                 .filter {
                     if (p.length > 3) true
                     else if (p.length == 3 && common(it.word) && CorrectionRules.transposition(p, it.word)) true
+                    // Three tapped letters may be a four-letter word missing one, plus at most one slip, when the
+                    // sentence clearly wants it (i don't knw -> know). Most skipped keys in short words land here.
+                    else if (p.length == 3 && it.word.length == 4 && spatial != null && scores != null && common(it.word) &&
+                        cost(p, it.word, 22, rows, spatial, complete = true) <= 16 &&
+                        scores.probability(it.word, rank[it.word]) - scores.probability(p, rank[p]) >= 5.0) true
                     else spatial != null && scores != null && it.word.length == p.length &&
                         p.indices.all { index -> gridCost(p[index], it.word[index]) <= 4 } &&
                         cost(p, it.word, 22, rows, spatial, complete = true) <= 6 &&

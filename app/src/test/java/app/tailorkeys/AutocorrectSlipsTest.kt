@@ -30,6 +30,12 @@ class AutocorrectSlipsTest {
         assertEquals("Between", fix("Bwtwen", "-e----"))
     }
 
+    @Test fun threeTappedLettersBecomeTheFourLetterWordTheSentenceWants() {
+        assertEquals(WordCorrection("knw", "know"), predictor.correction("i don't knw", AutocorrectMode.AGGRESSIVE, taps("knw", "---")))
+        // Without a sentence that wants it, three letters stay as typed.
+        assertEquals(null, predictor.correction("knw", AutocorrectMode.AGGRESSIVE, taps("knw", "---")))
+    }
+
     @Test fun aSkippedKeyPlusASlipShiftsToTheWord() {
         assertEquals("between", fix("betwrn", "----e-"))
         assertEquals("between", fix("bwtwen", "-e----"))

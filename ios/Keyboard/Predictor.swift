@@ -432,6 +432,12 @@ final class Predictor {
                 .filter { candidate in
                     if p.count > 3 { return true }
                     if p.count == 3 && common(candidate.word) && CorrectionRules.transposition(p, candidate.word) { return true }
+                    // Three tapped letters may be a four-letter word missing one, plus at most one slip, when the
+                    // sentence clearly wants it (i don't knw -> know). Most skipped keys in short words land here.
+                    if p.count == 3 && candidate.word.count == 4, let spatial = spatial, let scores = scores, common(candidate.word) {
+                        return cost(letters, CompactLetters(candidate.word), 22, &older, &previous, &current, spatial, complete: true) <= 16 &&
+                            scores.probability(candidate.word, rank[candidate.word]) - scores.probability(p, rank[p]) >= 5
+                    }
                     guard let spatial = spatial, let scores = scores, candidate.word.count == p.count else { return false }
                     let target = Array(candidate.word)
                     guard letters.indices.allSatisfy({ gridCost(letters[$0], target[$0]) <= 4 }) else { return false }
