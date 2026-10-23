@@ -259,6 +259,11 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
             }
             Text("Hold and push in the empty space to move the cursor.", Modifier.padding(16.dp, 8.dp),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (state.cursorControl() != CursorControl.OFF) {
+                val sensitivity = state.int(Prefs.CURSOR_SENSITIVITY)
+                SettingSlider("Cursor sensitivity", sensitivity, Prefs.CURSOR_SENSITIVITY,
+                    if (sensitivity == 100) "Default" else "$sensitivity%") { state.set(Prefs.CURSOR_SENSITIVITY, it) }
+            }
             ToggleRow("Cursor glow", state.bool(Prefs.CURSOR_GLOW),
                 note = "Show a soft glow across the keys when you move the cursor.") { state.set(Prefs.CURSOR_GLOW, it) }
         }

@@ -41,6 +41,8 @@ object Prefs {
     val TOUCH_SLACK = IntPref("touch_slack", 0, 0, 12)
     val TEXT_SCALE = IntPref("text_scale", 100, 60, 160)
     val LONG_PRESS_MS = IntPref("long_press_ms", 350, 150, 800)
+    /** How strongly a push in the cursor gap moves the cursor, as a percentage. */
+    val CURSOR_SENSITIVITY = IntPref("cursor_sensitivity", 100, 50, 200)
 
     val FOLLOW_SYSTEM_TEXT = BoolPref("follow_system_text", true)
     val TYPE_ON_PRESS = BoolPref("type_on_press", false)

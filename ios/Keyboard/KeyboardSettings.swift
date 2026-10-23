@@ -35,6 +35,8 @@ enum Prefs {
     static let touchSlack = IntPref(key: "touch_slack", def: 0, min: 0, max: 12)
     static let textScale = IntPref(key: "text_scale", def: 100, min: 60, max: 160)
     static let longPressMs = IntPref(key: "long_press_ms", def: 350, min: 150, max: 800)
+    /// How strongly a push in the cursor gap moves the cursor, as a percentage.
+    static let cursorSensitivity = IntPref(key: "cursor_sensitivity", def: 100, min: 50, max: 200)
 
     static let followSystemText = "follow_system_text"
     static let typeOnPress = "type_on_press"
@@ -85,7 +87,7 @@ enum Prefs {
     static var settingKeys: [String] {
         var keys = Array(booleanDefaults.keys) + [cursorControl, theme, themesCustom, layout, languages, currentLanguage,
                                                  layoutsSaved, layoutDraft, layoutDraftSplit, layoutSelected, layoutTrialPrevious, layoutTrialSplit, layoutTrialSettings, typingResults]
-        keys += [curve, keyGap, cornerRadius, keyRepeatGuard, touchSlack, textScale, longPressMs, autocorrect].map { $0.key }
+        keys += [curve, keyGap, cornerRadius, keyRepeatGuard, touchSlack, textScale, longPressMs, cursorSensitivity, autocorrect].map { $0.key }
         for l in [false, true] {
             keys += [height(l), width(l), bottomPadding(l), splitGap(l), tilt(l)].map { $0.key }
             keys += [alignKey(l), splitKey(l)]

@@ -249,6 +249,10 @@ struct SettingsScreen: View {
                 })) {
                     ForEach(CursorControl.allCases, id: \.self) { value in Text(value.title).tag(value) }
                 }
+                if prefs.cursorControl != .off {
+                    SettingSlider(title: "Cursor sensitivity", pref: Prefs.cursorSensitivity,
+                                  value: model.integer(Prefs.cursorSensitivity), suffix: "%")
+                }
             }
             .disabled(!model.fullAccessConfirmed)
             Section(footer: Text("Show a soft glow across the keys when you move the cursor.")) {

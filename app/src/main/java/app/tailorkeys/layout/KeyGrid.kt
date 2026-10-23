@@ -25,8 +25,12 @@ enum class Template(val title: String, val split: Boolean) {
     THUMBS("Thumb keys", false),
 }
 
-/** One key on the grid. A key with more than one entry in [keys] is a swipe key that cycles through them. */
-class GridKey(val id: Int, var r: Int, var c: Int, var w: Int, val keys: MutableList<String>, var idx: Int = 0) {
+/**
+ * One key on the grid. A key with more than one entry in [keys] is a swipe key that cycles through them.
+ * [num] and [sym] are the key's own text on the 123 and #+= layers; null keeps the default for its letter.
+ */
+class GridKey(val id: Int, var r: Int, var c: Int, var w: Int, val keys: MutableList<String>, var idx: Int = 0,
+              var num: String? = null, var sym: String? = null) {
     val isStack get() = keys.size > 1
     val isSpace get() = keys.size == 1 && keys[0] == Keys.SPACE
 }
@@ -44,7 +48,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
     val tray = mutableListOf<MutableList<String>>()
 
     /** Deep copy with the same key ids, so a preview can be matched key for key with the live grid. */
-    fun copy(): KeyGrid = KeyGrid(rows, items.mapTo(mutableListOf()) { GridKey(it.id, it.r, it.c, it.w, it.keys.toMutableList(), it.idx) }, nextId)
+    fun copy(): KeyGrid = KeyGrid(rows, items.mapTo(mutableListOf()) { GridKey(it.id, it.r, it.c, it.w, it.keys.toMutableList(), it.idx, it.num, it.sym) }, nextId)
         .also { copy -> tray.forEach { copy.tray.add(it.toMutableList()) } }
 
     /** A new key for faces coming out of the tray. It joins [items] only once a placement succeeds. */
@@ -91,7 +95,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
                     a.r == b.r && a.c == b.c && a.w == b.w && a.keys == b.keys }) {
                 val result = template(t, lang)
                 if (rows == 5) result.setNumberRow(true)
-                result.items.zip(items).forEach { (a, b) -> a.idx = b.idx }
+                result.items.zip(items).forEach { (a, b) -> a.idx = b.idx; a.num = b.num; a.sym = b.sym }
                 tray.forEach { result.tray.add(it.toMutableList()) }
                 return result
             }
@@ -277,12 +281,28 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
     }
 
     /** True when every key fits on the grid without overlapping. Imported layouts must pass this. */
+    /** Sets [key]'s text on the 123 or #+= [layer]. Null, blank or the key's default text restores the default. */
+    fun setLayerFace(key: GridKey, layer: Layer, text: String?, language: String) {
+        if (layer == Layer.ABC || !KeyText.hasLayerFace(key)) return
+        val face = text?.takeIf { it.isNotBlank() && it.length <= MAX_FACE && it != KeyText.defaultLayerFace(key, layer, language) }
+        if (layer == Layer.NUM) key.num = face else key.sym = face
+    }
+
+    /** Swaps what [a] and [b] type on the 123 or #+= [layer]; their letters and positions stay. */
+    fun swapLayerFaces(a: GridKey, b: GridKey, layer: Layer, language: String) {
+        if (a === b || !KeyText.hasLayerFace(a) || !KeyText.hasLayerFace(b)) return
+        val first = KeyText.layerFace(a, layer, language); val second = KeyText.layerFace(b, layer, language)
+        setLayerFace(a, layer, second, language)
+        setLayerFace(b, layer, first, language)
+    }
+
     fun isSound() = rows in 4..5 && items.size in 1..(rows * COLS) && items.all { valid(it) }
 
     fun toJson(): String {
         val a = JSONArray()
         items.forEach {
-            a.put(JSONObject().put("r", it.r).put("c", it.c).put("w", it.w).put("k", JSONArray(it.keys)).put("i", it.idx))
+            a.put(JSONObject().put("r", it.r).put("c", it.c).put("w", it.w).put("k", JSONArray(it.keys)).put("i", it.idx)
+                .apply { it.num?.let { text -> put("n", text) }; it.sym?.let { text -> put("s", text) } })
         }
         val json = JSONObject().put("rows", rows).put("items", a)
         if (tray.isNotEmpty()) json.put("tray", JSONArray().apply { tray.forEach { put(JSONArray(it)) } })
@@ -305,6 +325,8 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         const val COLS = 11
         const val CENTER = 5
         const val MAX_TRAY = 24
+        /** Longest text a key may type on 123 or #+= (an emoticon or "..."). */
+        const val MAX_FACE = 8
         private const val CODE_PREFIX = "TK1-"
         private val CODE = Regex("TK1-([A-Za-z0-9_-]+)")
 
@@ -398,7 +420,10 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
                 for (i in 0 until a.length()) {
                     val j = a.getJSONObject(i)
                     val ks = j.getJSONArray("k")
-                    items.add(GridKey(i, integer(j, "r"), integer(j, "c"), integer(j, "w"), MutableList(ks.length()) { ks.getString(it) }, if (j.has("i")) integer(j, "i") else 0))
+                    // Layer text is optional; anything that isn't a short, visible string falls back to the default.
+                    fun face(key: String) = j.optString(key).takeIf { it.isNotBlank() && it.length <= MAX_FACE }
+                    items.add(GridKey(i, integer(j, "r"), integer(j, "c"), integer(j, "w"), MutableList(ks.length()) { ks.getString(it) },
+                        if (j.has("i")) integer(j, "i") else 0, face("n"), face("s")))
                 }
                 KeyGrid(integer(o, "rows"), items, items.size).takeIf { it.isSound() }?.also { grid ->
                     // The tray is optional and never makes a layout invalid; malformed entries are dropped.

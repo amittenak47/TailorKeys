@@ -26,6 +26,7 @@ import android.os.SystemClock
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
@@ -105,7 +106,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     var enterLabel: String? = null
         set(value) { field = value; refreshAccessibilityState(); invalidate() }
     var editMode = false
-        set(value) { if (field != value) { field = value; clearArmedWord(); listener?.onChoiceInterrupted(); editingKey = null; editHint = null; cancelTouches(); relayout() } }
+        set(value) { if (field != value) { field = value; clearArmedWord(); listener?.onChoiceInterrupted(); editingKey = null; editHint = null; editLayer = Layer.ABC; facePicker = null; cancelTouches(); relayout() } }
     /** True inside the keyboard itself: shows the gear, and settings and Done while rearranging. */
     var inKeyboard = false
         set(value) { field = value; relayout() }
@@ -113,6 +114,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val history = ArrayList<String>()
     private var keepHistory = false
     private var editHint: String? = null
+    /** The layer being rearranged: on 123 and #+= keys keep their places and only their text changes. */
+    private var editLayer = Layer.ABC
+    /** The layer the keys show: the one being edited while rearranging, else the one being typed on. */
+    private val shownLayer get() = if (editMode) editLayer else state.layer
     var editTitle: String? = null
     /** Bounds already resolved by layoutFor, including narrow/one-hand profiles. */
     internal var quickOptionsBounds = RectF()
@@ -695,10 +700,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val n = item.keys.size
         val j = Math.floorMod(item.idx, n)
         val k = item.keys[j]
-        if (n > 1 && KeyText.isLayerKey(k) && KeyText.layerOf(k) != state.layer) {
+        if (n > 1 && KeyText.isLayerKey(k) && KeyText.layerOf(k) != shownLayer) {
             for (i in item.keys.indices) {
                 val code = item.keys[i]
-                if (KeyText.isLayerKey(code) && KeyText.layerOf(code) == state.layer) return i
+                if (KeyText.isLayerKey(code) && KeyText.layerOf(code) == shownLayer) return i
             }
         }
         return j
@@ -749,7 +754,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     private fun accessibilityValue(id: Int): String? {
         if (id >= A_POPUP) return popup?.choices?.getOrNull(id - A_POPUP)
-        placed.getOrNull(id)?.item?.let { return KeyText.spoken(it.keys[shownIdx(it)], state, enterLabel) }
+        placed.getOrNull(id)?.item?.let { return KeyText.spoken(KeyText.layerCode(it, it.keys[shownIdx(it)], shownLayer), state, enterLabel) }
         val wheel = when (id) { A_WHEEL_LEFT -> wheels[0]; A_WHEEL_RIGHT -> wheels[1]; else -> return null }
         val list = words(wheel)
         return if (list.isEmpty()) null else wordAt(list, wheel.index) + if (armedWheel === wheel) " chosen, space to insert" else ""
@@ -879,7 +884,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 val item = placed[id].item
                 if (!acceptKeyTap(item, SystemClock.uptimeMillis())) return true
                 haptic(HapticFeedbackConstants.KEYBOARD_TAP)
-                emitKey(item.keys[shownIdx(item)])
+                emitKey(KeyText.layerCode(item, item.keys[shownIdx(item)], state.layer))
             }
         }
         refreshAccessibilityState()
@@ -1042,7 +1047,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         // Under the keys, so it shows through the split and the spaces between keys.
         if (!editMode && cursorGlow) drawWave(canvas)
         val now = SystemClock.uptimeMillis()
-        if (editMode) drawTray(canvas, radius)
+        if (editMode && editLayer == Layer.ABC) drawTray(canvas, radius)
         val dragging = drag
         if (editMode && dragging != null) {
             drawPreview(canvas, dragging, radius, now)
@@ -1063,6 +1068,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         }
         drawHandle(canvas)
         drag?.let { drawGhost(canvas, it, radius) }
+        facePicker?.let { drawFacePicker(canvas, it) }
         drawGlide(canvas, now)
         drawPopup(canvas)
         canvas.restore()
@@ -1167,7 +1173,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         canvas.clipRect(rect)
         val sw = swipe?.takeIf { it.item === item }
         val dy = sw?.dy ?: 0f
-        drawFace(canvas, code, rect, dy, fg, keyAlpha)
+        drawFace(canvas, KeyText.layerCode(item, code, shownLayer), rect, dy, fg, keyAlpha)
         if (item.isStack && dy != 0f) {
             drawFace(canvas, item.keys[stackStep(item, 1)], rect, rect.height() + dy, fg, keyAlpha)
             drawFace(canvas, item.keys[stackStep(item, -1)], rect, -rect.height() + dy, fg, keyAlpha)
@@ -1186,13 +1192,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             }
             fill.alpha = 255
         }
-        if (!item.isStack && grid.rows == 4 && showHints && state.layer == Layer.ABC) faceHints[code]?.let {
+        if (!item.isStack && grid.rows == 4 && showHints && shownLayer == Layer.ABC) faceHints[code]?.let {
             text.color = palette.hint
             text.isFakeBoldText = highContrast
             text.textSize = min(rect.height() * 0.2f * labelScale, min(rect.width() * 0.35f, rect.height() * 0.32f))
             canvas.drawText(it, rect.right - text.textSize * 0.7f, rect.top + text.textSize * 1.1f, text)
         }
-        if (editMode && item.isStack) {
+        if (editMode && item.isStack && editLayer == Layer.ABC) {
             fill.color = palette.accent
             val cx = rect.right - 8 * density
             val cy = rect.top + 8 * density
@@ -1226,8 +1232,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 drawLabel(canvas, r, languageLabel, min(12 * density, r.height() * 0.25f) * scale, palette.hint, a)
             }
             else -> {
-                val label = if (code == Keys.ABC) KeyText.label(code, state) else
-                    faceLabels[code]?.get(if (state.layer == Layer.NUM) 2 else if (state.layer == Layer.SYM) 3 else if (state.upper) 1 else 0) ?: code
+                val label = if (code == Keys.ABC) KeyText.label(code, state) else if (KeyText.isLiteral(code)) code.substring(1) else
+                    faceLabels[code]?.get(if (shownLayer == Layer.NUM) 2 else if (shownLayer == Layer.SYM) 3 else if (state.upper) 1 else 0) ?: code
                 val size = min(r.height() * 0.42f, 22 * density) * scale
                 drawLabel(canvas, r, label, if (label.length > 1) size * 0.72f else size, color, a)
             }
@@ -1312,7 +1318,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val s = 20 * density
         drawUndo(canvas, undoRect.centerX(), undoRect.centerY(), s, palette.text, if (history.isEmpty()) 70 else 255)
         val sp = resources.displayMetrics.scaledDensity
-        val title = editHint ?: editTitle ?: "Drag keys to rearrange"
+        val title = editHint ?: (if (editLayer == Layer.ABC) null else "Editing ${if (editLayer == Layer.NUM) "123" else "#+="}; tap a key to change it, drag to swap")
+            ?: editTitle ?: "Drag keys to rearrange; tap 123 to edit numbers and symbols"
         val lines = if (editHint == null) title.split("; ", limit = 2) else listOf(title)
         lines.forEachIndexed { index, line ->
             val rect = if (lines.size == 1) hintRect else RectF(hintRect).apply {
@@ -1782,7 +1789,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             if (!EditorRules.pendingCharacter(t.kind == K_KEY, t.kind == K_STACK, t.moved, t.consumed,
                     code != null && KeyText.isChar(code)) || chordTouches.contains(otherId)) continue
             stopTimers(t); t.consumed = true
-            if (t.kind == K_STACK) emitKey(code!!, t.tapX, t.tapY) else commit(t)
+            if (t.kind == K_STACK) emitKey(KeyText.layerCode(t.pk!!.item, code!!, state.layer), t.tapX, t.tapY) else commit(t)
         }
         if (gearRect.contains(x, y)) {
             haptic(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -1811,9 +1818,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 it.waveX = x; it.waveTime = SystemClock.uptimeMillis()
                 it.joystick.reach((x - CursorZone.edgeAt(zone.left, y)) / density, (CursorZone.edgeAt(zone.right, y) - x) / density)
                 it.select = gapPresses.isSelection(time, x / density, y / density)
+                // The user's sensitivity both bends the curve (small pushes move more or less) and scales its speed.
+                val sensitivity = settings.int(Prefs.CURSOR_SENSITIVITY) / 100.0
+                it.joystick.sensitivity = sensitivity
+                it.joystick.speedScale = sensitivity
                 if (it.select) {
                     // Selecting is 15% less sensitive, but the zone's edge still reaches full speed and the glow the end.
-                    it.joystick.sensitivity = 0.85
+                    it.joystick.sensitivity = 0.85 * sensitivity
                     listener?.onSelectMode(true)
                     haptic(HapticFeedbackConstants.LONG_PRESS)
                     it.lastCursorHaptic = SystemClock.uptimeMillis()
@@ -2045,7 +2056,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 if (sw != null && moved && !sw.stepped && !t.consumed)
                     StackSwipe.flick(dx, dy, time - sw.downAt).takeIf { it != 0 }?.let { stepStack(t, sw, it) }
                 if (sw != null) swipe = null
-                if (!moved && !t.consumed) emitKey(t.pk!!.item.keys[shownIdx(t.pk!!.item)], t.tapX, t.tapY)
+                if (!moved && !t.consumed) t.pk!!.item.let { emitKey(KeyText.layerCode(it, it.keys[shownIdx(it)], state.layer), t.tapX, t.tapY) }
             }
             K_KEY -> if (!t.consumed) commit(t)
             K_GEAR -> listener?.onQuickOptions()
@@ -2162,7 +2173,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private fun commit(t: Tracker) {
         if (t.deferredHaptic) { t.deferredHaptic = false; haptic(HapticFeedbackConstants.KEYBOARD_TAP) }
         val item = t.pk?.item ?: return
-        emitKey(item.keys[0], t.tapX, t.tapY)
+        emitKey(KeyText.layerCode(item, item.keys[0], state.layer), t.tapX, t.tapY)
     }
 
     /**
@@ -2307,7 +2318,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     private class Target(val type: Int, val item: GridKey? = null, val before: Boolean = false, val r: Int = 0, val c: Int = 0, val pk: Placed? = null, val cell: Cell? = null)
     /** [tray] is the tray index when a mini key is being dragged, else -1. */
-    private class Drag(val item: GridKey, val w: Float, val h: Float, var x: Float, var y: Float, val offX: Float, val offY: Float, val tray: Int = -1) { var target: Target? = null }
+    private class Drag(val item: GridKey, val w: Float, val h: Float, var x: Float, var y: Float, val offX: Float, val offY: Float, val tray: Int = -1) {
+        var target: Target? = null
+        val startX = x; val startY = y
+    }
+    /** The symbol palette for one key's 123 or #+= text; [chips], [reset] and [panel] are laid out when drawn. */
+    private class FacePicker(val item: GridKey) { val chips = ArrayList<RectF>(); val reset = RectF(); val panel = RectF() }
+    private var facePicker: FacePicker? = null
 
     private var drag: Drag? = null
     private var editingKey: GridKey? = null
@@ -2424,7 +2441,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     }
                     return true
                 }
-                if (trayRect.contains(x, y)) {
+                facePicker?.let { pickFace(it, x, y); return true }
+                if (editLayer == Layer.ABC && trayRect.contains(x, y)) {
                     val i = trayChips.indexOfFirst { it.contains(x, y) }
                     if (i >= 0 && i < trayKeys.size) {
                         resetPreview()
@@ -2436,7 +2454,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 val pk = findKey(x, y, strict = true) ?: return true
                 val pt = floatArrayOf(x, y)
                 pk.inverse.mapPoints(pt)
-                if (pk.item.isStack && hypot(pt[0] - (pk.rect.right - 8 * density), pt[1] - (pk.rect.top + 8 * density)) < 12 * density) {
+                if (editLayer == Layer.ABC && pk.item.isStack && hypot(pt[0] - (pk.rect.right - 8 * density), pt[1] - (pk.rect.top + 8 * density)) < 12 * density) {
                     val before = grid.toJson()
                     grid.separate(pk.item)
                     edited(before)
@@ -2456,10 +2474,14 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             }
             MotionEvent.ACTION_UP -> {
                 val dg = drag ?: return true
-                dg.target = editTarget(x, y, dg)
                 drag = null
                 editHint = null
                 resetPreview()
+                if (dg.tray < 0 && hypot(x - dg.startX, y - dg.startY) < ViewConfiguration.get(context).scaledTouchSlop) {
+                    editorTap(dg.item)
+                    return true
+                }
+                dg.target = editTarget(x, y, dg)
                 val before = grid.toJson()
                 val t = dg.target
                 if (t != null) applyDrop(grid, dg, t, if (dg.tray >= 0) null else dg.item, t.item, live = true)
@@ -2519,6 +2541,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun editTarget(x: Float, y: Float, dg: Drag): Target? {
+        // On 123 and #+= keys stay put: the only drop is onto another key, swapping their text.
+        if (editLayer != Layer.ABC) return findKey(x, y, strict = true, skip = dg.item)
+            ?.takeIf { KeyText.hasLayerFace(it.item) && KeyText.hasLayerFace(dg.item) }?.let { Target(T_SWAP, it.item, pk = it) }
         if (hintRect.contains(x, y)) return Target(T_REMOVE)
         if (trayRect.contains(x, y)) return if (dg.tray >= 0) null else Target(T_TRAY)
         findKey(x, y, strict = true, skip = dg.item)?.let { pk ->
@@ -2556,7 +2581,81 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         return fits
     }
 
+    private fun layerFace(item: GridKey) = KeyText.layerFace(item, editLayer, state.language).orEmpty()
+
+    /** A tap while rearranging: a layer key switches which layer is edited; on 123 or #+= a key opens the palette. */
+    private fun editorTap(item: GridKey) {
+        if (item.keys.any { KeyText.isLayerKey(it) }) {
+            editLayer = when (editLayer) { Layer.ABC -> Layer.NUM; Layer.NUM -> Layer.SYM; Layer.SYM -> Layer.ABC }
+            announceForAccessibility(when (editLayer) { Layer.ABC -> "Editing letters"; Layer.NUM -> "Editing numbers"; Layer.SYM -> "Editing symbols" })
+            relayout()
+        } else if (editLayer != Layer.ABC && KeyText.hasLayerFace(item)) {
+            facePicker = FacePicker(item)
+            invalidate()
+        }
+    }
+
+    /** Applies a palette tap: a symbol, Default, or (outside the panel) closing it. */
+    private fun pickFace(picker: FacePicker, x: Float, y: Float) {
+        val before = grid.toJson()
+        val i = picker.chips.indexOfFirst { it.contains(x, y) }
+        when {
+            i >= 0 -> grid.setLayerFace(picker.item, editLayer, FACE_CHOICES[i], state.language)
+            picker.reset.contains(x, y) -> grid.setLayerFace(picker.item, editLayer, null, state.language)
+            picker.panel.contains(x, y) -> return
+        }
+        facePicker = null
+        if (grid.toJson() == before) invalidate() else edited(before)
+    }
+
+    private fun drawFacePicker(canvas: Canvas, picker: FacePicker) {
+        val d = density
+        val sp = resources.displayMetrics.scaledDensity
+        val panel = picker.panel
+        val bottom = if (trayRect.isEmpty) handleRect.top else trayRect.bottom
+        panel.set(quickOptionsBounds.left + 8 * d, stripH + 4 * d, quickOptionsBounds.right - 8 * d, bottom - 4 * d)
+        fill.color = palette.background
+        canvas.drawRoundRect(panel, 16 * d, 16 * d, fill)
+        stroke.color = palette.hint; stroke.strokeWidth = d
+        canvas.drawRoundRect(panel, 16 * d, 16 * d, stroke)
+        val header = 40 * d
+        val current = layerFace(picker.item)
+        val name = picker.item.keys.firstOrNull { KeyText.isChar(it) }?.let { KeyText.label(it, InputState()) }.orEmpty()
+        drawLabel(canvas, RectF(panel.left + 12 * d, panel.top, panel.right - 120 * d, panel.top + header),
+            "${if (editLayer == Layer.NUM) "123" else "#+="} text for the $name key: $current", 14 * sp, palette.text, 255)
+        picker.reset.set(panel.right - 108 * d, panel.top + 6 * d, panel.right - 12 * d, panel.top + header - 6 * d)
+        fill.color = palette.functionKey
+        canvas.drawRoundRect(picker.reset, 8 * d, 8 * d, fill)
+        canvas.drawRoundRect(picker.reset, 8 * d, 8 * d, stroke)
+        drawLabel(canvas, picker.reset, "Default", 13 * sp, palette.text, 255)
+        // As many columns as fit, then shrink the chips until every row fits the panel.
+        val gap = 6 * d
+        val areaW = panel.width() - 2 * gap
+        val areaH = panel.height() - header - gap
+        var size = 44 * d
+        var cols = ((areaW + gap) / (size + gap)).toInt().coerceAtLeast(1)
+        while (size > 20 * d && ((FACE_CHOICES.size + cols - 1) / cols) * (size + gap) > areaH) {
+            size -= 2 * d
+            cols = ((areaW + gap) / (size + gap)).toInt().coerceAtLeast(1)
+        }
+        val left = panel.left + gap + (areaW - (cols * (size + gap) - gap)) / 2
+        picker.chips.clear()
+        FACE_CHOICES.forEachIndexed { i, choice ->
+            val x = left + (i % cols) * (size + gap)
+            val y = panel.top + header + (i / cols) * (size + gap)
+            val r = RectF(x, y, x + size, y + size)
+            picker.chips += r
+            val selected = choice == current
+            fill.color = if (selected) palette.accent else palette.key
+            canvas.drawRoundRect(r, 6 * d, 6 * d, fill)
+            // Outlined like the keys, so chips read as buttons in themes whose keys match the background.
+            if (!selected) canvas.drawRoundRect(r, 6 * d, 6 * d, stroke)
+            drawLabel(canvas, r, choice, min(20 * d * labelScale, size * 0.5f), if (selected) palette.onAccent else palette.text, 255)
+        }
+    }
+
     private fun hintFor(dg: Drag) = when (dg.target?.type) {
+        T_SWAP -> "Swap ${layerFace(dg.item)} and ${dg.target?.item?.let(::layerFace)}"
         T_COMBINE -> "Combine into a swipe key"
         T_INSERT -> "Insert, neighbours shift over"
         T_FULL -> "Row is full"
@@ -2573,6 +2672,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
      * only a tray key dropped on the trash is deleted.
      */
     private fun applyDrop(g: KeyGrid, dg: Drag, t: Target, item: GridKey?, target: GridKey?, live: Boolean) {
+        if (t.type == T_SWAP) { if (item != null && target != null) g.swapLayerFaces(item, target, editLayer, state.language); return }
         if (dg.tray >= 0) {
             when (t.type) {
                 T_REMOVE -> if (dg.tray < g.tray.size) g.tray.removeAt(dg.tray)
@@ -2668,6 +2768,12 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         const val T_INSERT = 3
         const val T_TRAY = 5
         const val T_FULL = 6
+        const val T_SWAP = 7
+        /** The symbol palette: digits, then punctuation, currency and common signs. */
+        private val FACE_CHOICES = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "!", "@", "#", "$", "%", "^", "&", "*",
+            "(", ")", "-", "_", "=", "+", "[", "]", "{", "}", "\\", "|", ";", ":", "'", "\"", ",", ".", "<", ">", "/", "?", "`", "~",
+            "€", "£", "¥", "¢", "₹", "•", "°", "±", "×", "÷", "§", "¶", "©", "®", "™", "…", "¿", "¡", "—", "–", "≠", "≈", "≤", "≥",
+            "√", "π", "µ", "←", "→", "↑", "↓")
         const val PREVIEW_MS = 160f
         const val GHOST_LIFT = 50f
 

@@ -1865,6 +1865,10 @@ final class KeyboardView: UIView {
             t.cursorZone = zone
             t.waveX = p.x; t.waveTime = CACurrentMediaTime()
             t.joystick.reach(left: p.x - CursorZone.edge(zone.left, at: p.y), right: CursorZone.edge(zone.right, at: p.y) - p.x)
+            // The user's sensitivity both bends the curve (small pushes move more or less) and scales its speed.
+            let sensitivity = Double(settings.int(Prefs.cursorSensitivity)) / 100
+            t.joystick.sensitivity = sensitivity
+            t.joystick.speedScale = sensitivity
             let now = CACurrentMediaTime()
             cursorPointer = CursorPointer(zone: zone, press: p, radius: 10, now: now)
             pointerTime = now
@@ -2684,6 +2688,10 @@ private final class CursorJoystick {
     private var lastTime: TimeInterval?
     private var reachLeft = CursorJoystick.minReach
     private var reachRight = CursorJoystick.minReach
+    /// Below 1 the same push moves the cursor less (the response curve bends); above 1, more.
+    var sensitivity = 1.0
+    /// The user's cursor speed: scales the whole range, so 2 is twice as fast at every push and 0.5 half.
+    var speedScale = 1.0
 
     /// How far the gap extends from the press point on each side, in points. Pushing to that edge gives top speed.
     func reach(left: CGFloat, right: CGFloat) {
@@ -2698,9 +2706,10 @@ private final class CursorJoystick {
         var steps = advance(now)
         let magnitude = abs(Double(dx))
         let reach = dx < 0 ? reachLeft : reachRight
-        push = Swift.min(1, magnitude / reach) * (dx < 0 ? -1 : 1)
-        let u = Swift.min(1, Swift.max(0, (magnitude - Self.deadZone) / (reach - Self.deadZone)))
-        let next = magnitude <= Self.deadZone ? 0 : (Self.minSpeed + (Self.maxSpeed - Self.minSpeed) * u * u.squareRoot()) * (dx < 0 ? -1.0 : 1.0)
+        let bend = 1 / sensitivity
+        push = pow(Swift.min(1, magnitude / reach), bend) * (dx < 0 ? -1 : 1)
+        let u = pow(Swift.min(1, Swift.max(0, (magnitude - Self.deadZone) / (reach - Self.deadZone))), bend)
+        let next = magnitude <= Self.deadZone ? 0 : (Self.minSpeed + (Self.maxSpeed - Self.minSpeed) * u * u.squareRoot()) * speedScale * (dx < 0 ? -1.0 : 1.0)
         if next == 0 || next * speed < 0 { fraction = 0 }
         if next != 0 && speed == 0 { steps += next < 0 ? -1 : 1 }
         speed = next
