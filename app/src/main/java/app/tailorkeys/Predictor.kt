@@ -380,10 +380,16 @@ class Predictor internal constructor(
             // Not an extra key: dropping a clean tap is weak evidence (teadt stays), and one extra key alone is
             // already a small edit.
             // Without taps a guessed shift is too weak against same-length readings (plabge is plants, not plane).
+            // The top 5,000 words take the full budget; less common ones only half, so clean taps on the wrong
+            // keys can't land on them (covid stays, not civic) while taps leaning their way still do.
+            fun slipBudget(w: String): Int {
+                val r = rank[w] ?: Int.MAX_VALUE
+                val budget = if (r < 5000) slips else if (r < MULTI_SLIP_RANK) slips / 2 else return -1
+                return when (w.length - p.length) { 0 -> budget; 1 -> if (spatial != null) budget / 2 + 12 else -1; else -> -1 }
+            }
             val ranked = candidates(p, prev, prev2, taps, scores).asSequence()
                 .filter { !history.blocked(word, it.word) && kotlin.math.abs(it.word.length - p.length) <= 1 &&
-                    (CorrectionRules.smallEdit(p, it.word) || slips >= 0 && common(it.word) &&
-                        cost(p, it.word, 22, rows, spatial, complete = true) <= when (it.word.length - p.length) { 0 -> slips; 1 -> if (spatial != null) slips / 2 + 12 else -1; else -> -1 }) }
+                    (CorrectionRules.smallEdit(p, it.word) || slips >= 0 && cost(p, it.word, 22, rows, spatial, complete = true) <= slipBudget(it.word)) }
                 .filter {
                     if (p.length > 3) true
                     else if (p.length == 3 && common(it.word) && CorrectionRules.transposition(p, it.word)) true
@@ -704,6 +710,10 @@ class Predictor internal constructor(
         const val TYPO_WEIGHT = 4.0
         // How much less an unknown typed word is believed than a dictionary word; was 4.6.
         const val UNKNOWN_WORD_DOUBT = 6.5
+        // Several slips may lead to any of the 15,000 most frequent words. The old top-5,000 cut excluded everyday
+        // words (perfectly #6657, beside #5474, fits #9978). 30,000 fixed slightly more but let slang become rare
+        // words (gotta -> goths #28061).
+        const val MULTI_SLIP_RANK = 15_000
         /** Layout neighbours: centres within this many key sizes. */
         const val NEAR = 1.5f
     }

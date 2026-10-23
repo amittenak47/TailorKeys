@@ -68,6 +68,10 @@ final class Predictor {
     static let typoWeight = 4.0
     /// How much less an unknown typed word is believed than a dictionary word; was 4.6.
     static let unknownWordDoubt = 6.5
+    /// Several slips may lead to any of the 15,000 most frequent words. The old top-5,000 cut excluded everyday
+    /// words (perfectly #6657, beside #5474, fits #9978). 30,000 fixed slightly more but let slang become rare
+    /// words (gotta -> goths #28061).
+    static let multiSlipRank = 15_000
     private static let wordLimit = 5000, contextLimit = 256, followerLimit = 32
     private var learningDirty = false
     private var saveWork: DispatchWorkItem?
@@ -420,11 +424,15 @@ final class Predictor {
                 .filter { candidate in
                     guard !history.blocked(word, candidate.word) && abs(candidate.word.count - p.count) <= 1 else { return false }
                     if CorrectionRules.smallEdit(p, candidate.word) { return true }
-                    guard slips >= 0 && common(candidate.word) else { return false }
+                    // The top 5,000 words take the full budget; less common ones only half, so clean taps on the wrong
+                    // keys can't land on them (covid stays, not civic) while taps leaning their way still do.
+                    let r = rank[candidate.word] ?? Int.max
+                    let base = r < 5000 ? slips : r < Predictor.multiSlipRank ? slips / 2 : -1
+                    guard slips >= 0 && base >= 0 else { return false }
                     let budget: Int
                     switch candidate.word.count - p.count {
-                    case 0: budget = slips
-                    case 1: budget = spatial != nil ? slips / 2 + 12 : -1
+                    case 0: budget = base
+                    case 1: budget = spatial != nil ? base / 2 + 12 : -1
                     default: budget = -1
                     }
                     return cost(letters, CompactLetters(candidate.word), 22, &older, &previous, &current, spatial, complete: true) <= budget
