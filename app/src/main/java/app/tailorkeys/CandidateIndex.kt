@@ -63,8 +63,10 @@ internal class CandidateIndex(words: Collection<String>) {
             }
             // At this depth every descendant can use the same prefix match. Final scoring still
             // applies the original first-letter gate, extra cost and whole-word rules unchanged.
-            // One level either side too: a skipped or extra key shifts the typed prefix (decl -> del).
-            if (depth >= prefix.length - 1 && depth <= prefix.length + 1 && current[prefix.length] <= limit) { collect(node); return }
+            // One level either side too: a skipped or extra key shifts the typed prefix (decl -> del). Those
+            // shifted matches pay the scorer's surcharge here as well, so they don't sweep in whole branches.
+            if (depth >= prefix.length - 1 && depth <= prefix.length + 1 &&
+                current[prefix.length] + (if (depth == prefix.length) 0 else SHIFT) <= limit) { collect(node); return }
             if (node.terminal && current[prefix.length] <= limit) correction(words[node.from])
             if (rowMin > limit && previousMin > limit || depth >= prefix.length + band) return
             if (depth == DEPTH) {
@@ -75,5 +77,9 @@ internal class CandidateIndex(words: Collection<String>) {
         }
         root?.children?.forEach { walk(it, 1, '\u0000', 0) }
     }
-    private companion object { const val DEPTH = 6 }
+    private companion object {
+        const val DEPTH = 6
+        /** The surcharge Predictor.cost adds to a prefix matched one letter longer or shorter. */
+        const val SHIFT = 4
+    }
 }
