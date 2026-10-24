@@ -2132,12 +2132,15 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 if (pk.item.isSpace) {
                     // How near the space bar the tap was, in letter widths from its edge (0 on it): a letter
                     // tapped right beside it may have been a reach for space (tryn -> try).
-                    val dx = maxOf(pk.rect.left - tapPoint[0], 0f, tapPoint[0] - pk.rect.right) / letterWidth.coerceAtLeast(1f)
-                    val dy = maxOf(pk.rect.top - tapPoint[1], 0f, tapPoint[1] - pk.rect.bottom) / letterWidth.coerceAtLeast(1f)
+                    val pitch = (letterWidth + editGap).coerceAtLeast(1f)
+                    val dx = maxOf(pk.rect.left - tapPoint[0], 0f, tapPoint[0] - pk.rect.right) / pitch
+                    val dy = maxOf(pk.rect.top - tapPoint[1], 0f, tapPoint[1] - pk.rect.bottom) / pitch
                     tapDistances[ComposingTaps.SPACE] = minOf(tapDistances[ComposingTaps.SPACE], dx * dx + dy * dy)
                     continue
                 }
-                val width = pk.rect.width().coerceAtLeast(1f)
+                // In key spacing (the drawn width plus the gap), as the predictor's costs assume: neighbouring
+                // centres are one unit apart. The drawn width alone made every slip ~40% dearer on a gapped split.
+                val width = (pk.rect.width() + editGap).coerceAtLeast(1f)
                 val dx = (tapPoint[0] - pk.rect.centerX()) / width
                 val dy = (tapPoint[1] - pk.rect.centerY()) / width
                 for (key in pk.item.keys) {

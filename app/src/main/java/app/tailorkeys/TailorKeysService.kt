@@ -232,7 +232,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private var chosenSelection = 0 to 0
     private var armedUndo: ReversibleCommit? = null
     /** A word finished with a space: what was tapped, its taps, and the text ending with it, for look-back. */
-    private class FinishedWord(val typed: String, val taps: ComposingTaps?, val tail: String)
+    private class FinishedWord(val typed: String, val taps: ComposingTaps?, val tail: String, val candidates: List<String>? = null)
     private var lastWord: FinishedWord? = null
     /** The tapped words of the sentence so far, in order, for re-deciding them together when it ends. */
     private val sentenceWords = ArrayList<FinishedWord>()
@@ -846,7 +846,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         if (previous == null || !head.endsWith(previous.tail)) sentenceWords.clear()
         if (previous != null && modelReady && correctAllowed && old.isNotEmpty() && head.endsWith(previous.tail) &&
             read.after.firstOrNull()?.let(TextInputRules::wordChar) != true) {
-            val fix = predictor.lookBack(head, previous.typed, previous.taps, word, AutocorrectMode.entries[settings.int(Prefs.AUTOCORRECT)])
+            val fix = predictor.lookBack(head, previous.typed, previous.taps, word, AutocorrectMode.entries[settings.int(Prefs.AUTOCORRECT)], previous.candidates)
             val ic = currentInputConnection
             if (fix != null && fix != old && ic != null) {
                 val rest = " $word "
@@ -858,7 +858,8 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
                 armedUndo = ReversibleCommit("$old $word", fix + rest, " ", editor().before.takeLast(64), editor().after.take(64), correction = true) {}
             }
         }
-        lastWord = FinishedWord(finished.typed, finished.taps, editor().before.takeLast(48))
+        // Autocorrect just searched for this word's candidates at this space; keep them for its look-back.
+        lastWord = FinishedWord(finished.typed, finished.taps, editor().before.takeLast(48), if (modelReady) predictor.candidatesFor(finished.typed) else null)
         sentenceWords += lastWord!!
     }
 

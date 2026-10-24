@@ -63,6 +63,7 @@ class Predictor internal constructor(
     private var cachedPrev: String? = null
     private var cachedPrev2: String? = null
     private var cachedCandidates: List<Candidate>? = null
+    private var recentCandidates: Pair<String, List<String>>? = null
     private var cachedTaps: ComposingTaps? = null
     private var cachedTapRevision = -1L
     private var cachedScores: EnglishContext.Scores? = null
@@ -372,7 +373,10 @@ class Predictor internal constructor(
             // Confident only follows taps that point at the word; Aggressive allows about one full slip per
             // two letters (watwe -> water), using layout neighbours when there are no taps. Common words only.
             val slips = if (known) -1 else slips(p, mode, spatial)
-            val ranked = candidates(p, prev, prev2, taps, scores).asSequence()
+            val found = candidates(p, prev, prev2, taps, scores)
+            // Kept for look-back at the next space, so it needn't search the dictionary for this word again.
+            recentCandidates = p to found.map { it.word }
+            val ranked = found.asSequence()
                 .filter { !history.blocked(word, it.word) && reachable(p, it.word, slips, spatial, rows) }
                 .filter {
                     if (p.length > 3) true
@@ -485,14 +489,19 @@ class Predictor internal constructor(
         return cost(p, w, 22, rows, spatial, complete = true) <= limit
     }
 
+    /** The candidate words autocorrect found for [typed] at its space, if it was the last word it looked at. */
+    fun candidatesFor(typed: String): List<String>? = recentCandidates?.takeIf { it.first == typed.lowercase() }?.second
+
     /**
      * Look-back: once the next word is finished, re-checks the previous one against the words on both sides
      * (chair fire perfectly -> chair fits perfectly). Real words count too: here the next word is the evidence.
      * [before] is the text up to and including the previous word and one space; [typed] is what was tapped for it
-     * (it may have been autocorrected since), [taps] its tap rows and [next] the word just finished.
+     * (it may have been autocorrected since), [taps] its tap rows and [next] the word just finished. [known] is the
+     * candidate list from [candidatesFor], when the service kept it, to save searching the dictionary again.
      * Returns the previous word's replacement, or null to leave it. English model only.
      */
-    fun lookBack(before: String, typed: String, taps: ComposingTaps?, next: String, mode: AutocorrectMode): String? {
+    fun lookBack(before: String, typed: String, taps: ComposingTaps?, next: String, mode: AutocorrectMode,
+                 known: List<String>? = null): String? {
         val english = english ?: return null
         if (mode == AutocorrectMode.OFF || !before.endsWith(" ")) return null
         val committed = before.dropLast(1).takeLastWhile(TextInputRules::wordChar)
@@ -509,12 +518,13 @@ class Predictor internal constructor(
             fun left(w: String) = scores.preceding(w, rank[w]) - typo(w) - history.penalty(w) -
                 if (rank.containsKey(w) || user.containsKey(w)) 0.0 else UNKNOWN_WORD_DOUBT
             // Each right-side score steps the model once, so only the best few by the left side get one.
-            val pool = candidates(p, null, null, spatial, null).asSequence().map { it.word }
+            val pool = (known ?: candidates(p, null, null, spatial, null).map { it.word }).asSequence()
                 .filter { it != current && !history.blocked(committed, it) && reachable(p, it, slips, spatial, rows) }
                 .sortedByDescending(::left).take(LOOK_BACK_CANDIDATES).toList()
             if (pool.isEmpty()) return@withScores null
             val rightRank = rank[following]
-            val keep = left(current) + scores.following(current, following, rightRank)
+            // The model already stands right after the word on screen: its next-word scores are this side for free.
+            val keep = left(current) + scores.probability(following, rightRank)
             val margin = if (mode == AutocorrectMode.CONFIDENT) 4.5 else LOOK_BACK_MARGIN
             // A log probability is at most 0, so a candidate whose left side alone can't clear the margin never
             // will: most words stop here after one model step instead of one per candidate.
@@ -562,8 +572,11 @@ class Predictor internal constructor(
             (listOf(current) + listOfNotNull(p.takeIf { it != current && rank.containsKey(it) }) + alternatives).distinct().map(::option)
         }
         if (options.all { it.size == 1 }) return null
+        // The model replays this before decoding; the sentence before is enough context, and much cheaper than two.
+        val ends = before.trimEnd().dropLast(1).indexOfLast { it == '.' || it == '?' || it == '!' || it == '\n' }
+        val context = if (ends >= 0) before.substring(ends + 1) else before
         return decode@{
-            val decoded = english.decodeSentence(before, options, SENTENCE_BEAM) ?: return@decode null
+            val decoded = english.decodeSentence(context, options, SENTENCE_BEAM) ?: return@decode null
             val changed = decoded.picks.count { it != 0 }
             val margin = SENTENCE_MARGIN + (if (mode == AutocorrectMode.CONFIDENT) 1.5 else 0.0) + (changed - 1)
             if (changed == 0 || decoded.score - decoded.original < margin) null
@@ -853,10 +866,13 @@ class Predictor internal constructor(
         /** Look-back revises the previous word only when both sides together prefer another by this many nats. */
         const val LOOK_BACK_MARGIN = 3.0
         const val LOOK_BACK_CANDIDATES = 6
-        /** Sentence re-decoding: at most this many words, readings per word, and paths kept at each step. */
+        /**
+         * Sentence re-decoding: at most this many words, readings per word, and paths kept at each step. 2 paths and 3
+         * readings repair as much as 4 and 4 on held-out sentences, in two thirds of the time.
+         */
         const val SENTENCE_WORDS = 16
-        const val SENTENCE_OPTIONS = 4
-        const val SENTENCE_BEAM = 4
+        const val SENTENCE_OPTIONS = 3
+        const val SENTENCE_BEAM = 2
         /**
          * A re-decoded sentence must beat the one on screen by this many nats (plus one per extra word it changes).
          * Look-back already repairs most single slips; at 3 the whole-sentence pass changed 14 of 6,157 carefully
