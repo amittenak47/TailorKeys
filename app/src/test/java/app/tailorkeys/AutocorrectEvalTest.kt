@@ -90,7 +90,8 @@ class AutocorrectEvalTest {
                     .filter { it.size in 4..20 && it.none { t -> t.startsWith("<") } }.take(400).toList()
             }
         }
-        val kinds = listOf("1 wrong key, 4 letters", "2 wrong keys, 4 letters", "2 wrong keys, 5+ letters", "skipped letter", "skipped + 1 wrong key")
+        val kinds = listOf("1 wrong key, 4 letters", "2 wrong keys, 4 letters", "2 wrong keys, 5+ letters", "skipped letter", "skipped + 1 wrong key",
+            "reach for space (extra n/b)", "space landed on n/b", "real word ending in n/m/b/v")
         val withContext = kinds.associateWith { Tally() }; val without = kinds.associateWith { Tally() }
         val times = ArrayList<Long>()
         for (sentence in sentences) {
@@ -102,6 +103,27 @@ class AutocorrectEvalTest {
                 (1 + r.nextInt(word.length - 2)).let { i -> "skipped letter" to type(noisy(word.removeRange(i, i + 1), .15f, r)) },
                 (1 + r.nextInt(word.length - 2)).let { i -> "skipped + 1 wrong key" to type(noisy(word.removeRange(i, i + 1), .15f, r).toMutableList().also { p ->
                     val j = if (i + 1 < p.size) i + 1 else 0; p[j] = p[j].first + .85f to p[j].second }) })
+            // The thumb catches the letter above the space bar on its way down: just below that letter's centre.
+            val bar = if (r.nextBoolean()) 'n' else 'b'
+            val (bx, by) = centre(bar)
+            val reach = noisy(word, .15f, r) + (bx + .15f * gauss(r) to by + .3f)
+            val extraCases = mutableListOf("reach for space (extra n/b)" to type(reach))
+            val next = sentence.getOrNull(index + 1)?.takeIf { it.length >= 2 && it.all { c -> c in centres } }
+            if (next != null) extraCases += "space landed on n/b" to type(reach + noisy(next, .15f, r))
+            for ((kind, typed) in extraCases) {
+                val tally = withContext.getValue(kind)
+                val expected = if (kind.startsWith("space landed")) "$word $next" else word
+                val fix = predictor.correction(before + typed.text, AutocorrectMode.AGGRESSIVE, typed.taps, allowJoin = false)?.replacement?.lowercase()
+                tally.n++
+                when (fix) { expected -> tally.fixed++; null -> tally.none++; else -> tally.wrong++ }
+            }
+            // Words that really end in a letter beside the bar must survive careful typing.
+            if (word.last() in "nmbv") {
+                val tally = withContext.getValue("real word ending in n/m/b/v")
+                val fix = predictor.correction(before + word, AutocorrectMode.AGGRESSIVE, type(noisy(word, .15f, r)).taps, allowJoin = false)
+                tally.n++
+                if (fix == null) tally.fixed++ else tally.wrong++
+            }
             for ((kind, typed) in cases) {
                 if (typed.text == word) continue
                 for ((tally, text) in listOf(withContext.getValue(kind) to before + typed.text, without.getValue(kind) to typed.text)) {
@@ -117,7 +139,7 @@ class AutocorrectEvalTest {
         }
         for (kind in kinds) {
             println("TK_AC_EVAL " + withContext.getValue(kind).line("with context: $kind"))
-            println("TK_AC_EVAL " + without.getValue(kind).line("no context:   $kind"))
+            if (without.getValue(kind).n > 0) println("TK_AC_EVAL " + without.getValue(kind).line("no context:   $kind"))
         }
         times.sort()
         println("TK_AC_EVAL correction time: median %.2f ms, p95 %.2f ms over ${times.size} calls (desktop JVM)".format(times[times.size / 2] / 1e6, times[times.size * 95 / 100] / 1e6))
@@ -142,6 +164,8 @@ class AutocorrectEvalTest {
         }
         /** Types [typed] (with [taps]) as the keyboard would; returns the final words and the time look-back took. */
         var revisions = 0
+        var sentenceRevisions = 0
+        val sentenceTimes = ArrayList<Long>()
         val revisionExamples = ArrayList<String>()
         fun typeSentence(typed: List<Typed>, times: MutableList<Long>): List<String> {
             val words = ArrayList<String>()
@@ -159,17 +183,24 @@ class AutocorrectEvalTest {
                 }
                 words += word
             }
+            // The sentence ends: re-decide it as a whole, as the keyboard does at the period.
+            val start = System.nanoTime()
+            val redone = predictor.redecode("", typed.map { it.text }, typed.map { it.taps }, words, AutocorrectMode.AGGRESSIVE)
+            sentenceTimes += System.nanoTime() - start
+            if (redone != null) { sentenceRevisions += redone.indices.count { redone[it] != words[it] }; return redone }
             return words
         }
         val times = ArrayList<Long>()
-        var cleanWords = 0; var cleanRevised = 0; var cleanLookBacks = 0
+        var cleanWords = 0; var cleanRevised = 0; var cleanLookBacks = 0; var cleanSentence = 0
         var slipped = 0; var repaired = 0; var wrong = 0
         val examples = ArrayList<String>()
         for (sentence in sentences) {
             // Careful typing: every tap near its own key.
             val revisionsBefore = revisions
+            val sentenceBefore = sentenceRevisions
             val clean = typeSentence(sentence.map { type(noisy(it, .12f, r)) }, times)
             cleanLookBacks += revisions - revisionsBefore
+            cleanSentence += sentenceRevisions - sentenceBefore
             cleanWords += sentence.size
             cleanRevised += sentence.indices.count { clean[it] != sentence[it] && clean.size == sentence.size }
             // One word slips onto another real word, the taps leaning back toward the meant keys.
@@ -191,7 +222,9 @@ class AutocorrectEvalTest {
             if (result[i] != meant && examples.size < 12) examples += "...${sentence.subList(maxOf(0, i - 2), minOf(sentence.size, i + 2)).joinToString(" ")}: ${typed[i].text} -> ${result[i]}"
         }
         times.sort()
-        println("TK_AC_EVAL careful sentences: $cleanRevised of $cleanWords correct words changed in all, $cleanLookBacks of them by look-back")
+        println("TK_AC_EVAL careful sentences: $cleanRevised of $cleanWords correct words changed in all, $cleanLookBacks by look-back, $cleanSentence by sentence re-decoding")
+        sentenceTimes.sort()
+        println("TK_AC_EVAL sentence re-decoding time: median %.1f ms, p95 %.1f ms (desktop JVM)".format(sentenceTimes[sentenceTimes.size / 2] / 1e6, sentenceTimes[sentenceTimes.size * 95 / 100] / 1e6))
         revisionExamples.forEach { println("TK_AC_EVAL   revised: $it") }
         println("TK_AC_EVAL look-back on real-word slips: repaired $repaired of $slipped (${100 * repaired / maxOf(1, slipped)}%), wrong $wrong")
         println("TK_AC_EVAL look-back time: median %.2f ms, p95 %.2f ms (desktop JVM)".format(times[times.size / 2] / 1e6, times[times.size * 95 / 100] / 1e6))

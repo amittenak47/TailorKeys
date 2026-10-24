@@ -78,6 +78,8 @@ class ComposingTaps {
     companion object {
         // The supported English, French, German and Spanish letter keys fit Latin-1.
         const val LETTERS = 256
+        /** The space bar's row in the tap costs: how plausibly a tap was meant for space. */
+        const val SPACE = ' '.code
         const val MAX_LENGTH = 64
     }
 }

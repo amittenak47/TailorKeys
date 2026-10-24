@@ -2129,6 +2129,14 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 tapPoint[0] = tapX; tapPoint[1] = tapY
                 // Each candidate's inverse removes its own tilt/curve transform.
                 pk.inverse.mapPoints(tapPoint)
+                if (pk.item.isSpace) {
+                    // How near the space bar the tap was, in letter widths from its edge (0 on it): a letter
+                    // tapped right beside it may have been a reach for space (tryn -> try).
+                    val dx = maxOf(pk.rect.left - tapPoint[0], 0f, tapPoint[0] - pk.rect.right) / letterWidth.coerceAtLeast(1f)
+                    val dy = maxOf(pk.rect.top - tapPoint[1], 0f, tapPoint[1] - pk.rect.bottom) / letterWidth.coerceAtLeast(1f)
+                    tapDistances[ComposingTaps.SPACE] = minOf(tapDistances[ComposingTaps.SPACE], dx * dx + dy * dy)
+                    continue
+                }
                 val width = pk.rect.width().coerceAtLeast(1f)
                 val dx = (tapPoint[0] - pk.rect.centerX()) / width
                 val dy = (tapPoint[1] - pk.rect.centerY()) / width

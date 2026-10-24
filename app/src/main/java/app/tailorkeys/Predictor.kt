@@ -199,6 +199,9 @@ class Predictor internal constructor(
         val extra = if (complete && transposed) 0 else if (firstSpatial) (if (transposed) minOf(3, firstCost) else firstCost) else if (p[0] == w[0]) 0 else 3
         val bound = limit - extra
         val edit = if (complete) 12 else 8
+        // A last letter tapped right beside the space bar may have been a reach for space (tryn -> try): dropping it
+        // costs how far the tap was from the bar, not a whole edit.
+        val lastDrop = minOf(edit, spaceDrop(p, taps))
         val band = bound / 8
         val prefixLength = minOf(p.length, w.length)
         if (p.length - prefixLength > band) return 1000
@@ -225,7 +228,7 @@ class Predictor internal constructor(
                     taps?.hasTap(j - 1) == true -> taps.cost(j - 1, w[i - 1])
                     else -> gridCost(p[j - 1], w[i - 1])
                 }
-                var value = minOf(previous[j] + edit, current[j - 1] + edit, previous[j - 1] + substitution)
+                var value = minOf(previous[j] + edit, current[j - 1] + if (j == p.length) lastDrop else edit, previous[j - 1] + substitution)
                 if (i > 1 && j > 1 && p[j - 1] == w[i - 2] && p[j - 2] == w[i - 1]) {
                     value = minOf(value, older[j - 2] + 6)
                 }
@@ -311,7 +314,7 @@ class Predictor internal constructor(
                 firstAllowed = { c -> if (taps?.hasTap(0) == true) taps.cost(0, c) <= 6
                     else p[0] == c || neighbours[p[0]]?.contains(c) == true },
                 substitution = { i, c -> if (taps?.hasTap(i) == true) taps.cost(i, c) else gridCost(p[i], c) },
-                accept = { w -> if (!user.containsKey(w)) add(w) })
+                accept = { w -> if (!user.containsKey(w)) add(w) }, lastDrop = minOf(8, spaceDrop(p, taps)))
             else for (w in base) if (!user.containsKey(w)) add(w)
         }
         val result = if (scores == null && p.isEmpty() && prev != null) {
@@ -374,6 +377,9 @@ class Predictor internal constructor(
                 .filter {
                     if (p.length > 3) true
                     else if (p.length == 3 && common(it.word) && CorrectionRules.transposition(p, it.word)) true
+                    // Two letters and a reach for space (ofn -> of), when the sentence wants them.
+                    else if (p.length == 3 && it.word == p.dropLast(1) && nearSpace(p, spatial) && scores != null &&
+                        scores.probability(it.word, rank[it.word]) - scores.probability(p, rank[p]) >= 3.0) true
                     // Three tapped letters may be a four-letter word missing one, plus at most one slip, when the
                     // sentence clearly wants it (i don't knw -> know). Most skipped keys in short words land here.
                     else if (p.length == 3 && it.word.length == 4 && spatial != null && scores != null && common(it.word) &&
@@ -405,6 +411,21 @@ class Predictor internal constructor(
                     if (scores != null && following < -12.0) continue
                     splits.add(split to (wordScore(first, prev, prev2, scores) + following - .9 - history.penalty(split)))
                 }
+                // The space itself can land on a letter beside the bar (withnflowers -> with flowers): split there
+                // and drop that letter, paying for how far its tap was from the bar.
+                val spatialSplit = taps?.takeIf { it.hasTaps(word) }
+                if (spatialSplit != null) for (i in 1 until p.length - 1) {
+                    val drop = spatialSplit.cost(i, ' ')
+                    if (drop > NEAR_SPACE) continue
+                    val first = p.substring(0, i); val second = p.substring(i + 1)
+                    if (!rank.containsKey(first) || !rank.containsKey(second) || first.length < 2 && first != "a" && first != "i") continue
+                    val split = "$first $second"
+                    if (history.blocked(word, split)) continue
+                    val following = if (scores != null) scores.following(first, second, rank[second]) + personalScore(second, first, prev)
+                        else wordScore(second, first, prev, null)
+                    if (scores != null && following < -12.0) continue
+                    splits.add(split to (wordScore(first, prev, prev2, scores) + following - .9 - TYPO_WEIGHT * (drop + SPACE_DROP) / 10.0 - history.penalty(split)))
+                }
                 splits.sortByDescending { it.second }
                 splits.firstOrNull()?.let { best ->
                     if (best.second - maxOf(keep, ranked.firstOrNull()?.second ?: Double.NEGATIVE_INFINITY) >= 2.0 &&
@@ -415,6 +436,16 @@ class Predictor internal constructor(
         }
         return if (english != null) english.withScores { decide(it) } else decide(null)
     }
+
+    /** The cost of dropping [p]'s last letter as a missed space: the tap's distance to the bar, plus a little. */
+    private fun spaceDrop(p: String, taps: ComposingTaps?): Int {
+        val last = p.lastIndex
+        val near = if (last >= 0 && taps?.hasTap(last) == true) taps.cost(last, ' ') else return 1000
+        return if (near <= NEAR_SPACE) near + SPACE_DROP else 1000
+    }
+
+    /** Whether [p]'s last letter was tapped beside the space bar, so it may be a missed space rather than a letter. */
+    private fun nearSpace(p: String, taps: ComposingTaps?) = spaceDrop(p, taps) < 1000
 
     /**
      * How many tenths of slips an unknown word may carry. Four-letter words get two slips only when taps back them
@@ -434,8 +465,9 @@ class Predictor internal constructor(
      * The top 5,000 words take the full budget; less common ones only half, so clean taps on the wrong keys can't
      * land on them (covid stays, not civic) while taps leaning their way still do. With taps, one skipped key plus
      * half the slips may shift the rest of the word (betwrn -> between). Not an extra key: dropping a clean tap is
-     * weak evidence (teadt stays), and one extra key alone is already a small edit. Without taps a guessed shift is
-     * too weak against same-length readings (plabge is plants, not plane).
+     * weak evidence (teadt stays), and one extra key alone is already a small edit, unless that key is the last one and
+     * sat beside the space bar. Without taps a guessed shift is too weak against same-length readings (plabge is
+     * plants, not plane).
      */
     private fun reachable(p: String, w: String, slips: Int, spatial: ComposingTaps?, rows: Array<IntArray>): Boolean {
         if (abs(w.length - p.length) > 1) return false
@@ -443,7 +475,13 @@ class Predictor internal constructor(
         if (slips < 0) return false
         val r = rank[w] ?: Int.MAX_VALUE
         val budget = if (r < 5000) slips else if (r < MULTI_SLIP_RANK) slips / 2 else return false
-        val limit = when (w.length - p.length) { 0 -> budget; 1 -> if (spatial != null) budget / 2 + 12 else return false; else -> return false }
+        val limit = when (w.length - p.length) {
+            0 -> budget
+            1 -> if (spatial != null) budget / 2 + 12 else return false
+            // The last letter was a reach for space (rryn -> try): half the slips plus that cheap drop.
+            -1 -> if (nearSpace(p, spatial)) budget / 2 + spaceDrop(p, spatial) else return false
+            else -> return false
+        }
         return cost(p, w, 22, rows, spatial, complete = true) <= limit
     }
 
@@ -486,6 +524,50 @@ class Predictor internal constructor(
             val best = ranked.first()
             if (best.second - keep < margin || ranked.getOrNull(1)?.let { best.second - it.second < 1.0 } == true) null
             else matchCase(best.first, committed)
+        }
+    }
+
+    /**
+     * Whole-sentence re-decoding, once a sentence ends: re-decides every tapped word of it together, using all the
+     * words on both sides, every tap and the end of the sentence (field fulled withn flowers -> filled with).
+     * [before] is the text before the sentence; [typed] and [taps] are what was tapped for each word (taps null for
+     * words that weren't tapped, which stay as shown); [shown] are the words on screen now. Returns the new words when
+     * a reading beats the shown one by [SENTENCE_MARGIN] (more for each extra word it changes), else null. English only.
+     */
+    fun redecode(before: String, typed: List<String>, taps: List<ComposingTaps?>, shown: List<String>, mode: AutocorrectMode): List<String>? =
+        prepareRedecode(before, typed, taps, shown, mode)?.invoke()
+
+    /**
+     * The two halves of [redecode]: gathering each word's readings uses this predictor's caches, so it runs here; the
+     * returned decode only steps the model, so it may run on any thread. Null when there is nothing to re-decide.
+     */
+    fun prepareRedecode(before: String, typed: List<String>, taps: List<ComposingTaps?>, shown: List<String>, mode: AutocorrectMode): (() -> List<String>?)? {
+        val english = english ?: return null
+        if (mode == AutocorrectMode.OFF || shown.size < 2 || shown.size > SENTENCE_WORDS || typed.size != shown.size || taps.size != shown.size) return null
+        val options = shown.indices.map { i ->
+            val word = shown[i]; val current = word.lowercase(); val p = typed[i].lowercase()
+            val spatial = taps[i]?.takeIf { it.hasTaps(typed[i]) }
+            val rows = Array(3) { IntArray(p.length + 1) }
+            fun option(w: String) = EnglishContext.Option(w, rank[w],
+                -(if (w == p) 0.0 else TYPO_WEIGHT * cost(p, w, 22, rows, spatial, complete = true) / 10.0) - history.penalty(w) -
+                    if (rank.containsKey(w) || user.containsKey(w)) 0.0 else UNKNOWN_WORD_DOUBT)
+            // Untapped, picked or deliberately repeated words stay as they are.
+            if (spatial == null || !CorrectionRules.eligible(word) || p.length < 2 || isLearned(p) && !rank.containsKey(p) || typedTwice(p))
+                return@map listOf(option(current))
+            val slips = slips(p, AutocorrectMode.AGGRESSIVE, spatial)
+            val alternatives = candidates(p, null, null, spatial, null).asSequence().map { it.word }
+                .filter { it != current && !history.blocked(word, it) && reachable(p, it, slips, spatial, rows) }
+                .take(SENTENCE_OPTIONS).toList()
+            // What was typed is an option too when it's a word: an autocorrection may have been the mistake.
+            (listOf(current) + listOfNotNull(p.takeIf { it != current && rank.containsKey(it) }) + alternatives).distinct().map(::option)
+        }
+        if (options.all { it.size == 1 }) return null
+        return decode@{
+            val decoded = english.decodeSentence(before, options, SENTENCE_BEAM) ?: return@decode null
+            val changed = decoded.picks.count { it != 0 }
+            val margin = SENTENCE_MARGIN + (if (mode == AutocorrectMode.CONFIDENT) 1.5 else 0.0) + (changed - 1)
+            if (changed == 0 || decoded.score - decoded.original < margin) null
+            else shown.indices.map { i -> if (decoded.picks[i] == 0) shown[i] else matchCase(options[i][decoded.picks[i]].word, shown[i]) }
         }
     }
 
@@ -771,6 +853,21 @@ class Predictor internal constructor(
         /** Look-back revises the previous word only when both sides together prefer another by this many nats. */
         const val LOOK_BACK_MARGIN = 3.0
         const val LOOK_BACK_CANDIDATES = 6
+        /** Sentence re-decoding: at most this many words, readings per word, and paths kept at each step. */
+        const val SENTENCE_WORDS = 16
+        const val SENTENCE_OPTIONS = 4
+        const val SENTENCE_BEAM = 4
+        /**
+         * A re-decoded sentence must beat the one on screen by this many nats (plus one per extra word it changes).
+         * Look-back already repairs most single slips; at 3 the whole-sentence pass changed 14 of 6,157 carefully
+         * typed words in held-out sentences, at 6 only 3, while still settling endings (route to wor -> work).
+         */
+        const val SENTENCE_MARGIN = 6.0
+        /** Dropping a letter as a missed space costs its tap's distance to the bar plus this, in tenths. */
+        const val SPACE_DROP = 2
+        /** A tap counts as a reach for space only if it was at least as near the bar as any key centre (the lower part of
+         *  a key just above it). 4, any tap on those keys, also caught ordinary noisy letters (them -> the). */
+        const val NEAR_SPACE = 0
         /** Layout neighbours: centres within this many key sizes. */
         const val NEAR = 1.5f
     }

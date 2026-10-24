@@ -113,12 +113,13 @@ internal class EnglishContext(
     private var failed = false
     private var running = false
     private var published: Scores? = null
-    // Everything below belongs exclusively to the serial worker (or synchronous JVM caller).
-    private var model: NextWordModel? = null
+    // Everything below belongs exclusively to the serial worker (or synchronous JVM caller), except that sentence
+    // re-decoding reads the loaded model and vocabulary maps (both then fixed) from the keyboard thread.
+    @Volatile private var model: NextWordModel? = null
     private var state: NextWordModel.State? = null
     private var parentState: NextWordModel.State? = null
     private var tokens: List<String> = emptyList()
-    private var front: Scores? = null
+    @Volatile private var front: Scores? = null
     private var back: Scores? = null
     private var computed: Scores? = null
     internal var steps = 0; private set
@@ -150,6 +151,49 @@ internal class EnglishContext(
     }
 
     fun <T> withScores(read: (Scores?) -> T): T = synchronized(lock) { read(published) }
+
+    /** One way a word of the sentence could read, with what the taps and dictionary say about it (log scale). */
+    class Option(val word: String, val rank: Int?, val bonus: Double)
+    class Decoded(val picks: IntArray, val score: Double, val original: Double)
+
+    /**
+     * Re-decides a finished sentence: [options] lists each word's readings (index 0 is what's on screen). A small
+     * beam steps the model through them after the text [before], ending with the end-of-sentence probability, and
+     * returns the best path next to the score of the path on screen. Runs on the caller's thread with its own states
+     * (the weights are read-only), so it never disturbs the suggestion worker. Null until the model has loaded.
+     */
+    fun decodeSentence(before: String, options: List<List<Option>>, width: Int): Decoded? {
+        val m = model ?: return null
+        val vocabulary = front ?: return null
+        val start = m.initialState()
+        for (token in EnglishTokens.context(before)) m.step(start, m.idOf(token))
+        val probs = FloatArray(m.vocabularySize)
+        fun logProb(o: Option): Double {
+            val id = m.idOf(o.word)
+            return if (id != 2) probs[id].toDouble()
+            else probs[2] + kotlin.math.ln(OOV_DICTIONARY_SHARE * (1.0 / ((o.rank ?: 5000) + 10)) / vocabulary.oovMass)
+        }
+        class Path(val state: NextWordModel.State, val picks: IntArray, val score: Double)
+        fun run(choices: List<List<Option>>, keep: Int): Path {
+            var beam = listOf(Path(start, IntArray(0), 0.0))
+            for (options in choices) {
+                val next = ArrayList<Triple<Path, Int, Double>>()
+                for (path in beam) {
+                    m.logProbs(path.state, probs)
+                    options.forEachIndexed { k, o -> next += Triple(path, k, path.score + logProb(o) + o.bonus) }
+                }
+                beam = next.sortedByDescending { it.third }.take(keep).map { (path, k, score) ->
+                    val state = m.initialState().also { m.copyState(path.state, it); m.step(it, m.idOf(options[k].word)) }
+                    Path(state, path.picks + k, score)
+                }
+            }
+            // Finish each path with "the sentence ends here".
+            return beam.map { path -> m.logProbs(path.state, probs); Path(path.state, path.picks, path.score + probs[1]) }.maxBy { it.score }
+        }
+        val original = run(options.map { listOf(it.first()) }, 1)
+        val best = run(options, width)
+        return Decoded(best.picks, best.score, original.score)
+    }
 
     private fun matches(old: String, before: CharSequence, end: Int): Boolean {
         if (old.length != end) return false

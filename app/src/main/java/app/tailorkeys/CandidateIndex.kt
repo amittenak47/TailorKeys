@@ -33,7 +33,7 @@ internal class CandidateIndex(words: Collection<String>) {
         return i < words.size && words[i].startsWith(prefix)
     }
     fun visit(prefix: String, limit: Int, firstAllowed: (Char) -> Boolean,
-              substitution: (Int, Char) -> Int, accept: (String) -> Unit) {
+              substitution: (Int, Char) -> Int, accept: (String) -> Unit, lastDrop: Int = 8) {
         // Literal completions bypass tap costs in the original scorer, even for a far-off tap.
         var completion = lowerBound(prefix)
         while (completion < words.size && words[completion].startsWith(prefix)) accept(words[completion++])
@@ -53,7 +53,8 @@ internal class CandidateIndex(words: Collection<String>) {
             current[0] = if (depth <= band) depth * 8 else 1000
             var rowMin = current[0]
             for (j in maxOf(1, depth - band)..minOf(prefix.length, depth + band)) {
-                var value = minOf(previous[j] + 8, current[j - 1] + 8, previous[j - 1] + substitution(j - 1, node.char))
+                // Dropping the last typed letter can be cheaper: a reach for the space bar.
+                var value = minOf(previous[j] + 8, current[j - 1] + if (j == prefix.length) lastDrop else 8, previous[j - 1] + substitution(j - 1, node.char))
                 if (depth > 1 && j > 1 && prefix[j - 1] == previousChar && prefix[j - 2] == node.char) {
                     value = minOf(value, rows[depth - 2][j - 2] + 6)
                 }

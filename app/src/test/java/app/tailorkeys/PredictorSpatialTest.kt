@@ -13,8 +13,14 @@ internal object SplitTaps {
         key.keys[0].singleOrNull()?.takeIf { it.isLetter() }?.let { it to (key.c + 0.5f to key.r + 0.5f) }
     }.toMap()
 
+    /** Space bars as cell rectangles: left, top, right, bottom. */
+    private val spaces = grid.items.filter { it.isSpace }.map { floatArrayOf(it.c.toFloat(), it.r.toFloat(), (it.c + it.w).toFloat(), it.r + 1f) }
+
     fun distances(x: Float, y: Float): FloatArray = FloatArray(ComposingTaps.LETTERS) { 100f }.also { row ->
         for ((ch, point) in centres) row[ch.code] = (x - point.first) * (x - point.first) + (y - point.second) * (y - point.second)
+        // Like the keyboard: distance to the nearest space bar's edge, zero on it.
+        row[ComposingTaps.SPACE] = spaces.minOf { (l, t, r, b) ->
+            val dx = maxOf(l - x, 0f, x - r); val dy = maxOf(t - y, 0f, y - b); dx * dx + dy * dy }
     }
 
     fun word(word: String, slips: Boolean = false): ComposingTaps = ComposingTaps().also { taps ->

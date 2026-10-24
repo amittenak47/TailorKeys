@@ -234,6 +234,10 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     /** A word finished with a space: what was tapped, its taps, and the text ending with it, for look-back. */
     private class FinishedWord(val typed: String, val taps: ComposingTaps?, val tail: String)
     private var lastWord: FinishedWord? = null
+    /** The tapped words of the sentence so far, in order, for re-deciding them together when it ends. */
+    private val sentenceWords = ArrayList<FinishedWord>()
+    /** Sentence re-decoding steps the model for tens of milliseconds; keep it off the keyboard's thread. */
+    private val sentenceWorker = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "TailorKeys-sentence").apply { isDaemon = true } }
 
     override fun onWheelChosen() = editorPhase { onWheelChosenPhase() }
 
@@ -271,6 +275,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val restore = undo.undo(editor().before.takeLast(64), editor().after.take(64), editor().selected) ?: return false
         armedUndo = null // Reverting discards the deferred learning increment.
         lastWord = null
+        sentenceWords.clear()
         clearTaps()
         clearChoice(); clearGlide()
         ic.beginBatchEdit()
@@ -416,6 +421,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onDestroy() {
+        sentenceWorker.shutdownNow()
         clipboardCapture?.close()
         insertPanel?.hide()
         onChoiceInterrupted()
@@ -597,6 +603,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         if (info.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0) learn = false
         onChoiceInterrupted()
         lastWord = null
+        sentenceWords.clear()
         clearTaps()
         models.values.forEach { it.predictor.resetContext() }
         val cls = info.inputType and InputType.TYPE_MASK_CLASS
@@ -747,14 +754,19 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         else if (code == Keys.SPACE || code == Keys.ENTER || code.length == 1) { keepPendingLearning(); finishArmedLearning() }
         val separator = if (code == Keys.SPACE) " " else code.takeIf { it.length == 1 && it[0] in ".,?!;:" }
         // Taken before the word is corrected or picked, while its taps still describe it.
-        val finishing = if (separator == " ") finishingWord() else null
-        if (separator != " ") lastWord = null
-        if (separator != null && commitArmed(separator)) {
+        val finishing = if (separator != null) finishingWord() else null
+        val endsSentence = separator != null && separator in SENTENCE_ENDS
+        if (separator != null && separator != " ") {
             lastWord = null
+            // Re-decoding covers the stretch since the last comma; the earlier clause is context.
+            if (!endsSentence) sentenceWords.clear()
+        }
+        if (separator != null && commitArmed(separator)) {
+            lastWord = null; sentenceWords.clear()
             updateSuggestions(); keyboardView?.refreshInputState(); return
         }
         if (separator != null && correctWord(separator)) {
-            lookBack(finishing)
+            if (endsSentence) endSentence(finishing) else lookBack(finishing)
             updateSuggestions(); keyboardView?.refreshInputState(); return
         }
         clearChoice()
@@ -800,7 +812,11 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             }
         }
         if (endedBefore != null) deferLearning(endingGlide ?: currentWord(endedBefore), previousWord(endedBefore), previousWord2(endedBefore))
-        if (separator == " ") lookBack(finishing)
+        if (separator == " ") {
+            lookBack(finishing)
+            // A double space may just have typed ". ", ending the sentence.
+            if (editor().before.trimEnd(' ').lastOrNull()?.let { it in SENTENCE_ENDS } == true) endSentence(null)
+        } else if (endsSentence) endSentence(finishing)
         updateSuggestions(letterCommitted)
         keyboardView?.refreshInputState()
     }
@@ -826,6 +842,8 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         if (!before.endsWith(" ") || word.isEmpty() || read.selected) return
         val head = before.dropLast(word.length + 1)
         val old = head.dropLast(1).takeLastWhile(TextInputRules::wordChar)
+        // The sentence's word list only continues while the text still ends as it was left.
+        if (previous == null || !head.endsWith(previous.tail)) sentenceWords.clear()
         if (previous != null && modelReady && correctAllowed && old.isNotEmpty() && head.endsWith(previous.tail) &&
             read.after.firstOrNull()?.let(TextInputRules::wordChar) != true) {
             val fix = predictor.lookBack(head, previous.typed, previous.taps, word, AutocorrectMode.entries[settings.int(Prefs.AUTOCORRECT)])
@@ -841,6 +859,46 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             }
         }
         lastWord = FinishedWord(finished.typed, finished.taps, editor().before.takeLast(48))
+        sentenceWords += lastWord!!
+    }
+
+    /**
+     * Whole-sentence re-decoding: the sentence just ended, so its tapped words are re-decided together, using all
+     * the words on both sides and the end of the sentence. The readings are gathered here; the model runs in the
+     * background, and the result applies only if the text is still exactly as it was, with one undo for all of it.
+     */
+    private fun endSentence(finished: FinishedWord?) {
+        val words = ArrayList(sentenceWords).apply { if (finished != null) add(finished) }
+        sentenceWords.clear(); lastWord = null
+        val read = editor()
+        if (words.size < 2 || !modelReady || !correctAllowed || read.selected || read.after.firstOrNull()?.let(TextInputRules::wordChar) == true) return
+        val before = read.before
+        val body = before.trimEnd(' ')
+        if (body.lastOrNull()?.let { it in SENTENCE_ENDS } != true) return
+        val text = body.dropLast(1)
+        val span = text.split(' ').takeLast(words.size)
+        if (span.size != words.size || span.any { it.isEmpty() || !it.all(TextInputRules::wordChar) }) return
+        val spanText = span.joinToString(" ")
+        val head = text.dropLast(spanText.length)
+        val trailing = before.substring(text.length)
+        val decode = predictor.prepareRedecode(head, words.map { it.typed }, words.map { it.taps }, span,
+            AutocorrectMode.entries[settings.int(Prefs.AUTOCORRECT)]) ?: return
+        sentenceWorker.execute {
+            val fixed = decode() ?: return@execute
+            main.post {
+                val ic = currentInputConnection ?: return@post
+                val now = editor()
+                if (destroyed || now.before != before || now.selected || now.after.take(64) != read.after.take(64)) return@post
+                val replacement = fixed.joinToString(" ") + trailing
+                ic.beginBatchEdit()
+                ic.deleteSurroundingText(spanText.length + trailing.length, 0)
+                ic.commitText(replacement, 1)
+                editorRead = null
+                ic.endBatchEdit()
+                armedUndo = ReversibleCommit(spanText, replacement, trailing, editor().before.takeLast(64), editor().after.take(64), correction = true) {}
+                updateSuggestions()
+            }
+        }
     }
 
     override fun onSelectMode(on: Boolean) {
@@ -1422,3 +1480,6 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         const val DOUBLE_TAP_MS = 350L
     }
 }
+
+/** Punctuation that ends a sentence and triggers whole-sentence re-decoding. */
+private const val SENTENCE_ENDS = ".?!"
