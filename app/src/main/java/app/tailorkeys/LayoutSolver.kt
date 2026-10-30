@@ -34,14 +34,16 @@ internal class LayoutSolver {
     private var lastDensity = Float.NaN
     private var lastPad = Float.NaN
     private var lastHandle = Float.NaN
+    private var lastBar = Float.NaN
     private var haveReserved = false
     private val reserved = FloatArray(3)
     private val boundsLetters = FloatArray(4)
     fun compute(
         d: Float, n: Int, gap: Float, stripH: Float, handleH: Float, pad: Float, bottomPad: Float,
         target: Float, half: Float, innerW: Float, split: Boolean, editMode: Boolean,
-        tilt: Float, curve: Float, grid: KeyGrid,
+        tilt: Float, curve: Float, grid: KeyGrid, bar: Float = 0f,
     ): Solution {
+        // [bar]: a touch bar's height above the bottom row, inside each block, paid for by shorter rows.
         val th = Math.toRadians(tilt.toDouble())
         fun solution(un: Float, hc: Float, cw: Float, pv: Float, disp: Float, padTop: Float,
                      letterY: Float = 0f, spaceY: Float = hc, span: Float = cw) =
@@ -49,7 +51,7 @@ internal class LayoutSolver {
 
         // Fit each tilted half inside its side: outer edge on the screen edge, never past the center line.
         fun solve(un: Float, angle: Double, bend: Float, fixedWidth: Float? = null): Work {
-            val hc = un * n
+            val hc = un * n + bar
             val raise = if (split) ErgoCurve.RISE * bend * un else 0f
             val hf = hc + raise
             var cw = fixedWidth ?: half
@@ -78,7 +80,7 @@ internal class LayoutSolver {
 
         // Fit tilt, curve and all rows within the selected height, keeping a pixel of room when shrinking.
         fun fit(angle: Double, bend: Float): Work {
-            var s = solve(max(14 * d, (target - stripH - handleH - pad - bottomPad) / n), angle, bend)
+            var s = solve(max(14 * d, (target - stripH - handleH - pad - bottomPad - bar) / n), angle, bend)
             for (i in 0 until 24) {
                 if (s.total <= target) break
                 s = solve(max(14 * d, s.un - (s.total - target + 1) / (n + 0.5f)), angle, bend)
@@ -90,7 +92,8 @@ internal class LayoutSolver {
         if (reserve && reservedRows != n) { reservedRows = n; haveReserved = false }
         // The curve only moves columns up, keys upright, so the block's bounds grow by the arc's rise alone.
         fun blocks(un: Float, cw: Float, angle: Double, bend: Float): Work {
-            val letterH = un * (n - 1)
+            val letterH = un * (n - 1) + bar
+            val blockH = n * un + bar
             // Axis-aligned bounds of a rotated rectangle, written into [out] as left, top, right, bottom.
             // Allocation-free: this runs hundreds of times per layout.
             fun bounds(x0: Float, y0: Float, x1: Float, y1: Float, a: Double, out: FloatArray) {
@@ -103,11 +106,11 @@ internal class LayoutSolver {
             }
             val letters = boundsLetters
             // One transformed block: row spacing is preserved through the shared tilt.
-            bounds(-cw + gap / 2, -n * un + gap / 2 - ErgoCurve.RISE * bend * un, -gap / 2, -gap / 2, angle, letters)
+            bounds(-cw + gap / 2, -blockH + gap / 2 - ErgoCurve.RISE * bend * un, -gap / 2, -gap / 2, angle, letters)
             val contentH = letters[3] - letters[1]
-            val hc = max(n * un, contentH)
+            val hc = max(blockH, contentH)
             val extra = (hc - contentH) / 2
-            val top = -letters[1] - n * un + extra
+            val top = -letters[1] - blockH + extra
             return solution(un, hc, cw, -letters[0], 0f, pad, top,
                 top + letterH, letters[2] - letters[0])
         }
@@ -137,9 +140,9 @@ internal class LayoutSolver {
             // Exact primitive cache keys: live tilt/curve reuse the reservation without strings or boxing.
             if (!haveReserved || lastTarget != target || lastHalf != half || lastInner != innerW ||
                 lastGap != gap || lastStrip != stripH || lastBottom != bottomPad || lastDensity != d ||
-                lastPad != pad || lastHandle != handleH) {
+                lastPad != pad || lastHandle != handleH || lastBar != bar) {
                 var lo = 14 * d
-                var hi = max(lo, (target - stripH - handleH - pad - bottomPad) / n)
+                var hi = max(lo, (target - stripH - handleH - pad - bottomPad - bar) / n)
                 repeat(14) {
                     val un = (lo + hi) / 2
                     if (worst(un).total <= target) lo = un else hi = un
@@ -147,7 +150,7 @@ internal class LayoutSolver {
                 val w = worst(lo)
                 reserved[0] = w.un; reserved[1] = w.cw; reserved[2] = w.total
                 lastTarget = target; lastHalf = half; lastInner = innerW; lastGap = gap
-                lastStrip = stripH; lastBottom = bottomPad; lastDensity = d; lastPad = pad; lastHandle = handleH
+                lastStrip = stripH; lastBottom = bottomPad; lastDensity = d; lastPad = pad; lastHandle = handleH; lastBar = bar
                 haveReserved = true
             }
             blocks(reserved[0], reserved[1], th, curve)

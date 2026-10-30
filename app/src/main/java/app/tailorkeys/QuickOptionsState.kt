@@ -14,6 +14,7 @@ internal data class QuickOptionsState(
     val learning: Boolean = true,
     val themeContent: String = "",
     val themeLabel: String = theme.title,
+    val locked: Boolean = false,
 ) {
     fun tiles(): List<QuickTileState> = listOf(
         QuickTileState("Split", if (split) "On" else "Off", on = split),
@@ -28,6 +29,7 @@ internal data class QuickOptionsState(
         QuickTileState("Settings", "All", description = null),
         QuickTileState("Pause learning", if (learning) "Off" else "On", on = !learning),
         QuickTileState("Tidy", "Review text"),
+        QuickTileState("Lock halves", if (locked) "On" else "Off", on = locked),
     )
 }
 

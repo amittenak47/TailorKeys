@@ -1,7 +1,44 @@
 package app.tailorkeys
 
 enum class CursorControl(val title: String) {
-    AUTO("Auto"), CENTER_GAP("Center gap"), OUTER_EDGES("Outer edges"), OFF("Off")
+    AUTO("Auto"), TOUCH_BAR("Touch bar"), CENTER_GAP("Center gap"), OUTER_EDGES("Outer edges"), OFF("Off")
+}
+
+/** A strip between the letters and the space row: the split default, and an option on every other layout. */
+internal fun usesTouchBar(control: CursorControl, split: Boolean) =
+    control == CursorControl.TOUCH_BAR || control == CursorControl.AUTO && split
+
+/** How a touch bar moves the cursor: a push from wherever the finger lands, or a fixed direction per bar. */
+enum class TouchBarStyle(val title: String) { JOYSTICK("Joystick"), LEFT_RIGHT("Left and right") }
+
+/**
+ * Left and right touch bars: the left bar (or the left half of a single bar) moves the cursor left, the right one
+ * right. A press moves one character at once; held past [DELAY] ms it repeats, speeding up from [MIN_SPEED] to
+ * [MAX_SPEED] characters a second over [RAMP] ms, both scaled by the cursor sensitivity ([speedScale]).
+ */
+internal class CursorRepeat(val direction: Int, private val start: Long, private val speedScale: Double) {
+    private var last = start
+    private var fraction = 0.0
+
+    /** Signed characters to move since the last call. */
+    fun advance(now: Long): Int {
+        val from = maxOf(last, start + DELAY)
+        last = maxOf(last, now)
+        if (now <= from) return 0
+        val held = (now - start - DELAY).toDouble()
+        val rate = (MIN_SPEED + (MAX_SPEED - MIN_SPEED) * (held / RAMP).coerceIn(0.0, 1.0)) * speedScale
+        fraction += rate * (now - from) / 1000.0
+        val steps = (fraction + 1e-9).toInt()
+        fraction -= steps
+        return steps * direction
+    }
+
+    companion object {
+        const val DELAY = 350L
+        const val RAMP = 1500.0
+        const val MIN_SPEED = 8.0
+        const val MAX_SPEED = CursorJoystick.MAX_SPEED
+    }
 }
 
 internal data class ZonePoint(val x: Float, val y: Float)
@@ -43,7 +80,7 @@ internal enum class CursorZoneKind { CENTER, OUTER, EMPTY, NONE }
 
 /** Selects the center gap or outer padding for layouts that are not in one-hand mode. */
 internal fun cursorZoneKind(control: CursorControl, outer: List<CursorZone>, minWidth: Float): CursorZoneKind = when (control) {
-    CursorControl.OFF -> CursorZoneKind.NONE
+    CursorControl.OFF, CursorControl.TOUCH_BAR -> CursorZoneKind.NONE
     CursorControl.CENTER_GAP -> CursorZoneKind.CENTER
     CursorControl.AUTO, CursorControl.OUTER_EDGES ->
         if (outer.size == 2 && outer.all { it.hasRoom(minWidth) }) CursorZoneKind.OUTER else CursorZoneKind.CENTER
@@ -60,13 +97,12 @@ internal fun cursorZonePlan(oneHand: Boolean, split: Boolean, control: CursorCon
 }
 
 /**
- * Split halves sit wherever their grips put them, so every empty space can hold the cursor: the center gap, and
- * the space between each half and its screen edge. Each one the setting allows is used when it is wide enough at
- * every row.
+ * Split halves sit wherever their grips put them, so the center gap and the space between each half and its screen
+ * edge can hold the cursor when chosen, each when it is wide enough at every row. Auto uses the touch bars instead.
  */
 internal fun splitCursorZones(control: CursorControl, center: CursorZone?, outer: List<CursorZone>, minWidth: Float): List<CursorZone> {
-    val useCenter = control == CursorControl.AUTO || control == CursorControl.CENTER_GAP
-    val useOuter = control == CursorControl.AUTO || control == CursorControl.OUTER_EDGES
+    val useCenter = control == CursorControl.CENTER_GAP
+    val useOuter = control == CursorControl.OUTER_EDGES
     return (if (useOuter) outer else emptyList()).filter { it.hasRoom(minWidth) } +
         listOfNotNull(center?.takeIf { useCenter && it.hasRoom(minWidth) })
 }

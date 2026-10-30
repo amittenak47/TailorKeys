@@ -20,6 +20,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.tailorkeys.CursorControl
+import app.tailorkeys.TouchBarStyle
 import app.tailorkeys.Align
 import app.tailorkeys.OnboardingActivity
 import app.tailorkeys.RejectedCorrection
@@ -54,6 +55,7 @@ internal fun LazyListScope.sizeOptions(state: SettingsState, page: Boolean, onPa
             GroupTitle("Split")
             OptionGroup {
                 ToggleRow("Split keyboard", p.split) { state.settings.setSplitFor(page, it) }
+                ToggleRow("Lock halves", state.bool(Prefs.SPLIT_LOCKED)) { state.set(Prefs.SPLIT_LOCKED, it) }
                 if (p.split) {
                     Text("Drag the bar under a half to move it. Double-tap the bar to put it back at the edge. Width sets how big the halves are.",
                         Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 4.dp),
@@ -62,7 +64,9 @@ internal fun LazyListScope.sizeOptions(state: SettingsState, page: Boolean, onPa
                     val curve = state.int(Prefs.CURVE)
                     SettingSlider("Curve", curve, Prefs.CURVE, "$curve%") { state.setFor(page, { Prefs.CURVE }, it) }
                     val depth = state.int(Prefs.DEPTH)
-                    SettingSlider("Depth", depth, Prefs.DEPTH, "$depth%") { state.setFor(page, { Prefs.DEPTH }, it) }
+                    val shape = when { depth > 0 -> "Bowl $depth%"; depth < 0 -> "Dome ${-depth}%"; else -> "Off" }
+                    SettingSlider("Depth", depth, Prefs.DEPTH, shape) { state.setFor(page, { Prefs.DEPTH }, it) }
+                    if (depth != 0) ToggleRow("Compact", state.bool(Prefs.DEPTH_COMPACT)) { state.set(Prefs.DEPTH_COMPACT, it) }
                 }
             }
         }
@@ -133,6 +137,9 @@ internal fun LazyListScope.lookOptions(state: SettingsState) {
                 SettingSlider(label, value, pref, if (pref == Prefs.TEXT_SCALE) "$value%" else "$value") { state.set(pref, it) }
             }
             ToggleRow("Use system text size", state.bool(Prefs.FOLLOW_SYSTEM_TEXT)) { state.set(Prefs.FOLLOW_SYSTEM_TEXT, it) }
+            Text("Key style", Modifier.padding(start = 20.dp, top = 8.dp), style = MaterialTheme.typography.bodyLarge)
+            SettingsSegments(listOf("Flat", "3D"), if (state.bool(Prefs.KEYS_3D)) 1 else 0, "Key style",
+                Modifier.padding(start = 20.dp, end = 20.dp, bottom = 12.dp)) { state.set(Prefs.KEYS_3D, it == 1) }
         }
     }
     item("labels") {
@@ -266,8 +273,24 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
             SettingsDropdown("Cursor control", state.cursorControl().title, CursorControl.entries.map { it.title }) {
                 state.settings.setCursorControl(CursorControl.entries[it])
             }
-            Text("Hold and push in the empty space to move the cursor.", Modifier.padding(16.dp, 8.dp),
+            val control = state.cursorControl()
+            val bars = control == CursorControl.TOUCH_BAR || control == CursorControl.AUTO
+            val arrows = bars && state.touchBarStyle() == TouchBarStyle.LEFT_RIGHT
+            val bar = if (arrows) "Press the left bar to move the cursor left and the right bar to move it right; hold to repeat."
+                else "Hold and push in the bar above the space key to move the cursor."
+            val how = when (control) {
+                CursorControl.TOUCH_BAR -> bar
+                CursorControl.OFF -> "No cursor area on the keyboard."
+                CursorControl.AUTO -> "Split: $bar Otherwise, hold and push in the empty space."
+                else -> "Hold and push in the empty space to move the cursor."
+            }
+            Text(how, Modifier.padding(16.dp, 8.dp),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (bars) {
+                Text("Touch bar", Modifier.padding(start = 16.dp, top = 4.dp), style = MaterialTheme.typography.bodyLarge)
+                SettingsSegments(TouchBarStyle.entries.map { it.title }, state.touchBarStyle().ordinal, "Touch bar",
+                    Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) { state.settings.setTouchBarStyle(TouchBarStyle.entries[it]) }
+            }
             if (state.cursorControl() != CursorControl.OFF) {
                 val sensitivity = state.int(Prefs.CURSOR_SENSITIVITY)
                 SettingSlider("Cursor sensitivity", sensitivity, Prefs.CURSOR_SENSITIVITY,

@@ -341,6 +341,7 @@ class QuickOptions(
         val third = row()
         tile(third, "Pause learning", R.drawable.ic_settings_pause) { settings.set(Prefs.LEARNING, !settings.bool(Prefs.LEARNING)) }
         tile(third, "Tidy", R.drawable.ic_settings_tidy) { tidy() }
+        tile(third, "Lock halves", R.drawable.ic_settings_lock) { settings.set(Prefs.SPLIT_LOCKED, !settings.bool(Prefs.SPLIT_LOCKED)) }
         confirmBox.addView(confirmTitle); confirmBox.addView(confirmText)
         val buttons = LinearLayout(context)
         buttons.addView(cancel, LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
@@ -467,7 +468,8 @@ class QuickOptions(
         val next = QuickOptionsState(settings.theme(), resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK,
             settings.int(Prefs.CORNER_RADIUS), settings.split(l), settings.quickOneHand(l), settings.int(Prefs.height(l)),
             settings.currentLanguage(), settings.languages().size > 1, settings.bool(Prefs.SWIPE_TYPING), settings.bool(Prefs.LEARNING), settings.themeId() + settings.prefs.getString(Prefs.THEMES_CUSTOM, ""),
-            settings.customThemes().firstOrNull { it.selection == settings.themeId() }?.name ?: settings.theme().title)
+            settings.customThemes().firstOrNull { it.selection == settings.themeId() }?.name ?: settings.theme().title,
+            settings.bool(Prefs.SPLIT_LOCKED))
         val entries = library.entries()
         val geometry = "${settings.profile(l)}|${settings.int(Prefs.CURVE)}|${settings.int(Prefs.KEY_GAP)}|${settings.bool(Prefs.SAME_ORIENTATIONS)}|${resources.displayMetrics}"
         if (rendered == next && renderedEntries == entries && renderedSelection == library.inUse && renderedGeometry == geometry) return

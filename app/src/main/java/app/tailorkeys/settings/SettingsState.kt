@@ -114,6 +114,7 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         return settings.profile(page)
     }
     fun cursorControl() = run { revisions.read(Prefs.CURSOR_CONTROL); settings.cursorControl() }
+    fun touchBarStyle() = run { revisions.read(Prefs.TOUCH_BAR_STYLE); settings.touchBarStyle() }
     fun themeId() = run { revisions.read(Prefs.THEME, Prefs.THEMES_CUSTOM); settings.themeId() }
     fun customThemes() = run { revisions.read(Prefs.THEMES_CUSTOM); settings.customThemes() }
     fun theme() = run { revisions.read(Prefs.THEME); settings.theme() }

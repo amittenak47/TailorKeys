@@ -25,4 +25,17 @@ class LayoutSolverTest {
             }
         }
     }
+
+    @Test fun aTouchBarComesOutOfTheRowsNotTheKeyboardsHeight() {
+        val grid = KeyGrid.template(Template.SPLIT)
+        for (split in listOf(true, false)) for (tilt in listOf(-10f, 0f, 10f)) {
+            fun solve(bar: Float) = LayoutSolver().compute(1.5f, 4, 7.5f, 60f, 21f, 6f, 0f,
+                360f, 270f, 630f, split, false, tilt, 1f, grid, bar)
+            val plain = solve(0f)
+            val withBar = solve(42f)
+            assertTrue(withBar.total <= 360.01f)
+            assertTrue(withBar.un < plain.un)
+            if (split) assertEquals(withBar.letterY + withBar.un * 3 + 42f, withBar.spaceY, .0001f)
+        }
+    }
 }

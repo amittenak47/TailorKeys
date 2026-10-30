@@ -1,6 +1,8 @@
 package app.tailorkeys
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SplitPlacementTest {
@@ -32,11 +34,21 @@ class SplitPlacementTest {
         val leftEdge = zone(0f, 60f); val rightEdge = zone(290f, 300f); val center = zone(120f, 180f)
         val outer = listOf(leftEdge, rightEdge)
         // The right edge is too narrow; the left edge and the center are wide enough.
-        assertEquals(listOf(leftEdge, center), splitCursorZones(CursorControl.AUTO, center, outer, 32f))
         assertEquals(listOf(leftEdge), splitCursorZones(CursorControl.OUTER_EDGES, center, outer, 32f))
         assertEquals(listOf(center), splitCursorZones(CursorControl.CENTER_GAP, center, outer, 32f))
         assertEquals(emptyList<CursorZone>(), splitCursorZones(CursorControl.OFF, center, outer, 32f))
         // Halves dragged close together leave no center cursor.
-        assertEquals(listOf(leftEdge), splitCursorZones(CursorControl.AUTO, zone(140f, 160f), outer, 32f))
+        assertEquals(emptyList<CursorZone>(), splitCursorZones(CursorControl.CENTER_GAP, zone(140f, 160f), outer, 32f))
+        // Auto and Touch bar use the touch bars instead.
+        assertEquals(emptyList<CursorZone>(), splitCursorZones(CursorControl.AUTO, center, outer, 32f))
+        assertEquals(emptyList<CursorZone>(), splitCursorZones(CursorControl.TOUCH_BAR, center, outer, 32f))
+    }
+
+    @Test fun touchBarsAreTheSplitDefaultAndAnOptionElsewhere() {
+        assertTrue(usesTouchBar(CursorControl.AUTO, split = true))
+        assertFalse(usesTouchBar(CursorControl.AUTO, split = false))
+        assertTrue(usesTouchBar(CursorControl.TOUCH_BAR, split = false))
+        for (control in listOf(CursorControl.CENTER_GAP, CursorControl.OUTER_EDGES, CursorControl.OFF))
+            for (split in listOf(false, true)) assertFalse(usesTouchBar(control, split))
     }
 }

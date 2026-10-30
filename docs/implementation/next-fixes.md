@@ -97,17 +97,36 @@ TidyText fixes spacing and capitals.
 **Problem.** The center column is as wide as the split gap. Slide the halves together and its keys squash into a
 line. The center-gap cursor is also too far from the thumbs.
 
-**Plan: a strip under the space bar row**, full width, about 28 dp, used for:
+**Plan: a strip in each half, between its letter rows and its space key** (decided 2026-10-30: above the space
+row, not under it, close to the thumbs). Each strip is as wide as its half; nothing crosses the gap. About 28 dp,
+used for:
 
 - **Cursor touch bar.** Swipe left or right to move the cursor (uses the existing cursor sensitivity); press,
   hold, then drag for fine moves; double-tap then drag to select.
-- **Overflow for center keys.** Keys in the center column move into the strip whenever the gap is too narrow to
-  hold them (below about 0.8 key width), and move back when it widens.
+  It uses the same push-to-move feel as today's cursor zones.
 
-Under the space bar beats a gap between the letters and the space bar: it doesn't push the space bar away from
-the letters, so typing speed and space-bar accuracy are unchanged. Add a *Touch bar* option to `CursorControl` and
-make it the split default. Android: keep the strip clear of the gesture-navigation edge (the existing bottom
-padding does this).
+**Center keys when the gap is narrow** (decided 2026-10-30). When the center gap is below about 0.8 key width,
+the center column's keys move outside the halves: a column in the empty space beyond each half's outer edge. They
+move back when the gap widens (250 ms, instant with reduced motion).
+
+- Both outside columns always have the same number of slots and the same key size; an odd count leaves an empty
+  slot on one side. Slots split the letter rows' height evenly (at most a key and a half tall each) and sit
+  centered in the space beside each half.
+- Each center key has a side: *Auto* (alternates to balance), *Left* or *Right*, set in the layout editor. When the
+  choices put more keys on one side, both columns grow to that count so the sizes still match.
+- Without room outside (halves near the screen edges as well), the grips stop the halves before either column would
+  be narrower than about 0.8 key width. Nothing is squeezed.
+- The grips go by the keys you see, not each half's slot (the slot leaves room for the full tilt range, so at tilt 0
+  it is about a quarter wider than the keys). Raising the tilt later pushes the halves apart as far as it needs.
+  The gear between the wheels always keeps 36 dp.
+
+**Touch bar style** (built 2026-10-30): *Joystick* (push from wherever the finger lands) or *Left and right* (the
+left bar moves the cursor left, the right one right; a tap moves one character, holding repeats from 8 up to 22
+characters a second). Cursor sensitivity scales both. With *Left and right*, a double tap doesn't start selecting,
+since quick taps each move a character.
+
+Add a *Touch bar* option to `CursorControl` and make it the split default. Standard (unsplit) layouts get it as an
+option: one strip across the keyboard between the letters and the space row.
 
 **Enough room on iOS?** Yes. The extension sets its own height (`KeyboardViewController.swift:355`), and Apple
 publishes no fixed limit; a strip of about 30 pt is well inside what keyboards normally use. On Face ID iPhones
@@ -142,6 +161,18 @@ subtle to notice.
 2. Raise the strongest shrink to about 12 to 15% so it reads as depth, with the shading following the same
    direction.
 3. Touch targets stay full size (drawing only, as now). Show a live preview in settings while dragging.
+
+Built 2026-10-30: the range is -100 (dome) to 100 (bowl); strength stays at 8%. A *Compact* switch closes the shrunk
+keys up so the gaps stay even (rows keep their centers, rows stack up from the bottom letter row), and touches
+follow the keys as drawn.
+
+---
+
+## 7b. 3D keys (option)
+
+A *Key style* setting: *Flat* (today) or *3D*. 3D keys draw a raised top face over a darker lower edge a few dp
+deep; a pressed key's top sinks onto the edge. Drawing only: touch targets and key positions don't change. Works
+with the bowl depth shading in item 7.
 
 ---
 

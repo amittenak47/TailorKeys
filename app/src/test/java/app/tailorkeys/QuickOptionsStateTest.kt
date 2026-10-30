@@ -29,6 +29,7 @@ class QuickOptionsStateTest {
         assertEquals(listOf(5), changedTiles(initial.copy(multipleLanguages = true)))
         assertEquals(listOf(4), changedTiles(initial.copy(swipe = false)))
         assertEquals(listOf(7), changedTiles(initial.copy(learning = false)))
+        assertEquals(listOf(9), changedTiles(initial.copy(locked = true)))
     }
 
     @Test fun labelsEnabledStateAndAccessibilityDescriptionsStayInSync() {
@@ -47,7 +48,8 @@ class QuickOptionsStateTest {
         assertNull(off[6].description)
         assertEquals("Pause learning, Off", off[7].description)
         assertFalse(off[7].on)
-        assertEquals(listOf("Split", "One hand", "Size", "Theme", "Swipe", "Language", "Settings", "Pause learning", "Tidy"), off.map { it.label })
+        assertEquals(listOf("Split", "One hand", "Size", "Theme", "Swipe", "Language", "Settings", "Pause learning", "Tidy", "Lock halves"), off.map { it.label })
+        assertEquals("Lock halves, Off", off[9].description)
 
         val on = initial.copy(split = true, oneHand = Align.RIGHT, language = "fr",
             multipleLanguages = true, swipe = false, learning = false, theme = ThemeName.HIGH_CONTRAST).tiles()

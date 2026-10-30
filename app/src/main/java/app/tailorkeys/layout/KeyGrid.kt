@@ -27,11 +27,17 @@ enum class Template(val title: String, val split: Boolean) {
     THUMBS("Thumb keys", false),
 }
 
+/** Which outside column a center key moves to when the split gap is too narrow for the center column. */
+enum class CenterSide { AUTO, LEFT, RIGHT }
+
 /** One key on the grid. A key with more than one entry in [keys] is a swipe key that cycles through them. */
 class GridKey(val id: Int, var r: Int, var c: Int, var w: Int, val keys: MutableList<String>, var idx: Int = 0) {
     val isStack get() = keys.size > 1
     val isSpace get() = keys.size == 1 && keys[0] == Keys.SPACE
     val isGap get() = keys.size == 1 && keys[0] == Keys.GAP
+    /** Only center keys use it. */
+    var side = CenterSide.AUTO
+    fun withSide(from: GridKey) = also { side = from.side }
 }
 
 /**
@@ -53,7 +59,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
     private val layers = HashMap<Layer, KeyGrid>()
 
     /** Deep copy with the same key ids, so a preview can be matched key for key with the live grid. */
-    fun copy(): KeyGrid = KeyGrid(rows, items.mapTo(mutableListOf()) { GridKey(it.id, it.r, it.c, it.w, it.keys.toMutableList(), it.idx) }, nextId)
+    fun copy(): KeyGrid = KeyGrid(rows, items.mapTo(mutableListOf()) { GridKey(it.id, it.r, it.c, it.w, it.keys.toMutableList(), it.idx).withSide(it) }, nextId)
         .also { copy -> tray.forEach { copy.tray.add(it.toMutableList()) }; layers.forEach { (l, g) -> copy.layers[l] = g.copy() }; copy.source = source }
 
     /** The first of a layer's three rows: below the number row when there is one. */
@@ -71,10 +77,10 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
     fun layer(layer: Layer): KeyGrid {
         if (layer == Layer.ABC) return this
         val own = layers[layer] ?: defaultLayer(layer)
-        val shown = own.items.mapTo(mutableListOf()) { GridKey(it.id, it.r + layerTop, it.c, it.w, it.keys.toMutableList(), it.idx) }
+        val shown = own.items.mapTo(mutableListOf()) { GridKey(it.id, it.r + layerTop, it.c, it.w, it.keys.toMutableList(), it.idx).withSide(it) }
         for (key in items) if (key.r == rows - 1) {
             val keys = sharedKeys(key)
-            shown += GridKey(SHARED_ID + key.id, key.r, key.c, key.w, keys, if (keys == key.keys) key.idx else 0)
+            shown += GridKey(SHARED_ID + key.id, key.r, key.c, key.w, keys, if (keys == key.keys) key.idx else 0).withSide(key)
         }
         return KeyGrid(rows, shown, own.nextId).also { g -> own.tray.forEach { g.tray.add(it.toMutableList()) }; g.source = this to layer }
     }
@@ -106,7 +112,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         val bottom = rows - 1
         var next = maxOf(edited.nextId, edited.items.filter { !isShared(it) }.maxOfOrNull { it.id + 1 } ?: 0)
         val own = edited.items.filter { it.r in layerTop until bottom }.mapTo(mutableListOf()) {
-            GridKey(if (isShared(it)) next++ else it.id, it.r - layerTop, it.c, it.w, it.keys.toMutableList(), it.idx)
+            GridKey(if (isShared(it)) next++ else it.id, it.r - layerTop, it.c, it.w, it.keys.toMutableList(), it.idx).withSide(it)
         }
         layers[layer] = KeyGrid(4, own, next).also { g -> edited.tray.forEach { g.tray.add(it.toMutableList()) } }
         val before = items.filter { it.r == bottom }.associateBy { it.id }
@@ -115,7 +121,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
             val original = if (isShared(key)) before[key.id - SHARED_ID] else null
             val unchanged = original != null && sharedKeys(original) == key.keys
             items += GridKey(original?.id ?: nextId++, bottom, key.c, key.w,
-                if (unchanged) original!!.keys else key.keys.toMutableList(), if (unchanged) original!!.idx else key.idx)
+                if (unchanged) original!!.keys else key.keys.toMutableList(), if (unchanged) original!!.idx else key.idx).withSide(key)
         }
     }
 
@@ -389,7 +395,10 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
     fun isSound() = rows in 4..5 && items.size in 1..(rows * COLS) && items.all { valid(it) }
 
     private fun itemsJson() = JSONArray().apply {
-        items.forEach { put(JSONObject().put("r", it.r).put("c", it.c).put("w", it.w).put("k", JSONArray(it.keys)).put("i", it.idx)) }
+        items.forEach {
+            put(JSONObject().put("r", it.r).put("c", it.c).put("w", it.w).put("k", JSONArray(it.keys)).put("i", it.idx)
+                .apply { if (it.side != CenterSide.AUTO) put("s", it.side.name) })
+        }
     }
     private fun trayJson() = JSONArray().apply { tray.forEach { put(JSONArray(it)) } }
 
@@ -446,7 +455,9 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
                 val j = a.getJSONObject(i)
                 val ks = j.getJSONArray("k")
                 items.add(GridKey(i, integer(j, "r"), integer(j, "c"), integer(j, "w"), MutableList(ks.length()) { ks.getString(it) },
-                    if (j.has("i")) integer(j, "i") else 0))
+                    if (j.has("i")) integer(j, "i") else 0).also { k ->
+                        CenterSide.entries.firstOrNull { it.name == j.optString("s") }?.let { k.side = it }
+                    })
             }
             return items
         }

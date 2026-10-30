@@ -43,8 +43,13 @@ object Prefs {
 
     /** Ergonomic curve for split layout, as a percentage. */
     val CURVE = IntPref("curve", 70, 0, 100)
-    /** How deep the split halves' keys look sunk into their bowl, as a percentage. Drawing only: taps are unchanged. */
-    val DEPTH = IntPref("depth", 50, 0, 100)
+    /**
+     * How deep the split halves' keys look sunk into their bowl, as a percentage; below 0 a dome, the rim keys
+     * smaller instead. Drawing only (taps are unchanged), unless [DEPTH_COMPACT] closes the keys up.
+     */
+    val DEPTH = IntPref("depth", 50, -100, 100)
+    /** The shrunk keys close up, gaps staying even, and answer touches as drawn. */
+    val DEPTH_COMPACT = BoolPref("depth_compact", false)
     val KEY_GAP = IntPref("key_gap", 5, 0, 14)
     val CORNER_RADIUS = IntPref("corner_radius", 8, 0, 20)
     val KEY_REPEAT_GUARD = IntPref("key_repeat_guard", 0, 0, 300)
@@ -72,6 +77,8 @@ object Prefs {
     val SOUND_VOLUME = IntPref("sound_volume", 50, 0, 100)
     val HAPTICS = BoolPref("haptics", true)
     val KEY_TINT = BoolPref("key_tint", true)
+    /** Key style 3D: a raised top over a darker edge. Drawing only. */
+    val KEYS_3D = BoolPref("keys_3d", false)
     val SWIPE_LETTERS = BoolPref("swipe_letters", false)
     val AUTOMATIC_SPACE = BoolPref("automatic_space", true)
     val AUTOMATIC_PUNCTUATION = BoolPref("automatic_punctuation", true)
@@ -82,12 +89,15 @@ object Prefs {
     val TOUCH_DRIFT = BoolPref("touch_drift", true)
     val TYPO_BUZZ = BoolPref("typo_buzz", true)
     val LOCK_SIZE = BoolPref("lock_size", false)
+    /** Lock halves: the split grips and the one-hand arrow fade out and stop taking touches. */
+    val SPLIT_LOCKED = BoolPref("split_locked", false)
     /** Portrait and landscape share one set of size and split settings. */
     val SAME_ORIENTATIONS = BoolPref("same_orientations", false)
     /** The first-run guide has been finished or skipped. */
     val ONBOARDED = BoolPref("onboarded", false)
 
     const val CURSOR_CONTROL = "cursor_control"
+    const val TOUCH_BAR_STYLE = "touch_bar_style"
     const val THEME = "theme"
     const val THEMES_CUSTOM = "themes_custom"
     const val LAYOUT = "layout"
@@ -149,7 +159,7 @@ class KeyboardSettings internal constructor(
     private val layoutInts get() = listOf(Prefs.CURVE, Prefs.DEPTH, Prefs.KEY_GAP, Prefs.CORNER_RADIUS, Prefs.TEXT_SCALE) +
         listOf(false, true).flatMap { listOf(Prefs.height(it), Prefs.width(it), Prefs.bottomPadding(it), Prefs.splitGap(it), Prefs.tilt(it),
             Prefs.splitLeft(it), Prefs.splitRight(it)) }
-    private val layoutBools get() = listOf(Prefs.SAME_ORIENTATIONS, Prefs.LOCK_SIZE, Prefs.FOLLOW_SYSTEM_TEXT, Prefs.SHOW_HINTS, Prefs.KEY_TINT)
+    private val layoutBools get() = listOf(Prefs.SAME_ORIENTATIONS, Prefs.LOCK_SIZE, Prefs.FOLLOW_SYSTEM_TEXT, Prefs.SHOW_HINTS, Prefs.KEY_TINT, Prefs.KEYS_3D, Prefs.DEPTH_COMPACT)
 
     /** Explicit defaults make settings portable between devices and between Android and iOS. */
     internal fun layoutSettings(): String = JSONObject().apply {
@@ -180,6 +190,8 @@ class KeyboardSettings internal constructor(
 
     fun cursorControl() = CursorControl.entries.firstOrNull { it.name == prefs.getString(Prefs.CURSOR_CONTROL, null) } ?: CursorControl.AUTO
     fun setCursorControl(value: CursorControl) = prefs.edit().putString(Prefs.CURSOR_CONTROL, value.name).apply()
+    fun touchBarStyle() = TouchBarStyle.entries.firstOrNull { it.name == prefs.getString(Prefs.TOUCH_BAR_STYLE, null) } ?: TouchBarStyle.JOYSTICK
+    fun setTouchBarStyle(value: TouchBarStyle) = prefs.edit().putString(Prefs.TOUCH_BAR_STYLE, value.name).apply()
 
     fun align(landscape: Boolean): Align {
         val name = prefs.getString(Prefs.alignKey(landscape), null)
