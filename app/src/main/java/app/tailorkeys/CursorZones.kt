@@ -59,6 +59,18 @@ internal fun cursorZonePlan(oneHand: Boolean, split: Boolean, control: CursorCon
     return CursorZonePlan(if (kind == CursorZoneKind.CENTER && !split) CursorZoneKind.NONE else kind, false)
 }
 
+/**
+ * Split halves sit wherever their grips put them, so every empty space can hold the cursor: the center gap, and
+ * the space between each half and its screen edge. Each one the setting allows is used when it is wide enough at
+ * every row.
+ */
+internal fun splitCursorZones(control: CursorControl, center: CursorZone?, outer: List<CursorZone>, minWidth: Float): List<CursorZone> {
+    val useCenter = control == CursorControl.AUTO || control == CursorControl.CENTER_GAP
+    val useOuter = control == CursorControl.AUTO || control == CursorControl.OUTER_EDGES
+    return (if (useOuter) outer else emptyList()).filter { it.hasRoom(minWidth) } +
+        listOfNotNull(center?.takeIf { useCenter && it.hasRoom(minWidth) })
+}
+
 /** Cubic ease-out: the remaining translation starts at the full distance and settles in 250 ms. */
 internal fun slideOffset(distance: Float, elapsedMs: Long, reducedMotion: Boolean): Float {
     if (reducedMotion) return 0f

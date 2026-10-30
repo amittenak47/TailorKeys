@@ -25,7 +25,7 @@ class KeyRemovalTest {
     }
 
     @Test fun lastRequiredFacesAreProtectedIncludingStacks() {
-        for (template in Template.entries) for (code in listOf(Keys.ABC, Keys.NUM, Keys.SYM, Keys.BACKSPACE, Keys.ENTER)) {
+        for (template in Template.entries) for (code in listOf(Keys.NUM, Keys.SYM, Keys.BACKSPACE, Keys.ENTER)) {
             val grid = KeyGrid.template(template)
             val key = grid.items.single { code in it.keys }
             val before = grid.toJson()

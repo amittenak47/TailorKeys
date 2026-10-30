@@ -27,12 +27,21 @@ class Predictor internal constructor(
     modelLoader: () -> NextWordModel? = { EnglishModel.load(openAsset) },
     private val indexed: Boolean = true,
     private val now: () -> Long = System::currentTimeMillis,
+    /** Offensive words are offered as suggestions and corrections too (they are always recognized). */
+    offensive: Boolean = false,
 ) {
-    constructor(context: Context, language: String = "en", onReady: () -> Unit = {}) :
-        this({ context.assets.open(it) }, context.filesDir, language, true, onReady)
+    constructor(context: Context, language: String = "en", offensive: Boolean = false, onReady: () -> Unit = {}) :
+        this({ context.assets.open(it) }, context.filesDir, language, true, onReady, offensive = offensive)
+    /** Every word corrections may be drawn from, in rank order; the first [KEYSTROKE_WORDS] are searched per letter. */
     private val base: List<String>
     private val candidateIndex: CandidateIndex
+    /** The rest of [base]: searched only when a word is finished, where there is time for more words. */
+    private val wideIndex: CandidateIndex?
     private val rank = HashMap<String, Int>()
+    /** By [rank]: how common each word is, as a rank among words.txt (words listed past it may be as common). */
+    private val frequencyRanks: IntArray
+    /** How many words came from words.txt; the extended English lists follow them. */
+    private val firstWords: Int
     private val user = HashMap<String, Int>()
     private val learnedWords = java.util.TreeSet<String>()
     // Context IDs -> sorted packed (word ID, count) rows. No retained n-gram strings.
@@ -60,6 +69,7 @@ class Predictor internal constructor(
     private var dirty = false
     @Volatile private var saveFailed = false
     private var cachedPrefix: String? = null
+    private var cachedWide = false
     private var cachedPrev: String? = null
     private var cachedPrev2: String? = null
     private var cachedCandidates: List<Candidate>? = null
@@ -73,10 +83,26 @@ class Predictor internal constructor(
     init {
         val words = DictionaryWords.read(openAsset, language)
         words.forEachIndexed { i, w -> rank.putIfAbsent(w, i) }
-        base = words.distinct()
-        candidateIndex = CandidateIndex(base)
-        english = if (language == "en" && enableModel) EnglishContext(base,
-            modelLoader, asynchronous, onReady) else null
+        // English goes on past words.txt: modern and rarer words to search when a word is finished, then words that
+        // are only recognized as real, so they aren't doubted as unknown, but are never offered as corrections.
+        val first = words.distinct()
+        firstWords = first.size
+        val listed = if (language == "en") DictionaryWords.readRanked(openAsset, "words_extra.txt") else emptyList()
+        // Allowed offensive words join them, placed by how common they are.
+        val extra = (if (offensive && language == "en") (listed + DictionaryWords.readRanked(openAsset, "words_offensive.txt"))
+            .sortedBy { it.second ?: Int.MAX_VALUE } else listed).filter { it.first !in rank }
+        base = first + extra.map { it.first }
+        extra.forEachIndexed { i, (w, _) -> rank.putIfAbsent(w, first.size + i) }
+        val known = if (language == "en") DictionaryWords.readRanked(openAsset, "words_known.txt").map { it.first }.filter { it !in rank } else emptyList()
+        known.forEachIndexed { i, w -> rank.putIfAbsent(w, base.size + i) }
+        candidateIndex = CandidateIndex(base.take(KEYSTROKE_WORDS))
+        wideIndex = base.drop(KEYSTROKE_WORDS).takeIf { it.isNotEmpty() }?.let(::CandidateIndex)
+        val all = base + known
+        frequencyRanks = IntArray(all.size) { i -> if (i >= first.size && i < base.size) extra[i - first.size].second ?: i else i }
+        // The model shares out its unknown-word mass by how common each word is; words.txt alone sets the total, so its
+        // own words score as before the extended lists.
+        english = if (language == "en" && enableModel) EnglishContext(all, modelLoader, asynchronous, onReady,
+            priorRanks = frequencyRanks, massWords = first.size) else null
         reloadLearning()
         val loadTables = {
             val tables = try {
@@ -153,7 +179,7 @@ class Predictor internal constructor(
 
     private fun frequency(w: String, tables: SeedTables? = seedTables): Double {
         val corpus = rank[w]?.let { tables?.frequencies?.getOrNull(it) } ?: 0.0
-        return 1.0 / ((rank[w] ?: 5000) + 10) + 0.2 * corpus + (user[w] ?: 0) * 0.05
+        return 1.0 / ((frequencyRank(w) ?: 5000) + 10) + 0.2 * corpus + (user[w] ?: 0) * 0.05
     }
     private fun contextId(first: Int, second: Int) = (first.toLong() shl 32) or second.toLong()
 
@@ -252,18 +278,22 @@ class Predictor internal constructor(
         return best + extra
     }
 
-    private fun candidates(prefix: String, prev: String?, prev2: String?, input: ComposingTaps?): List<Candidate> {
-        return english?.withScores { candidates(prefix, prev, prev2, input, it) }
-            ?: candidates(prefix, prev, prev2, input, null)
+    /** [wide]: also search the words past [KEYSTROKE_WORDS], for a finished word rather than each letter. */
+    private fun candidates(prefix: String, prev: String?, prev2: String?, input: ComposingTaps?, wide: Boolean = false): List<Candidate> {
+        return english?.withScores { candidates(prefix, prev, prev2, input, it, wide) }
+            ?: candidates(prefix, prev, prev2, input, null, wide)
     }
 
-    private fun candidates(prefix: String, prev: String?, prev2: String?, input: ComposingTaps?, scores: EnglishContext.Scores?): List<Candidate> {
+    private fun candidates(prefix: String, prev: String?, prev2: String?, input: ComposingTaps?, scores: EnglishContext.Scores?,
+                           searchWide: Boolean = false): List<Candidate> {
+        // With nothing past the per-letter words, a finished word reuses the last letter's search.
+        val wide = searchWide && wideIndex != null
         val p = prefix.lowercase()
         val taps = input?.takeIf { it.hasTaps(prefix) }
         val tapRevision = taps?.revision ?: -1L
         val tables = seedTables
         cachedCandidates?.let {
-            if (cachedPrefix == p && cachedPrev == prev && cachedPrev2 == prev2 && cachedTables === tables &&
+            if (cachedPrefix == p && cachedWide == wide && cachedPrev == prev && cachedPrev2 == prev2 && cachedTables === tables &&
                 cachedTaps === taps && cachedTapRevision == tapRevision && cachedScores === scores &&
                 cachedScoreVersion == (scores?.version ?: -1L)) return it
         }
@@ -311,12 +341,12 @@ class Predictor internal constructor(
             for (w in pool) add(w)
         } else {
             for (w in user.keys) add(w)
-            if (indexed) candidateIndex.visit(p, limit,
+            if (indexed) for (index in listOfNotNull(candidateIndex, wideIndex?.takeIf { wide })) index.visit(p, limit,
                 firstAllowed = { c -> if (taps?.hasTap(0) == true) taps.cost(0, c) <= 6
                     else p[0] == c || neighbours[p[0]]?.contains(c) == true },
                 substitution = { i, c -> if (taps?.hasTap(i) == true) taps.cost(i, c) else gridCost(p[i], c) },
                 accept = { w -> if (!user.containsKey(w)) add(w) }, lastDrop = minOf(8, spaceDrop(p, taps)))
-            else for (w in base) if (!user.containsKey(w)) add(w)
+            else for (w in if (wide) base else base.take(KEYSTROKE_WORDS)) if (!user.containsKey(w)) add(w)
         }
         val result = if (scores == null && p.isEmpty() && prev != null) {
             // Trigram followers, then remaining bigram followers, then frequency fallback.
@@ -327,6 +357,7 @@ class Predictor internal constructor(
             all.sortedWith(compareByDescending<Candidate> { it.score }.thenBy { it.word })
         }
         cachedPrefix = p
+        cachedWide = wide
         cachedPrev = prev
         cachedPrev2 = prev2
         cachedTables = tables
@@ -347,13 +378,27 @@ class Predictor internal constructor(
         val seedTriple = if (prev != null && prev2 != null) count(rank[prev2]?.let { a -> rank[prev]?.let { b -> tables?.triples?.get(contextId(a, b)) } }, rank[w]) else 0
         return ln(frequency(w)) + 1.5 * (ln(1.0 + seedPair) + 1.5 * ln(1.0 + pair) + 1.2 * (ln(1.0 + seedTriple) + 1.5 * ln(1.0 + triple)))
     }
-    private fun common(word: String) = (rank[word] ?: Int.MAX_VALUE) < 5000
+    private fun common(word: String) = !gates() || top(word)
+    /** Among the 5,000 most frequent words. Joins and Confident splits keep this; the cutoff eval didn't cover them. */
+    private fun top(word: String) = (frequencyRank(word) ?: Int.MAX_VALUE) < 5000
+    /** Whether the frequency cutoffs (top 5,000 and [MULTI_SLIP_RANK]) apply to the word being decided. */
+    private fun gates() = experiment.rankGates && (!experiment.gatesAtStartOnly || atStart)
+    /** How common [w] is, as a rank among words.txt; a word listed past it may be as common as one inside. */
+    private fun frequencyRank(w: String) = rank[w]?.let { frequencyRanks.getOrNull(it) ?: it }
     private fun pairCount(first: String, second: String) = count(rank[first]?.let { seedTables?.pairs?.get(it.toLong()) }, rank[second]) + (userPairs[first]?.get(second) ?: 0)
 
     fun recordRejection(original: String, fix: String): java.util.concurrent.Future<*>? { history.reject(original, fix); dirty = true; return save() }
     fun recordKept(original: String, fix: String) { history.kept(original, fix); dirty = true }
     fun noteTyped(original: String) { if (history.typed(original)) { dirty = true; save() } }
     internal fun rejectionPenalty(fix: String) = history.penalty(fix)
+    /** For the eval: told the numbers behind each change autocorrect and look-back make. */
+    internal var trace: ((String) -> Unit)? = null
+    /** How much each kind of slip costs when a finished word is weighed against its candidates; see [slipCost]. */
+    internal var slipWeights = SlipWeights()
+    /** Alternatives the eval compares; the defaults are the shipped behavior. */
+    internal var experiment = Experiment()
+    /** Whether the word being decided starts a sentence (no words before it), for [Experiment.gatesAtStartOnly]. */
+    private var atStart = true
 
     fun autocorrect(word: String, mode: AutocorrectMode, prev: String? = null, prev2: String? = null,
                     taps: ComposingTaps? = null, allowed: Boolean = true, sentenceStart: Boolean = false): String? {
@@ -362,8 +407,13 @@ class Predictor internal constructor(
         if (language == "en" && word == "i" && sentenceStart)
             return "I".takeUnless { history.blocked(word, it) }
         val known = rank.containsKey(p)
+        // Rarer dictionary words aren't doubted as unknown, but taps and context can still correct them like one.
+        val trusted = (rank[p] ?: Int.MAX_VALUE) < KEYSTROKE_WORDS
+        // Short words reach further only when taps say which keys were meant; without taps there is no typo evidence.
+        val shortReach = experiment.shortReach && p.length == 3 && taps?.hasTaps(word) == true
+        atStart = sentenceStart
         // Short dictionary words are intentional, even in Aggressive mode.
-        if (p.length < 2 || known && (p.length <= 3 || mode == AutocorrectMode.CONFIDENT) ||
+        if (p.length < 2 || trusted && (p.length <= 3 && !shortReach || mode == AutocorrectMode.CONFIDENT) ||
             isLearned(p) && !known || typedTwice(p)) return null
         fun decide(scores: EnglishContext.Scores?): String? {
             val rows = Array(3) { IntArray(p.length + 1) }
@@ -372,14 +422,14 @@ class Predictor internal constructor(
             // of the intended key costs almost nothing, one in the middle of a neighbouring key about 4.
             // Confident only follows taps that point at the word; Aggressive allows about one full slip per
             // two letters (watwe -> water), using layout neighbours when there are no taps. Common words only.
-            val slips = if (known) -1 else slips(p, mode, spatial)
-            val found = candidates(p, prev, prev2, taps, scores)
+            val slips = if (trusted && !shortReach) -1 else slips(p, mode, spatial)
+            val found = candidates(p, prev, prev2, taps, scores, searchWide = true)
             // Kept for look-back at the next space, so it needn't search the dictionary for this word again.
             recentCandidates = p to found.map { it.word }
-            val ranked = found.asSequence()
-                .filter { !history.blocked(word, it.word) && reachable(p, it.word, slips, spatial, rows) }
+            val considered = found.asSequence()
+                .filter { reachable(p, it.word, slips, spatial, rows) }
                 .filter {
-                    if (p.length > 3) true
+                    if (p.length > 3 || shortReach && scores != null) true
                     else if (p.length == 3 && common(it.word) && CorrectionRules.transposition(p, it.word)) true
                     // Two letters and a reach for space (ofn -> of), when the sentence wants them.
                     else if (p.length == 3 && it.word == p.dropLast(1) && nearSpace(p, spatial) && scores != null &&
@@ -395,25 +445,33 @@ class Predictor internal constructor(
                         scores.probability(it.word, rank[it.word]) - scores.probability(p, rank[p]) >= 5.0
                 }
                 .map { it.word to (it.score + (if (scores != null) MODEL_TYPO_WEIGHT else 2.5) * it.distance / 10.0 -
-                    (if (scores != null) TYPO_WEIGHT else 2.5) * cost(p, it.word, 22, rows, spatial, complete = true) / 10.0 - history.penalty(it.word)) }
+                    (if (scores != null) slipCost(p, it.word, spatial) else 2.5 * cost(p, it.word, 22, rows, spatial, complete = true) / 10.0) - history.penalty(it.word)) }
                 .sortedByDescending { it.second }.toList()
+            // Rejecting the fix that best explains the word says it was meant: the next in line doesn't take its place
+            // (teh stays, not eth).
+            if (considered.firstOrNull()?.let { history.blocked(word, it.first) } == true) return null
+            val ranked = considered.filter { !history.blocked(word, it.first) }
             val keep = wordScore(p, prev, prev2, scores) - if (known) 0.0 else if (scores != null) UNKNOWN_WORD_DOUBT else 4.6
             val margin = if (mode == AutocorrectMode.CONFIDENT) 1.2 else .8
             var result = ranked.firstOrNull()?.takeIf { best -> best.second - keep >= margin &&
                 (ranked.getOrNull(1)?.let { best.second - it.second >= if (p.length <= 3 && !CorrectionRules.transposition(p, best.first)) 3.0 else margin } != false) }
             // A split pays for both words plus a boundary edit; it must beat every single-word candidate.
-            if (!known && p.length >= 4) {
+            if (!trusted && p.length >= 4) {
                 val splits = ArrayList<Pair<String, Double>>()
+                // Confident doesn't make these splits (alot -> a lot), but one that explains the word best still
+                // stops it from applying a worse single-word fix (alto).
+                var withheld = Double.NEGATIVE_INFINITY
                 for (i in 1 until p.length) {
                     val first = p.substring(0, i); val second = p.substring(i)
                     if (!rank.containsKey(first) || !rank.containsKey(second)) continue
-                    if (mode == AutocorrectMode.CONFIDENT && (i < 2 || second.length < 2 || !common(first) || !common(second))) continue
+                    val confidentSkips = mode == AutocorrectMode.CONFIDENT && (i < 2 || second.length < 2 || !top(first) || !top(second))
                     val split = "$first $second"
                     if (history.blocked(word, split) || pairCount(first, second) < 3) continue
                     val following = if (scores != null) scores.following(first, second, rank[second]) + personalScore(second, first, prev)
                         else wordScore(second, first, prev, null)
                     if (scores != null && following < -12.0) continue
-                    splits.add(split to (wordScore(first, prev, prev2, scores) + following - .9 - history.penalty(split)))
+                    val score = wordScore(first, prev, prev2, scores) + following - .9 - history.penalty(split)
+                    if (confidentSkips) withheld = maxOf(withheld, score) else splits.add(split to score)
                 }
                 // The space itself can land on a letter beside the bar (withnflowers -> with flowers): split there
                 // and drop that letter, paying for how far its tap was from the bar.
@@ -428,17 +486,54 @@ class Predictor internal constructor(
                     val following = if (scores != null) scores.following(first, second, rank[second]) + personalScore(second, first, prev)
                         else wordScore(second, first, prev, null)
                     if (scores != null && following < -12.0) continue
-                    splits.add(split to (wordScore(first, prev, prev2, scores) + following - .9 - TYPO_WEIGHT * (drop + SPACE_DROP) / 10.0 - history.penalty(split)))
+                    splits.add(split to (wordScore(first, prev, prev2, scores) + following - .9 - slipWeights.space * (drop + SPACE_DROP) - history.penalty(split)))
                 }
                 splits.sortByDescending { it.second }
                 splits.firstOrNull()?.let { best ->
                     if (best.second - maxOf(keep, ranked.firstOrNull()?.second ?: Double.NEGATIVE_INFINITY) >= 2.0 &&
                         (splits.getOrNull(1)?.let { best.second - it.second >= 1.5 } != false)) result = best
                 }
+                if (result != null && withheld - maxOf(keep, result!!.second) >= 2.0) result = null
             }
+            trace?.let { emit -> result?.let { (w, total) ->
+                val lm = scores?.probability(w, rank[w]) ?: ln(frequency(w))
+                emit("space: keep %.1f (model %.1f%s) | %s %.1f = model %.1f - taps %.1f | next %s | needs +%.1f".format(keep,
+                    scores?.probability(p, rank[p]) ?: ln(frequency(p)), if (known) "" else ", unknown", w, total, lm,
+                    slipCost(p, w, spatial),
+                    ranked.getOrNull(1)?.let { "%s %.1f".format(it.first, it.second) } ?: "-", margin))
+            } }
             return result?.let { matchCase(it.first, word) }
         }
         return if (english != null) english.withScores { decide(it) } else decide(null)
+    }
+
+    /**
+     * What it costs, in nats, to read typed [p] as finished word [w], each kind of slip weighed on its own
+     * ([slipWeights]): a tap on another key by how far it landed from [w]'s letter, a letter of [w] with no tap at all
+     * (a skipped key, a wildcard gap), an extra tap, two swapped letters, and a last tap that was a reach for space.
+     */
+    private fun slipCost(p: String, w: String, taps: ComposingTaps?): Double {
+        if (p == w) return 0.0
+        val k = slipWeights
+        val spatial = taps?.takeIf { it.hasTaps(p) }
+        val n = w.length; val m = p.length
+        val d = Array(n + 1) { DoubleArray(m + 1) { Double.MAX_VALUE } }
+        d[0][0] = 0.0
+        val reach = spaceDrop(p, spatial).takeIf { it < 1000 }?.let { k.space * it } ?: Double.MAX_VALUE
+        for (i in 0..n) for (j in 0..m) {
+            var best = d[i][j]
+            if (i > 0 && j > 0) {
+                // A tap is finger evidence; without one (pasted or edited text) layout neighbours are only a guess.
+                val tapped = spatial?.hasTap(j - 1) == true
+                val miss = if (tapped) k.tap * spatial!!.cost(j - 1, w[i - 1]) else k.guess * gridCost(p[j - 1], w[i - 1])
+                best = minOf(best, d[i - 1][j - 1] + miss * if (i == 1 && j == 1) k.firstLetter else 1.0)
+            }
+            if (i > 0) best = minOf(best, d[i - 1][j] + k.skip)
+            if (j > 0) best = minOf(best, d[i][j - 1] + if (j == m) minOf(k.extra, reach) else k.extra)
+            if (i > 1 && j > 1 && p[j - 1] == w[i - 2] && p[j - 2] == w[i - 1]) best = minOf(best, d[i - 2][j - 2] + k.swap)
+            d[i][j] = best
+        }
+        return d[n][m]
     }
 
     /** The cost of dropping [p]'s last letter as a missed space: the tap's distance to the bar, plus a little. */
@@ -457,7 +552,7 @@ class Predictor internal constructor(
      * two letters (watwe -> water), using layout neighbours when there are no taps.
      */
     private fun slips(p: String, mode: AutocorrectMode, spatial: ComposingTaps?) = when {
-        p.length < 4 -> -1
+        p.length < 4 -> if (experiment.shortReach && p.length == 3 && mode == AutocorrectMode.AGGRESSIVE && spatial != null) 8 else -1
         p.length == 4 -> if (mode == AutocorrectMode.AGGRESSIVE && spatial != null) 8 else -1
         mode == AutocorrectMode.AGGRESSIVE -> 4 * (p.length / 2)
         spatial != null -> p.length
@@ -477,8 +572,8 @@ class Predictor internal constructor(
         if (abs(w.length - p.length) > 1) return false
         if (CorrectionRules.smallEdit(p, w)) return true
         if (slips < 0) return false
-        val r = rank[w] ?: Int.MAX_VALUE
-        val budget = if (r < 5000) slips else if (r < MULTI_SLIP_RANK) slips / 2 else return false
+        val r = frequencyRank(w) ?: Int.MAX_VALUE
+        val budget = if (!gates() || r < 5000) slips else if (r < MULTI_SLIP_RANK) slips / 2 else return false
         val limit = when (w.length - p.length) {
             0 -> budget
             1 -> if (spatial != null) budget / 2 + 12 else return false
@@ -507,18 +602,20 @@ class Predictor internal constructor(
         val committed = before.dropLast(1).takeLastWhile(TextInputRules::wordChar)
         val p = typed.lowercase(); val current = committed.lowercase(); val following = next.lowercase()
         if (p.length < 3 || following.isEmpty() || !CorrectionRules.eligible(typed) || !CorrectionRules.eligible(committed) ||
+            CorrectionRules.named(before.dropLast(1), committed) ||
             !CorrectionRules.eligible(next) || isLearned(p) && !rank.containsKey(p) || typedTwice(p)) return null
         updateContext(before, "")
+        atStart = false
         return english.withScores { scores ->
             if (scores == null || scores.lastWord != current) return@withScores null
             val rows = Array(3) { IntArray(p.length + 1) }
             val spatial = taps?.takeIf { it.hasTaps(typed) }
             val slips = slips(p, AutocorrectMode.AGGRESSIVE, spatial)
-            fun typo(w: String) = if (w == p) 0.0 else TYPO_WEIGHT * cost(p, w, 22, rows, spatial, complete = true) / 10.0
+            fun typo(w: String) = slipCost(p, w, spatial)
             fun left(w: String) = scores.preceding(w, rank[w]) - typo(w) - history.penalty(w) -
                 if (rank.containsKey(w) || user.containsKey(w)) 0.0 else UNKNOWN_WORD_DOUBT
             // Each right-side score steps the model once, so only the best few by the left side get one.
-            val pool = (known ?: candidates(p, null, null, spatial, null).map { it.word }).asSequence()
+            val pool = (known ?: candidates(p, null, null, spatial, wide = true).map { it.word }).asSequence()
                 .filter { it != current && !history.blocked(committed, it) && reachable(p, it, slips, spatial, rows) }
                 .sortedByDescending(::left).take(LOOK_BACK_CANDIDATES).toList()
             if (pool.isEmpty()) return@withScores null
@@ -533,7 +630,12 @@ class Predictor internal constructor(
             val ranked = hopeful.map { it to left(it) + scores.following(it, following, rightRank) }.sortedByDescending { it.second }
             val best = ranked.first()
             if (best.second - keep < margin || ranked.getOrNull(1)?.let { best.second - it.second < 1.0 } == true) null
-            else matchCase(best.first, committed)
+            else {
+                trace?.invoke("look-back: keep %.1f = left %.1f + right %.1f | %s %.1f = left %.1f + right %.1f | needs +%.1f".format(
+                    keep, left(current), scores.probability(following, rightRank), best.first, best.second, left(best.first),
+                    best.second - left(best.first), margin))
+                matchCase(best.first, committed)
+            }
         }
     }
 
@@ -559,14 +661,17 @@ class Predictor internal constructor(
             val spatial = taps[i]?.takeIf { it.hasTaps(typed[i]) }
             val rows = Array(3) { IntArray(p.length + 1) }
             fun option(w: String) = EnglishContext.Option(w, rank[w],
-                -(if (w == p) 0.0 else TYPO_WEIGHT * cost(p, w, 22, rows, spatial, complete = true) / 10.0) - history.penalty(w) -
+                -slipCost(p, w, spatial) - history.penalty(w) -
                     if (rank.containsKey(w) || user.containsKey(w)) 0.0 else UNKNOWN_WORD_DOUBT)
-            // Untapped, picked or deliberately repeated words stay as they are.
-            if (spatial == null || !CorrectionRules.eligible(word) || p.length < 2 || isLearned(p) && !rank.containsKey(p) || typedTwice(p))
+            // Untapped, picked, deliberately repeated or capitalized (named) words stay as they are.
+            val named = word.first().isUpperCase() && (i > 0 || !CorrectionRules.sentenceStart(before + word, word.length))
+            if (spatial == null || !CorrectionRules.eligible(word) || named || p.length < 2 || isLearned(p) && !rank.containsKey(p) || typedTwice(p))
                 return@map listOf(option(current))
             val slips = slips(p, AutocorrectMode.AGGRESSIVE, spatial)
-            val alternatives = candidates(p, null, null, spatial, null).asSequence().map { it.word }
+            atStart = i == 0 && CorrectionRules.sentenceStart(before + word, word.length)
+            val supported = candidates(p, null, null, spatial, wide = true).asSequence().map { it.word }
                 .filter { it != current && !history.blocked(word, it) && reachable(p, it, slips, spatial, rows) }
+            val alternatives = (if (experiment.redecodeByTaps) supported.sortedBy { slipCost(p, it, spatial) } else supported)
                 .take(SENTENCE_OPTIONS).toList()
             // What was typed is an option too when it's a word: an autocorrection may have been the mistake.
             (listOf(current) + listOfNotNull(p.takeIf { it != current && rank.containsKey(it) }) + alternatives).distinct().map(::option)
@@ -594,7 +699,8 @@ class Predictor internal constructor(
         val context = CorrectionRules.context(before, word.length)
         val fix = autocorrect(word, mode, context.lastOrNull(), context.getOrNull(context.size - 2), taps,
             sentenceStart = CorrectionRules.sentenceStart(before, word.length))
-        if (fix != null) return WordCorrection(word, fix)
+        if (fix != null && (!CorrectionRules.named(before, word) || CorrectionRules.apostropheOnly(word, fix))) return WordCorrection(word, fix)
+        if (CorrectionRules.named(before, word)) return null
         if (mode != AutocorrectMode.AGGRESSIVE || !allowJoin || word.isEmpty() || !CorrectionRules.eligible(word)) return null
         val prefix = before.dropLast(word.length)
         if (!prefix.endsWith(" ") || prefix.endsWith("  ")) return null
@@ -602,7 +708,7 @@ class Predictor internal constructor(
         if (!CorrectionRules.eligible(first) || word.any { it.isUpperCase() } || typedTwice(first) || typedTwice(word)) return null
         val original = "$first $word"; val joined = first.lowercase() + word.lowercase()
         if (userTyped) noteTyped(original)
-        if (!common(joined) || history.blocked(original, joined)) return null
+        if (!top(joined) || history.blocked(original, joined)) return null
         // "Rare" includes contextually rare pairs (key board); established phrases (in to) stay intact.
         if (pairCount(first.lowercase(), word.lowercase()) >= 3) return null
         val preceding = CorrectionRules.context(before, original.length)
@@ -633,12 +739,15 @@ class Predictor internal constructor(
 
     fun isDeadEnd(prefix: String): Boolean {
         val p = prefix.lowercase()
-        return prefix.length >= 2 && !candidateIndex.hasPrefix(p) && learnedWords.ceiling(p)?.startsWith(p) != true
+        return prefix.length >= 2 && !candidateIndex.hasPrefix(p) && wideIndex?.hasPrefix(p) != true && learnedWords.ceiling(p)?.startsWith(p) != true
     }
 
     fun closest(prefix: String, prev: String? = null, prev2: String? = null, n: Int = 8, taps: ComposingTaps? = null): List<String> {
         val c = candidates(prefix, prev, prev2, taps)
-        val maxCorrections = if (c.count { !it.correction } < 5) n else 3
+        // Corrections give way once the prefix plainly starts real words. Words past words.txt count only within reach
+        // of the best suggestion: with the extended lists nearly every prefix starts some rare word (teh: tehreek).
+        val best = c.firstOrNull()?.score ?: 0.0
+        val maxCorrections = if (c.count { !it.correction && ((rank[it.word] ?: 0) < firstWords || it.score >= best - COMPLETION_REACH) } < 5) n else 3
         var corrections = 0
         return c.asSequence().filter { !it.correction || corrections++ < maxCorrections }
             .take(n).map { matchCase(it.word, prefix) }.toList()
@@ -798,7 +907,9 @@ class Predictor internal constructor(
 
     // Read-only gesture inputs; tap ranking and its caches remain unchanged.
     fun hasWord(word: String): Boolean = rank.containsKey(word.lowercase()) || user.containsKey(word.lowercase())
-    fun gestureWords(): List<String> = base
+    fun gestureWords(): List<String> = base.take(KEYSTROKE_WORDS)
+    /** Every word corrections may be drawn from, the per-letter ones first. */
+    internal fun searchedWords(): List<String> = base
     fun gestureUserWords(): Set<String> = user.keys.toSet()
     class GestureScoring(val words: Set<String>, val frequency: (String) -> Double,
                          val context: (String?, String) -> Double)
@@ -863,6 +974,13 @@ class Predictor internal constructor(
         // words (perfectly #6657, beside #5474, fits #9978). 30,000 fixed slightly more but let slang become rare
         // words (gotta -> goths #28061).
         const val MULTI_SLIP_RANK = 15_000
+        /**
+         * Words searched on every letter, from the top of the ranked dictionary; the rest are searched when a word is
+         * finished. Also the line between dictionary words trusted as typed and rarer ones taps can still correct.
+         */
+        const val KEYSTROKE_WORDS = 100_000
+        /** A completion counts toward pushing corrections off the wheel only within this many nats of the best word. */
+        const val COMPLETION_REACH = 5.0
         /** Look-back revises the previous word only when both sides together prefer another by this many nats. */
         const val LOOK_BACK_MARGIN = 3.0
         const val LOOK_BACK_CANDIDATES = 6
@@ -893,6 +1011,29 @@ class Predictor internal constructor(
 
     internal fun isNeighbour(a: Char, b: Char) = neighbours[a]?.contains(b) == true
 }
+
+/**
+ * Nats per kind of slip, for [Predictor]'s finished-word decisions. [tap] is per tenth of a tap's cost (0 on the key,
+ * about 4 in the middle of a neighbour), doubled by [firstLetter] for a word's first letter; [skip] is a letter with no
+ * tap at all; [extra] an extra tap; [swap] two letters swapped; [space] per tenth for a tap that was a reach for the
+ * space bar; [guess] per tenth for a letter with no tap, judged by layout neighbours. A tap on another key is finger evidence and weighs four times what one weight for every slip gave (.4):
+ * on held-out sentences that cut correctly typed words changed by more than half, while a skipped key, which has no tap
+ * to weigh, kept its old cost and stays fixable. A cheaper skip made real words look like skips of other words.
+ */
+internal data class SlipWeights(val tap: Double = 1.6, val firstLetter: Double = 2.0, val skip: Double = 4.8,
+                                val extra: Double = 4.8, val swap: Double = 2.4, val space: Double = .4, val guess: Double = .4)
+
+/**
+ * Alternatives for the eval to compare; the defaults are the shipped behavior. [rankGates]: frequency cutoffs that limit
+ * short-word fixes to the top 5,000 words and multi-slip fixes to the top 15,000. Turning them off changed almost
+ * nothing on held-out sentences, but let three slips reach rare words from the extended lists (teadt -> traff), so they
+ * stay until the trained model replaces them; [gatesAtStartOnly] keeps them only at the start of a sentence.
+ * [shortReach]: three-letter words may take a multi-slip fix the taps support (ahs -> and), and three-letter dictionary
+ * words are no longer exempt at the space bar (on: real-word slips fixed 61% -> 94%, no wrong fixes).
+ * [redecodeByTaps]: sentence re-decoding keeps the readings the taps support best, not the most frequent ones.
+ */
+internal data class Experiment(val rankGates: Boolean = true, val gatesAtStartOnly: Boolean = false,
+                               val shortReach: Boolean = true, val redecodeByTaps: Boolean = false)
 
 /** A letter key's centre and cell size in any one unit, with tilt and curve undone and the split gap closed. */
 data class KeySpot(val x: Float, val y: Float, val w: Float, val h: Float)

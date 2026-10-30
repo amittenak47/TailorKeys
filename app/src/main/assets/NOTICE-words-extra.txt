@@ -1,0 +1,23 @@
+TailorKeys extended English word lists attribution
+
+Covers words_extra.txt, words_known.txt and words_offensive.txt.
+
+1. wordfreq data
+Project: wordfreq, by Robyn Speer and contributors
+Version: 3.1.1 (English 'large' list)
+Source URL: https://github.com/rspeer/wordfreq
+License: Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)
+License URL: https://creativecommons.org/licenses/by-sa/4.0/
+wordfreq's data is built from Wikipedia, OpenSubtitles, SUBTLEX, NewsCrawl, GlobalVoices,
+Google Books Ngrams, OSCAR, Twitter and Reddit; see its README for the full source credits.
+
+2. AOSP LatinIME en_US word list (words beyond words.txt)
+Source URL: https://android.googlesource.com/platform/packages/inputmethods/LatinIME/+/127336e9f29d69607eab55982324b210279ae8c5/dictionaries/en_US_wordlist.combined.gz?format=TEXT
+Source commit: 127336e9f29d69607eab55982324b210279ae8c5
+License: Apache License, Version 2.0 (see NOTICE-dictionary.txt)
+
+Modified by TailorKeys: lowercased, NFC normalized, filtered to letters and apostrophes,
+words already in words.txt removed, words AOSP flags as offensive moved to words_known.txt
+and listed in words_offensive.txt, likely misspellings removed, ranked by wordfreq frequency
+and split by frequency into the files.
+These files are licensed under CC BY-SA 4.0.

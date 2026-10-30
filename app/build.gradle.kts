@@ -46,7 +46,8 @@ kotlin {
 }
 
 tasks.withType<Test>().configureEach {
-    maxHeapSize = "256m"
+    // Several tests keep a predictor for the whole class; with the extended English lists each holds about 60 MB.
+    maxHeapSize = "512m"
     maxParallelForks = 1
     inputs.property("spatialBenchmark", providers.environmentVariable("SPATIAL_BENCHMARK").orElse("0"))
     inputs.property("typingLayoutBenchmark", providers.environmentVariable("TK_PERF").orElse("0"))

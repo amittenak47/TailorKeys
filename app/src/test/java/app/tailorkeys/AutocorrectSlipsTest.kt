@@ -50,6 +50,17 @@ class AutocorrectSlipsTest {
         assertEquals(null, predictor.lookBack("this small wooden chair fire ", "fire", fire, "perfectly", AutocorrectMode.OFF))
     }
 
+    @Test fun modernWordsTypedCleanlyStay() {
+        // meta wasn't in the dictionary, so look-back doubted it as unknown and swapped two letters once graph arrived.
+        val meta = taps("meta", "----")
+        assertEquals(null, predictor.lookBack("meta ", "meta", meta, "graph", AutocorrectMode.AGGRESSIVE))
+        for (word in listOf("github", "selfie", "crypto", "async"))
+            assertEquals(word, null, predictor.correction("the $word", AutocorrectMode.AGGRESSIVE, taps(word, "-".repeat(word.length))))
+        // Common misspellings in real text were left out of the new words, so they're still corrected.
+        assertEquals(WordCorrection("thier", "their"), predictor.correction("it was thier", AutocorrectMode.AGGRESSIVE, taps("thier", "-----")))
+        assertEquals(WordCorrection("dont", "don't"), predictor.correction("i dont", AutocorrectMode.AGGRESSIVE, taps("dont", "----")))
+    }
+
     @Test fun aLetterBesideTheSpaceBarCanBeAMissedSpace() {
         // n sits right above the space bar: rryn is "try" plus a reach for space, not a word of its own.
         assertEquals(WordCorrection("rryn", "try"), predictor.correction("tomorrow we will rryn", AutocorrectMode.AGGRESSIVE, taps("rryn", "t--_")))

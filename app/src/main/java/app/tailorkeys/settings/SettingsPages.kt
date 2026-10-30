@@ -55,10 +55,14 @@ internal fun LazyListScope.sizeOptions(state: SettingsState, page: Boolean, onPa
             OptionGroup {
                 ToggleRow("Split keyboard", p.split) { state.settings.setSplitFor(page, it) }
                 if (p.split) {
-                    SettingSlider("Center gap", p.gap, Prefs.splitGap(page), "${p.gap}%") { state.setFor(page, Prefs::splitGap, it) }
+                    Text("Drag the bar under a half to move it. Double-tap the bar to put it back at the edge. Width sets how big the halves are.",
+                        Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 4.dp),
+                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     SettingSlider("Tilt", p.tilt, Prefs.tilt(page), degrees(p.tilt)) { state.setFor(page, Prefs::tilt, it) }
                     val curve = state.int(Prefs.CURVE)
                     SettingSlider("Curve", curve, Prefs.CURVE, "$curve%") { state.setFor(page, { Prefs.CURVE }, it) }
+                    val depth = state.int(Prefs.DEPTH)
+                    SettingSlider("Depth", depth, Prefs.DEPTH, "$depth%") { state.setFor(page, { Prefs.DEPTH }, it) }
                 }
             }
         }
@@ -108,7 +112,8 @@ private fun SizeControls(state: SettingsState, page: Boolean) {
             state.setFor(page, Prefs::width, it)
             if (state.bool(Prefs.LOCK_SIZE)) state.setFor(page, Prefs::height, (it * ratio).roundToInt())
         }
-        if (p.widthPercent < 100) {
+        // Split halves are placed by dragging their grips instead.
+        if (p.widthPercent < 100 && !p.split) {
             Text("Position", Modifier.padding(start = 20.dp, top = 8.dp), style = MaterialTheme.typography.bodyLarge)
             SettingsSegments(listOf("Left", "Center", "Right"), p.align.ordinal, "Position",
                 Modifier.padding(horizontal = 20.dp)) { state.settings.setAlignFor(page, Align.entries[it]) }
@@ -174,6 +179,10 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
             SettingsDropdown("Autocorrect", modes[mode], modes, details = details) { state.set(Prefs.AUTOCORRECT, it) }
             Text(details[mode] + if (mode == 0) "" else " Fixes happen when you press space; backspace right after undoes one.",
                 Modifier.padding(20.dp, 8.dp), style = MaterialTheme.typography.bodySmall)
+            ToggleRow("Block offensive words", state.bool(Prefs.BLOCK_OFFENSIVE),
+                note = "Never suggest or autocorrect to swear words and other words marked offensive. When you type one, it's left as typed.") {
+                state.set(Prefs.BLOCK_OFFENSIVE, it)
+            }
             ToggleRow("Auto-capitalize", state.bool(Prefs.AUTO_CAP)) { state.set(Prefs.AUTO_CAP, it) }
             val vibrator = LocalContext.current.getSystemService(android.os.Vibrator::class.java)
             if (vibrator?.hasVibrator() == true) {
@@ -304,7 +313,7 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
         Column {
             GroupTitle("Assist")
             OptionGroup {
-                for ((label, pref) in listOf("Space accepts chosen word" to Prefs.SPACE_ACCEPTS, "Swipe typing" to Prefs.SWIPE_TYPING, "Highlight likely keys" to Prefs.KEY_TINT, "Smart tap areas" to Prefs.SMART_TARGETS, "Vibrate on typos" to Prefs.TYPO_BUZZ, "Chords" to Prefs.CHORDING)) {
+                for ((label, pref) in listOf("Space accepts chosen word" to Prefs.SPACE_ACCEPTS, "Swipe typing" to Prefs.SWIPE_TYPING, "Highlight likely keys" to Prefs.KEY_TINT, "Smart tap areas" to Prefs.SMART_TARGETS, "Follow hand drift" to Prefs.TOUCH_DRIFT, "Vibrate on typos" to Prefs.TYPO_BUZZ, "Chords" to Prefs.CHORDING)) {
                     if (pref == Prefs.TYPO_BUZZ && LocalContext.current.getSystemService(android.os.Vibrator::class.java)?.hasVibrator() != true) continue
                     val blocked = state.bool(Prefs.TYPE_ON_PRESS) && (pref == Prefs.SWIPE_TYPING || pref == Prefs.CHORDING)
                     ToggleRow(label, !blocked && state.bool(pref), enabled = !blocked,

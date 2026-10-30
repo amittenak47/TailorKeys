@@ -33,11 +33,39 @@ internal class CursorRead {
         afterLength = (text.length - maxOf(start, end)).coerceAtLeast(0)
         return this
     }
-    fun target(steps: Int, selecting: Boolean): Int =
-        CursorMotion.target(text, offset, start, end, afterLength, steps, selecting)
+    fun target(steps: Int, selecting: Boolean, words: Boolean = false): Int =
+        if (words) CursorMotion.wordTarget(text, offset, start, end, afterLength, steps, selecting)
+        else CursorMotion.target(text, offset, start, end, afterLength, steps, selecting)
 }
 
 internal object CursorMotion {
+    private fun isWord(c: Char) = Character.isLetterOrDigit(c) || c == '_' || c == '\'' || c == '’'
+
+    /**
+     * Like [target], but each step goes to the end of the next word (forward) or the start of the previous one
+     * (back), as Ctrl+arrow does. -1 when a word runs past the known text.
+     */
+    fun wordTarget(text: CharSequence, offset: Int, start: Int, end: Int, afterLength: Int,
+                   steps: Int, selecting: Boolean): Int {
+        if (offset < 0 || start < offset || end < offset ||
+            start.toLong() > offset.toLong() + text.length || end.toLong() > offset.toLong() + text.length) return -1
+        var i = (if (selecting) end else if (steps < 0) minOf(start, end) else maxOf(start, end)) - offset
+        val first = maxOf(0, i - EditorWindow.CURSOR_WINDOW)
+        val last = minOf(text.length.toLong(), i.toLong() + EditorWindow.CURSOR_WINDOW).toInt()
+        repeat(kotlin.math.abs(steps)) {
+            if (steps > 0) {
+                while (i < last && !isWord(text[i])) i++
+                while (i < last && isWord(text[i])) i++
+            } else {
+                while (i > first && !isWord(text[i - 1])) i--
+                while (i > first && isWord(text[i - 1])) i--
+            }
+        }
+        if (i == first && (first > 0 || offset > 0) ||
+            i == last && (last < text.length || afterLength >= EditorWindow.CURSOR_WINDOW)) return -1
+        return offset + i
+    }
+
     /** -1 means that the position or a clipped grapheme boundary is unknown. */
     fun target(text: CharSequence, offset: Int, start: Int, end: Int, afterLength: Int,
                steps: Int, selecting: Boolean): Int {

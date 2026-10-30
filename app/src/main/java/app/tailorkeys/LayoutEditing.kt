@@ -15,7 +15,7 @@ internal object LayoutEditing {
         Action.UP -> grid.moveTo(key, key.r - 1, key.c)
         Action.DOWN -> grid.moveTo(key, key.r + 1, key.c)
         Action.MOVE -> source != null && source !== key && source in grid.items && grid.swap(source, key)
-        Action.COMBINE -> if (source != null && source !== key && source in grid.items) { grid.combine(source, key); true } else false
+        Action.COMBINE -> if (source != null && source !== key && !source.isGap && !key.isGap && source in grid.items) { grid.combine(source, key); true } else false
         Action.SEPARATE -> if (key.isStack) { grid.separate(key); true } else false
         Action.REMOVE -> grid.remove(key)
     }

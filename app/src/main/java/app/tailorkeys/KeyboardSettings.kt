@@ -24,17 +24,27 @@ object Prefs {
     // Tilt is capped at ±10°: the layout reserves room for both ends, so a wider range would make every key narrower.
     private val TILT_P = IntPref("tilt_p", 0, -10, 10)
     private val TILT_L = IntPref("tilt_l", 0, -10, 10)
+    // Where each split half sits, dragged by its grip: its outer edge's distance from its side of the screen, in
+    // thousandths of the screen width. 0 is flush with the edge, as before halves could move.
+    private val SPLIT_LEFT_P = IntPref("split_left_p", 0, 0, 1000)
+    private val SPLIT_LEFT_L = IntPref("split_left_l", 0, 0, 1000)
+    private val SPLIT_RIGHT_P = IntPref("split_right_p", 0, 0, 1000)
+    private val SPLIT_RIGHT_L = IntPref("split_right_l", 0, 0, 1000)
 
     fun height(landscape: Boolean) = if (landscape) HEIGHT_L else HEIGHT_P
     fun width(landscape: Boolean) = if (landscape) WIDTH_L else WIDTH_P
     fun bottomPadding(landscape: Boolean) = if (landscape) BOTTOM_L else BOTTOM_P
     fun splitGap(landscape: Boolean) = if (landscape) GAP_L else GAP_P
     fun tilt(landscape: Boolean) = if (landscape) TILT_L else TILT_P
+    fun splitLeft(landscape: Boolean) = if (landscape) SPLIT_LEFT_L else SPLIT_LEFT_P
+    fun splitRight(landscape: Boolean) = if (landscape) SPLIT_RIGHT_L else SPLIT_RIGHT_P
     fun alignKey(landscape: Boolean) = if (landscape) "align_l" else "align_p"
     fun splitKey(landscape: Boolean) = if (landscape) "split_l" else "split_p"
 
     /** Ergonomic curve for split layout, as a percentage. */
     val CURVE = IntPref("curve", 70, 0, 100)
+    /** How deep the split halves' keys look sunk into their bowl, as a percentage. Drawing only: taps are unchanged. */
+    val DEPTH = IntPref("depth", 50, 0, 100)
     val KEY_GAP = IntPref("key_gap", 5, 0, 14)
     val CORNER_RADIUS = IntPref("corner_radius", 8, 0, 20)
     val KEY_REPEAT_GUARD = IntPref("key_repeat_guard", 0, 0, 300)
@@ -54,6 +64,8 @@ object Prefs {
     // Retain the old key as the child of Automatic punctuation; existing choices migrate unchanged.
     val DOUBLE_SPACE_PERIOD = BoolPref("double_space_period", true)
     val AUTOCORRECT = IntPref("autocorrect", 1, 0, 2)
+    /** Never suggest or correct to offensive words; typed ones are still left alone. */
+    val BLOCK_OFFENSIVE = BoolPref("block_offensive", true)
     val LEARNING = BoolPref("learning", true)
     const val LEARNING_REVISION = "learning_revision"
     val SOUND = BoolPref("sound", true)
@@ -66,6 +78,8 @@ object Prefs {
     val SWIPE_TYPING = BoolPref("swipe_typing", true)
     val CHORDING = BoolPref("chording", false)
     val SMART_TARGETS = BoolPref("smart_targets", true)
+    /** Follow each hand as it drifts off the keys (TouchDrift). */
+    val TOUCH_DRIFT = BoolPref("touch_drift", true)
     val TYPO_BUZZ = BoolPref("typo_buzz", true)
     val LOCK_SIZE = BoolPref("lock_size", false)
     /** Portrait and landscape share one set of size and split settings. */
@@ -88,8 +102,11 @@ data class SizeProfile(
     val align: Align,
     val bottomPaddingDp: Int,
     val split: Boolean,
+    /** Sets how wide each half is (it shares the width with the center); where the halves sit is [leftInset] and [rightInset]. */
     val gap: Int,
     val tilt: Int,
+    val leftInset: Int = 0,
+    val rightInset: Int = 0,
 )
 
 class KeyboardSettings internal constructor(
@@ -129,8 +146,9 @@ class KeyboardSettings internal constructor(
     fun set(p: IntPref, value: Int) { prefs.edit().putInt(p.key, value.coerceIn(p.min, p.max)).apply(); syncAppearance(p.key) }
     fun set(p: BoolPref, value: Boolean) { prefs.edit().putBoolean(p.key, value).apply(); syncAppearance(p.key) }
 
-    private val layoutInts get() = listOf(Prefs.CURVE, Prefs.KEY_GAP, Prefs.CORNER_RADIUS, Prefs.TEXT_SCALE) +
-        listOf(false, true).flatMap { listOf(Prefs.height(it), Prefs.width(it), Prefs.bottomPadding(it), Prefs.splitGap(it), Prefs.tilt(it)) }
+    private val layoutInts get() = listOf(Prefs.CURVE, Prefs.DEPTH, Prefs.KEY_GAP, Prefs.CORNER_RADIUS, Prefs.TEXT_SCALE) +
+        listOf(false, true).flatMap { listOf(Prefs.height(it), Prefs.width(it), Prefs.bottomPadding(it), Prefs.splitGap(it), Prefs.tilt(it),
+            Prefs.splitLeft(it), Prefs.splitRight(it)) }
     private val layoutBools get() = listOf(Prefs.SAME_ORIENTATIONS, Prefs.LOCK_SIZE, Prefs.FOLLOW_SYSTEM_TEXT, Prefs.SHOW_HINTS, Prefs.KEY_TINT)
 
     /** Explicit defaults make settings portable between devices and between Android and iOS. */
@@ -184,8 +202,12 @@ class KeyboardSettings internal constructor(
         align = align(landscape),
         bottomPaddingDp = int(Prefs.bottomPadding(landscape)),
         split = if (prefs.contains(LayoutKeys.TRIAL)) prefs.getString(LayoutKeys.TRIAL_SPLIT, null)?.toBooleanStrictOrNull() ?: split(landscape) else split(landscape),
-        gap = int(Prefs.splitGap(landscape)),
+        // The halves' size leaves the default gap's room for moving them; a gap saved by an older version or a size
+        // preset could leave none, with no slider left to change it.
+        gap = Prefs.splitGap(landscape).default,
         tilt = int(Prefs.tilt(landscape)),
+        leftInset = int(Prefs.splitLeft(landscape)),
+        rightInset = int(Prefs.splitRight(landscape)),
     )
 
     // Setters for per-orientation settings: they write both orientations while SAME_ORIENTATIONS is on.
@@ -195,6 +217,17 @@ class KeyboardSettings internal constructor(
     fun setFor(landscape: Boolean, pref: (Boolean) -> IntPref, value: Int) {
         val e = prefs.edit()
         orientations(landscape).forEach { val p = pref(it); e.putInt(p.key, value.coerceIn(p.min, p.max)) }
+        e.apply()
+        syncAppearance(landscape = landscape)
+    }
+
+    /** Where the split halves sit, in thousandths of the screen width from each side; saved together. */
+    fun setSplitInsetsFor(landscape: Boolean, left: Int, right: Int) {
+        val e = prefs.edit()
+        orientations(landscape).forEach {
+            e.putInt(Prefs.splitLeft(it).key, left.coerceIn(0, 1000))
+            e.putInt(Prefs.splitRight(it).key, right.coerceIn(0, 1000))
+        }
         e.apply()
         syncAppearance(landscape = landscape)
     }
@@ -256,7 +289,8 @@ class KeyboardSettings internal constructor(
     fun linkOrientations(from: Boolean) {
         val to = !from
         val e = prefs.edit()
-        for (pref in listOf(Prefs::height, Prefs::width, Prefs::bottomPadding, Prefs::splitGap, Prefs::tilt)) e.putInt(pref(to).key, int(pref(from)))
+        for (pref in listOf(Prefs::height, Prefs::width, Prefs::bottomPadding, Prefs::splitGap, Prefs::tilt, Prefs::splitLeft, Prefs::splitRight))
+            e.putInt(pref(to).key, int(pref(from)))
         e.putString(Prefs.alignKey(to), align(from).name)
         e.putBoolean(Prefs.splitKey(to), split(from))
         e.putBoolean(Prefs.SAME_ORIENTATIONS.key, true)

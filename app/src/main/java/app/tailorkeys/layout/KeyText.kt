@@ -25,7 +25,7 @@ object KeyText {
     }
 
     fun isLayerKey(k: String) = k == Keys.ABC || k == Keys.NUM || k == Keys.SYM
-    /** A key's own 123 or #+= text, sent as "=" + text and typed exactly as written. */
+    /** A key on the 123 or #+= layer that types its text exactly as written, sent as "=" + text. */
     fun isLiteral(k: String) = k.length >= 2 && k[0] == '='
     fun literal(text: String) = "=$text"
     fun layerOf(k: String) = when (k) { Keys.NUM -> Layer.NUM; Keys.SYM -> Layer.SYM; else -> Layer.ABC }
@@ -36,28 +36,7 @@ object KeyText {
     fun output(k: String, s: InputState): String? {
         if (isDigit(k) || isLiteral(k)) return k.substring(1)
         if (k.length != 1) return null
-        if (s.layer != Layer.ABC) alt[baseKey(k, s.language)]?.let { return if (s.layer == Layer.NUM) it.first else it.second }
         return if (s.upper) k.uppercase() else k
-    }
-
-    /** Keys that type text can have their own 123 and #+= text; space, enter, backspace and layer keys can't. */
-    fun hasLayerFace(key: GridKey) = key.keys.any { isChar(it) }
-
-    /** What [key] types on [layer] by default: its letter's number or symbol, or the character itself. */
-    fun defaultLayerFace(key: GridKey, layer: Layer, language: String): String? {
-        val code = key.keys.firstOrNull { isChar(it) } ?: return null
-        return output(code, InputState().apply { this.language = language; this.layer = layer })
-    }
-
-    /** What [key] types on [layer]: its own text when set, else the default. */
-    fun layerFace(key: GridKey, layer: Layer, language: String): String? =
-        (if (layer == Layer.NUM) key.num else if (layer == Layer.SYM) key.sym else null) ?: defaultLayerFace(key, layer, language)
-
-    /** The code [key] sends for [code] right now: its own 123 or #+= text when it has one, else [code] unchanged. */
-    fun layerCode(key: GridKey, code: String, layer: Layer): String {
-        if (!isChar(code)) return code
-        val own = when (layer) { Layer.NUM -> key.num; Layer.SYM -> key.sym; Layer.ABC -> null } ?: return code
-        return literal(own)
     }
 
     /** The character offered on long-press: the key's number-layer character. */

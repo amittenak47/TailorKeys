@@ -29,8 +29,11 @@ internal fun wheelTapIndex(targets: List<WheelTapTarget>, x: Float, left: Float,
 
 /** Time is monotonic milliseconds, displacement is in dp from the fixed press origin. */
 internal class CursorJoystick {
-    /** Current signed speed in characters per second (also drives the gap's direction gradient). */
+    /** Current signed speed in characters (or, while [byWord], words) per second; also drives the gap's gradient. */
     var speed = 0.0
+        private set
+    /** True while the push is far enough out that each step is a whole word. */
+    var byWord = false
         private set
     /** How far the push reaches toward the gap's edge, signed, from -1 to 1; drives the keyboard-wide wave. */
     var push = 0.0
@@ -56,17 +59,27 @@ internal class CursorJoystick {
 
     /**
      * Like a thumb stick: [dx] is how far the finger has pushed from where it pressed, in dp, and the cursor keeps
-     * moving that way until it comes back. Speed runs from 3 chars/s just past the dead zone to [MAX_SPEED] at the
-     * gap's edge, easing in so small pushes stay precise; the finger never has to leave the gap.
+     * moving that way until it comes back. Near the press point it moves a character at a time, speeding up
+     * steadily with the push; only the outermost part of the push, [WORD_AT] and beyond, jumps by whole words,
+     * faster toward the very end.
      */
     fun displace(dx: Float, now: Long): Int {
-        var steps = advance(now)
         val magnitude = abs(dx.toDouble())
         val reach = if (dx < 0) reachLeft else reachRight
         val bend = 1 / sensitivity
         push = min(1.0, magnitude / reach).pow(bend) * if (dx < 0) -1 else 1
         val u = ((magnitude - DEAD_ZONE) / (reach - DEAD_ZONE)).coerceIn(0.0, 1.0).pow(bend)
-        val next = if (magnitude <= DEAD_ZONE) 0.0 else (MIN_SPEED + (MAX_SPEED - MIN_SPEED) * u * Math.sqrt(u)) * speedScale * if (dx < 0) -1 else 1
+        val words = magnitude > DEAD_ZONE && u >= WORD_AT
+        // Switching between characters and words starts the new unit afresh, so a word never lands half counted.
+        if (words != byWord) { fraction = 0.0; speed = 0.0; hasTime = false }
+        var steps = advance(now)
+        byWord = words
+        val rate = when {
+            magnitude <= DEAD_ZONE -> 0.0
+            words -> MIN_WORD_SPEED + (MAX_WORD_SPEED - MIN_WORD_SPEED) * (u - WORD_AT) / (1 - WORD_AT)
+            else -> MIN_SPEED + (MAX_SPEED - MIN_SPEED) * (u / WORD_AT).pow(1.3)
+        }
+        val next = rate * speedScale * if (dx < 0) -1 else 1
         if (next == 0.0 || next * speed < 0) fraction = 0.0
         if (next != 0.0 && speed == 0.0) steps += if (next < 0) -1 else 1
         speed = next
@@ -85,11 +98,19 @@ internal class CursorJoystick {
     }
 
     companion object {
-        const val MAX_SPEED = 30.0
-        private const val MIN_SPEED = 3.0
+        /** Characters per second just short of word steps. */
+        const val MAX_SPEED = 22.0
+        private const val MIN_SPEED = 6.0
+        /** How far out (0 to 1) the push turns to whole words, and how many words a second from there to the end. */
+        const val WORD_AT = 0.8
+        private const val MIN_WORD_SPEED = 3.0
+        private const val MAX_WORD_SPEED = 9.0
         private const val DEAD_ZONE = 4.0
-        /** A press right beside the gap's edge still gets this much room before top speed. */
-        private const val MIN_REACH = 8.0
+        /**
+         * Every push gets at least this much room, in dp, from slow characters to the fastest words, even in a
+         * narrow gap: the finger may carry on over the keys, which ignore it until it lifts.
+         */
+        private const val MIN_REACH = 32.0
     }
 }
 

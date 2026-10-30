@@ -7,6 +7,10 @@ class ComposingTaps {
     private val costs = ByteArray(MAX_LENGTH * LETTERS)
     private val known = BooleanArray(MAX_LENGTH)
     private val entered = BooleanArray(MAX_LENGTH)
+    /** Where each letter was tapped, in view pixels, and on which layout: for learning TouchDrift once it settles. */
+    private val xs = FloatArray(MAX_LENGTH) { Float.NaN }
+    private val ys = FloatArray(MAX_LENGTH)
+    private val layouts = IntArray(MAX_LENGTH)
     private var enteredCount = 0
     private var count = 0
     var word: String = ""
@@ -19,22 +23,24 @@ class ComposingTaps {
     /** An independent copy, kept for look-back after the word is finished and these rows are reused. */
     fun copy() = ComposingTaps().also { c ->
         costs.copyInto(c.costs); known.copyInto(c.known); entered.copyInto(c.entered)
+        xs.copyInto(c.xs); ys.copyInto(c.ys); layouts.copyInto(c.layouts)
         c.count = count; c.enteredCount = enteredCount; c.word = word
     }
 
     fun sync(prefix: String) {
         if (word == prefix) return
-        known.fill(false); entered.fill(false)
+        known.fill(false); entered.fill(false); xs.fill(Float.NaN)
         count = 0; enteredCount = 0
         word = prefix
         revision++
     }
 
-    fun append(prefix: String, letter: String, distances: FloatArray?) {
+    fun append(prefix: String, letter: String, distances: FloatArray?, x: Float = Float.NaN, y: Float = Float.NaN, layout: Int = 0) {
         sync(prefix)
         val index = word.length
         word += letter
         if (index < MAX_LENGTH && letter.length == 1) { entered[index] = true; enteredCount++ }
+        if (index < MAX_LENGTH) { xs[index] = if (letter.length == 1) x else Float.NaN; ys[index] = y; layouts[index] = layout }
         if (index < MAX_LENGTH && letter.length == 1 && distances != null) {
             // -log Gaussian likelihood relative to the best centre (sigma = 0.5 widths).
             // Two tenths per nat => 4 * squared distance. Cap the boundary credit so
@@ -55,6 +61,7 @@ class ComposingTaps {
         val index = word.lastIndex
         if (index < MAX_LENGTH && known[index]) { known[index] = false; count-- }
         if (index < MAX_LENGTH && entered[index]) { entered[index] = false; enteredCount-- }
+        if (index < MAX_LENGTH) xs[index] = Float.NaN
         word = word.dropLast(1)
         revision++
     }
@@ -63,6 +70,10 @@ class ComposingTaps {
     // Taps are recorded as typed ("Fesr" after auto-capitalization) but the predictor looks words up lowercased.
     fun hasTaps(prefix: String) = word.equals(prefix, ignoreCase = true) && count > 0
     fun hasTap(index: Int) = index < MAX_LENGTH && known[index]
+    fun hasPoint(index: Int) = index < MAX_LENGTH && !xs[index].isNaN()
+    fun x(index: Int) = xs[index]
+    fun y(index: Int) = ys[index]
+    fun layout(index: Int) = layouts[index]
     fun cost(index: Int, letter: Char): Int =
         if (letter.code < LETTERS) costs[index * LETTERS + letter.code].toInt() else 10
 

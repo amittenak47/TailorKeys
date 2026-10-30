@@ -10,7 +10,7 @@
     <string name="onboarding_4_title">Put keys where you want them</string>
     <string name="onboarding_4_body">Tap the gear above the keys, then Rearrange. Drag a key to move it.\nDrop a key on another key\'s edge to slide it in. Drop it in the middle to stack both into one swipe key.</string>
     <string name="onboarding_5_title">Swipe keys and suggestions</string>
-    <string name="onboarding_5_body">Swipe a stacked key up or down to change it. Tap abc once for a capital, twice for caps lock.\nSpin a suggestion wheel sideways and tap a word, or hold a spacebar to pick that side\'s word.\nTo move the cursor, hold the empty space between the keys and push. Lift and press again to select text.</string>
+    <string name="onboarding_5_body">Swipe a stacked key left or right to change it. Tap abc once for a capital, twice for caps lock.\nSpin a suggestion wheel sideways and tap a word, or hold a spacebar to pick that side\'s word.\nTo move the cursor, hold the empty space between the keys and push. Lift and press again to select text.</string>
     <string name="onboarding_6_title">Try it</string>
     <string name="onboarding_6_body">Type a few words below. Size, split and tilt are in settings.</string>
 

@@ -22,6 +22,7 @@ class CandidateIndexTest {
                 val rnd = Random(734)
                 val prefixes = linkedSetOf("", "t", "th", "teh", "hte", "sev", "sevn", "sevem", "awvwn", "aivwn", "siv2n", "aeven", "zzzzz", "tailor")
                 val words = indexed.gestureWords()
+                val searched = indexed.searchedWords()
                 repeat(if (language == "en") 180 else 45) {
                     val word = words[rnd.nextInt(words.size)]
                     val prefix = word.take(rnd.nextInt(1, minOf(12, word.length) + 1))
@@ -41,7 +42,7 @@ class CandidateIndexTest {
                     assertEquals(scan.closest(prefix, "six", "five", taps = taps), indexed.closest(prefix, "six", "five", taps = taps))
                     assertEquals(scan.explore(prefix, "six", "five", taps = taps), indexed.explore(prefix, "six", "five", taps = taps))
                     assertEquals(scan.nextLetters(prefix, "six", "five", taps), indexed.nextLetters(prefix, "six", "five", taps))
-                    val hasPrefix = words.any { it.startsWith(prefix.lowercase()) } || "tailorkeys".startsWith(prefix.lowercase()) || "seven".startsWith(prefix.lowercase())
+                    val hasPrefix = searched.any { it.startsWith(prefix.lowercase()) } || "tailorkeys".startsWith(prefix.lowercase()) || "seven".startsWith(prefix.lowercase())
                     assertEquals(prefix.length >= 2 && !hasPrefix, indexed.isDeadEnd(prefix))
                 }
             }

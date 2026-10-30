@@ -3,7 +3,7 @@ package app.tailorkeys
 import kotlin.math.abs
 import kotlin.math.hypot
 
-/** Swipe keys: a tap types the shown face; a mostly vertical swipe steps one face, wrapping both ways. */
+/** Swipe keys: a tap types the shown face; a mostly sideways swipe steps one face, wrapping both ways. */
 internal object StackSwipe {
     /** dp a tap may wobble and still count as a tap. */
     const val TAP_SLOP = 10f
@@ -13,20 +13,24 @@ internal object StackSwipe {
     /** Whether a finger this far (dp) from where it went down is no longer a tap. */
     fun moved(dx: Float, dy: Float) = hypot(dx, dy) > TAP_SLOP
 
-    /** 1 for up, -1 for down, 0 while undecided. Up to about 60° off vertical still counts. */
-    fun direction(dx: Float, dy: Float, keyHeight: Float): Int {
-        val threshold = (keyHeight * .3f).coerceIn(14f, 22f)
-        return if (abs(dy) >= threshold) vertical(dx, dy) else 0
+    /**
+     * 1 for left (the next face slides in from the right), -1 for right, 0 while undecided. Up to about 60° off
+     * horizontal still counts. Sideways because a thumb or a floating finger rolls left and right more easily than
+     * it pulls down, and a downward swipe on the bottom row runs off the keyboard.
+     */
+    fun direction(dx: Float, dy: Float, keyWidth: Float): Int {
+        val threshold = (keyWidth * .3f).coerceIn(14f, 22f)
+        return if (abs(dx) >= threshold) sideways(dx, dy) else 0
     }
 
     /** A quick flick that lifted before [direction] decided. */
-    fun flick(dx: Float, dy: Float, ms: Long): Int = if (ms <= FLICK_MS && moved(dx, dy)) vertical(dx, dy) else 0
+    fun flick(dx: Float, dy: Float, ms: Long): Int = if (ms <= FLICK_MS && moved(dx, dy)) sideways(dx, dy) else 0
 
-    private fun vertical(dx: Float, dy: Float) = if (abs(dy) < abs(dx) * .6f) 0 else if (dy < 0) 1 else -1
+    private fun sideways(dx: Float, dy: Float) = if (abs(dx) < abs(dy) * .6f) 0 else if (dx < 0) 1 else -1
 
     /**
      * The face a step lands on; faces wrap in both directions. When the shown face isn't the current
-     * layer (123 / #+= while typing letters), a step up lands on the shown face itself, so a swipe
+     * layer (123 / #+= while typing letters), a step left lands on the shown face itself, so a swipe
      * either way reaches every face.
      */
     fun next(shown: Int, size: Int, step: Int, shownIsCurrent: Boolean): Int =

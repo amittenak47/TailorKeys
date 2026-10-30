@@ -13,6 +13,12 @@ internal object CorrectionRules {
         while (i >= 0 && before[i] in " \t\"'([{ ") i--
         return i < 0 || before[i] in ".!?\n\r"
     }
+    /**
+     * Whether [word], ending [before], was capitalized on purpose: a capital away from the start of a sentence marks a
+     * name or brand (Figma, Meta), which stays as typed. Only restoring an apostrophe (Im -> I'm) still applies.
+     */
+    fun named(before: String, word: String) = word.firstOrNull()?.isUpperCase() == true && !sentenceStart(before, word.length)
+    fun apostropheOnly(word: String, fix: String) = fix.replace("'", "") == word.replace("'", "")
     fun transposition(a: String, b: String): Boolean {
         if (a.length != b.length) return false
         var i = 0
@@ -58,7 +64,9 @@ internal object CorrectionRules {
 /** Shared by corrections, armed suggestions and Tidy; only a matching live editor can keep/undo it. */
 internal class ReversibleCommit(val original: String, val inserted: String, val separator: String,
     val before: String?, val after: String?, val correction: Boolean = false,
-    val insertedAfter: Int = 0, val originalTail: Int = 0, private val onKept: () -> Unit = {}, private val learn: () -> Unit) {
+    val insertedAfter: Int = 0, val originalTail: Int = 0, private val onKept: () -> Unit = {},
+    /** The words a correction changed, typed to replaced, when it spans more than one word (look-back, re-decoding). */
+    val changedWords: List<Pair<String, String>>? = null, private val learn: () -> Unit) {
     private var pending = true
     fun matches(before: String, after: String, selected: Boolean) = !selected && this.before == before && this.after == after
     fun undo(before: String, after: String, selected: Boolean): String? {

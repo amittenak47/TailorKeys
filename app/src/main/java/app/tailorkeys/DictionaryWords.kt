@@ -11,4 +11,17 @@ internal object DictionaryWords {
             (if (unique) words.distinct() else words).take(limit).toList()
         }
     }
+
+    /**
+     * One of the extended English lists (words_extra.txt, words_known.txt) in list order, each word with where its
+     * frequency places it among words.txt when the line gives one ("meta\t10013"); empty when not bundled.
+     */
+    fun readRanked(openAsset: (String) -> InputStream, name: String): List<Pair<String, Int?>> = try {
+        openAsset(name).bufferedReader().useLines { lines ->
+            lines.map { it.trim() }.filter { it.isNotEmpty() }.map { line ->
+                val tab = line.indexOf('\t')
+                if (tab < 0) line.lowercase() to null else line.substring(0, tab).lowercase() to line.substring(tab + 1).toIntOrNull()
+            }.toList()
+        }
+    } catch (_: java.io.IOException) { emptyList() }
 }

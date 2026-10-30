@@ -65,10 +65,11 @@ class PredictorSpatialTest {
     }
 
     @Test fun missingTapsPreserveLegacyRankingsExactly() {
-        // Frozen from the original predictor over the same assets and split layout.
+        // Frozen from the original predictor over the same assets and split layout; aivwn re-frozen when the extended
+        // English lists added aiden and aidan's.
         val cases = mapOf(
             "awvwn" to listOf("advanced", "advantage", "advance", "adventure", "adventures", "advances", "advancing", "advantages"),
-            "aivwn" to listOf("albany", "avian", "albanian", "albania", "aidan", "albans", "albanians", "alden"),
+            "aivwn" to listOf("aiden", "albany", "avian", "albanian", "albania", "aidan", "aidan's", "albans"),
             "aeven" to listOf("seven", "adventure", "adventures", "seventh", "advent", "seventeen", "argentina", "adventurer"),
             "teh" to listOf("the", "their", "they", "then", "there", "them", "these", "ten"),
             "sevem" to listOf("seven", "several", "seventh", "seen", "december", "seventeen", "seem", "seventy"),

@@ -65,8 +65,12 @@ internal class EnglishContext(
     private val asynchronous: Boolean,
     private val onReady: () -> Unit,
     private val execute: (() -> Unit) -> Unit = { EnglishModel.worker.execute(it) },
+    /** How common each of [words] is, as a rank; null when list order is frequency order. */
+    private val priorRanks: IntArray? = null,
+    /** Only the first this many of [words] make up the unknown-word mass the others' shares are measured against. */
+    private val massWords: Int = Int.MAX_VALUE,
 ) {
-    internal class Scores(val model: NextWordModel, val ids: IntArray, val oovMass: Double) {
+    internal class Scores(val model: NextWordModel, val ids: IntArray, val oovMass: Double, private val priorRanks: IntArray? = null) {
         val probabilities = FloatArray(model.vocabularySize)
         val top = IntArray(300.coerceAtMost(model.vocabularySize - 5))
         var version = 0L
@@ -101,7 +105,7 @@ internal class EnglishContext(
             val id = rank?.let { ids[it] } ?: model.normalizedIdOf(word)
             return if (id != 2) values[id].toDouble()
             // <unk> also covers words absent from the keyboard dictionary. Reserve their mass.
-            else values[2] + kotlin.math.ln(OOV_DICTIONARY_SHARE * (1.0 / ((rank ?: 5000) + 10)) / oovMass)
+            else values[2] + kotlin.math.ln(OOV_DICTIONARY_SHARE * (1.0 / ((rank?.let { priorRanks?.getOrNull(it) ?: it } ?: 5000) + 10)) / oovMass)
         }
     }
 
@@ -209,9 +213,9 @@ internal class EnglishContext(
                 state = m.initialState(); parentState = m.initialState()
                 val ids = IntArray(words.size) { m.normalizedIdOf(words[it]) }
                 var mass = 0.0
-                for (i in ids.indices) if (ids[i] == 2) mass += 1.0 / (i + 10)
-                front = Scores(m, ids, mass.coerceAtLeast(1e-12))
-                back = Scores(m, ids, mass.coerceAtLeast(1e-12))
+                for (i in 0 until minOf(ids.size, massWords)) if (ids[i] == 2) mass += 1.0 / ((priorRanks?.get(i) ?: i) + 10)
+                front = Scores(m, ids, mass.coerceAtLeast(1e-12), priorRanks)
+                back = Scores(m, ids, mass.coerceAtLeast(1e-12), priorRanks)
             }
         }
         val m = model

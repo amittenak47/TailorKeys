@@ -24,12 +24,7 @@ internal class LayoutSolver {
     }
     private val work = Work()
     private val worstWork = Work()
-    private val fullFans = FloatArray(6)
-    private val liveFans = FloatArray(6)
-    private val topology = IntArray(55 * 3)
-    private var topologySize = -1
-    private var topologyRows = -1
-    private var fanCurve = Float.NaN
+    private var reservedRows = -1
     private var lastTarget = Float.NaN
     private var lastHalf = Float.NaN
     private var lastInner = Float.NaN
@@ -55,7 +50,7 @@ internal class LayoutSolver {
         // Fit each tilted half inside its side: outer edge on the screen edge, never past the center line.
         fun solve(un: Float, angle: Double, bend: Float, fixedWidth: Float? = null): Work {
             val hc = un * n
-            val raise = if (split) 0.38f * bend * un else 0f
+            val raise = if (split) ErgoCurve.RISE * bend * un else 0f
             val hf = hc + raise
             var cw = fixedWidth ?: half
             var pv = half
@@ -90,49 +85,12 @@ internal class LayoutSolver {
             }
             return s
         }
-        // Equal-width keys need only the largest sine. This is the same maximum as walking
-        // every key in every binary-search trial, including wide/custom keys.
-        fun fans(bend: Float, sines: FloatArray) {
-            sines.fill(0f)
-            for (item in grid.items) if (item.c != KeyGrid.CENTER) {
-                val side = if (item.c < KeyGrid.CENTER) 0 else 1
-                val lc = if (side == 0) item.c else item.c - 6
-                // Wide keys use the average fan of the columns they span, as the view draws them.
-                val span = item.w.coerceIn(1, 5 - lc.coerceIn(0, 4))
-                val fan = abs((lc until lc + span).sumOf { ANG[side][it.coerceIn(0, 4)].toDouble() } / span)
-                val value = sin(Math.toRadians(fan * bend)).toFloat()
-                val width = ceil(item.w * 5f / grid.rowColumns(item.r, item.c)).toInt().coerceIn(1, 5)
-                sines[width] = max(sines[width], value)
-            }
-        }
         val reserve = split && !editMode
-        if (reserve) {
-            var changed = topologyRows != n || topologySize != grid.items.size
-            for (i in grid.items.indices) {
-                val item = grid.items[i]
-                val j = i * 3
-                if (topology[j] != item.r || topology[j + 1] != item.c || topology[j + 2] != item.w) changed = true
-                topology[j] = item.r; topology[j + 1] = item.c; topology[j + 2] = item.w
-            }
-            if (changed) {
-                topologyRows = n; topologySize = grid.items.size
-                fans(1f, fullFans)
-                fanCurve = Float.NaN
-                haveReserved = false
-            }
-            if (fanCurve != curve) { fans(curve, liveFans); fanCurve = curve }
-        }
-        // Bounds include every key's fan rotation, even wide keys, at any smaller curve.
+        // The reservation depends on the row count, not on where keys sit.
+        if (reserve && reservedRows != n) { reservedRows = n; haveReserved = false }
+        // The curve only moves columns up, keys upright, so the block's bounds grow by the arc's rise alone.
         fun blocks(un: Float, cw: Float, angle: Double, bend: Float): Work {
             val letterH = un * (n - 1)
-            var fanX = 0f
-            var fanY = 0f
-            val sines = if (bend == 1f) fullFans else liveFans
-            for (w in 1..5) {
-                if (sines[w] == 0f) continue
-                fanX = max(fanX, max(0f, un - gap) * sines[w] / 2)
-                fanY = max(fanY, max(0f, w.toFloat() * cw / 5 - gap) * sines[w] / 2)
-            }
             // Axis-aligned bounds of a rotated rectangle, written into [out] as left, top, right, bottom.
             // Allocation-free: this runs hundreds of times per layout.
             fun bounds(x0: Float, y0: Float, x1: Float, y1: Float, a: Double, out: FloatArray) {
@@ -144,9 +102,8 @@ internal class LayoutSolver {
                 out[1] = min(min(ay, by), min(cy, dy)); out[3] = max(max(ay, by), max(cy, dy))
             }
             val letters = boundsLetters
-            // One transformed block: row spacing is preserved through the shared tilt and fan.
-            bounds(-cw + gap / 2 - fanX, -n * un + gap / 2 - 0.38f * bend * un - fanY,
-                -gap / 2 + fanX, -gap / 2 + fanY, angle, letters)
+            // One transformed block: row spacing is preserved through the shared tilt.
+            bounds(-cw + gap / 2, -n * un + gap / 2 - ErgoCurve.RISE * bend * un, -gap / 2, -gap / 2, angle, letters)
             val contentH = letters[3] - letters[1]
             val hc = max(n * un, contentH)
             val extra = (hc - contentH) / 2
@@ -201,6 +158,5 @@ internal class LayoutSolver {
         val EXTREME_ANGLES = doubleArrayOf(Math.toRadians(-10.0), Math.toRadians(10.0))
         val EXTREME_COS = cos(EXTREME_ANGLES[1]).toFloat()
         val EXTREME_SIN = sin(EXTREME_ANGLES[1]).toFloat()
-        val ANG = arrayOf(floatArrayOf(-9f, -4f, 0f, 3f, 6f), floatArrayOf(-6f, -3f, 0f, 4f, 9f))
     }
 }
