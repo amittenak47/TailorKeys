@@ -35,6 +35,8 @@ internal class LayoutSolver {
     private var lastPad = Float.NaN
     private var lastHandle = Float.NaN
     private var lastBar = Float.NaN
+    private var lastTilt = Float.NaN
+    private var lastCurve = Float.NaN
     private var haveReserved = false
     private val reserved = FloatArray(3)
     private val boundsLetters = FloatArray(4)
@@ -115,8 +117,9 @@ internal class LayoutSolver {
                 top + letterH, letters[2] - letters[0])
         }
         val s = if (reserve) {
-            // Fit the shared tilt range at maximum curve; live angles never change key dimensions.
-            val angles = EXTREME_ANGLES
+            // Fit the tilt and curve in use (both halves' mirrored angles): keys use the height the tilt leaves
+            // instead of a band kept for the steepest tilt. They resize a little as Tilt or Curve changes.
+            val angles = doubleArrayOf(-abs(th), abs(th))
             // 14 halvings resolve widths and heights far below a pixel.
             fun worst(un: Float): Work {
                 var lo = gap
@@ -125,14 +128,14 @@ internal class LayoutSolver {
                     val cw = (lo + hi) / 2
                     var fits = true
                     for (a in angles) {
-                        if (blocks(un, cw, a, 1f).span > half) { fits = false; break }
+                        if (blocks(un, cw, a, curve).span > half) { fits = false; break }
                         if (!fits) break
                     }
                     if (fits) lo = cw else hi = cw
                 }
                 worstWork.total = Float.NEGATIVE_INFINITY
                 for (a in angles) {
-                    val candidate = blocks(un, lo, a, 1f)
+                    val candidate = blocks(un, lo, a, curve)
                     if (candidate.total > worstWork.total) worstWork.copy(candidate)
                 }
                 return worstWork
@@ -140,7 +143,7 @@ internal class LayoutSolver {
             // Exact primitive cache keys: live tilt/curve reuse the reservation without strings or boxing.
             if (!haveReserved || lastTarget != target || lastHalf != half || lastInner != innerW ||
                 lastGap != gap || lastStrip != stripH || lastBottom != bottomPad || lastDensity != d ||
-                lastPad != pad || lastHandle != handleH || lastBar != bar) {
+                lastPad != pad || lastHandle != handleH || lastBar != bar || lastTilt != tilt || lastCurve != curve) {
                 var lo = 14 * d
                 var hi = max(lo, (target - stripH - handleH - pad - bottomPad - bar) / n)
                 repeat(14) {
@@ -151,6 +154,7 @@ internal class LayoutSolver {
                 reserved[0] = w.un; reserved[1] = w.cw; reserved[2] = w.total
                 lastTarget = target; lastHalf = half; lastInner = innerW; lastGap = gap
                 lastStrip = stripH; lastBottom = bottomPad; lastDensity = d; lastPad = pad; lastHandle = handleH; lastBar = bar
+                lastTilt = tilt; lastCurve = curve
                 haveReserved = true
             }
             blocks(reserved[0], reserved[1], th, curve)

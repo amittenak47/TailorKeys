@@ -55,6 +55,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         }
         val g = settings.loadGrid()
         if (g.toJson() != grid.toJson()) { clearTaps(); grid = g; keyboardView?.grid = g }
+        syncAutocorrectModel()
         // A model loaded before offensive words were allowed or blocked is loaded again.
         val model = models[lang]?.takeIf { it.offensive == !settings.bool(Prefs.BLOCK_OFFENSIVE) }
         modelReady = model != null
@@ -77,6 +78,24 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             }
         }
     }
+    /** Whether the autocorrect model was last loaded with offensive words searched; null when not loaded. */
+    private var modelOffensive: Boolean? = null
+    /** The letter keys' centres in key spacings, for the model's shape list (typing without looking). */
+    private var modelLayout: TapSearch.Layout? = null
+    private var modelMoved: MovedKeys? = null
+
+    /** Loads the autocorrect model when Model autocorrect is on (again when offensive words change); frees it when off. */
+    private fun syncAutocorrectModel() {
+        if (!modelAutocorrect()) {
+            if (modelOffensive != null) { StudentEngine.release(); modelOffensive = null; modelLast = null }
+            return
+        }
+        val offensive = !settings.bool(Prefs.BLOCK_OFFENSIVE)
+        if (modelOffensive == offensive) return
+        modelOffensive = offensive
+        StudentEngine.load(this, offensive) { main.post { StudentEngine.corrector?.let { it.layout = modelLayout; it.moved = modelMoved } } }
+    }
+
     private val glideWorker = Executors.newSingleThreadExecutor()
     private var liveBusy = false
     private class GlideSession(val prefix: String, val before: String, val after: String, val context: String,
@@ -107,8 +126,11 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private fun replacesAutomaticWord(text: String): Boolean = hasAutomaticSpace() && autoWord != null &&
         (text == autoWord || glideCandidates.contains(text) ||
             settings.bool(Prefs.AUTOMATIC_PUNCTUATION) && TextInputRules.wordForms(autoWord.orEmpty(), predictor::hasWord).contains(text))
-    private fun automaticSpace(word: String): Boolean {
-        if (!TextInputRules.addSpace(settings.bool(Prefs.AUTOMATIC_SPACE), editor().after, !suggest, settings.bool(Prefs.SWIPE_LETTERS))) return false
+    /** A space after [word] when the settings allow it. [picked] is a word chosen from the wheels, which gets its space
+     * even when swiping types letters (Swipe style), as only swiped letters go without. */
+    private fun automaticSpace(word: String, picked: Boolean = false): Boolean {
+        if (!TextInputRules.addSpace(settings.bool(Prefs.AUTOMATIC_SPACE), editor().after, !suggest,
+                settings.bool(Prefs.SWIPE_LETTERS) && !picked)) return false
         val attached = editor().before.endsWith(word)
         currentInputConnection?.commitText(" ", 1); editorRead = null
         rememberAutomaticSpace(if (attached) word else null)
@@ -276,6 +298,18 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private fun undoArmedCommit(): Boolean {
         val undo = armedUndo ?: return false
         val ic = currentInputConnection ?: return false
+        // A correction comes back in two steps: the first backspace only takes the space (or punctuation) after it,
+        // so you can type a period there; the next one, right after, gives back the word as typed.
+        if (undo.correction && undo.separator.isNotEmpty() && undo.inserted.endsWith(undo.separator) &&
+            undo.matches(editor().before.takeLast(64), editor().after.take(64), editor().selected)) {
+            ic.deleteSurroundingText(undo.separator.length, 0)
+            editorRead = null
+            armedUndo = ReversibleCommit(undo.original, undo.inserted.removeSuffix(undo.separator), "", editor().before.takeLast(64),
+                editor().after.take(64), correction = true) {}
+            clearTaps()
+            updateAutoCap()
+            return true
+        }
         val restore = undo.undo(editor().before.takeLast(64), editor().after.take(64), editor().selected) ?: return false
         armedUndo = null // Reverting discards the deferred learning increment.
         lastWord = null
@@ -306,6 +340,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     private fun correctWord(separator: String): Boolean {
+        if (modelAutocorrect()) return false
         if (!modelReady || !correctAllowed || state.layer != Layer.ABC || editor().selected) return false
         val read = editor()
         val before = read.before
@@ -365,7 +400,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             if (editor().after.firstOrNull()?.isWhitespace() != true) typeSpace(learnWord = false)
         } else {
             commit(separator)
-            if (settings.bool(Prefs.AUTOMATIC_PUNCTUATION)) trailing = automaticSpace(word)
+            if (settings.bool(Prefs.AUTOMATIC_PUNCTUATION)) trailing = automaticSpace(word, picked = true)
         }
         ic.endBatchEdit()
         val insertedSpace = separator == " " && editor().after.firstOrNull()?.isWhitespace() != true
@@ -741,9 +776,17 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     override fun onTapKey(code: String, distances: FloatArray, x: Float, y: Float) { if (!insertKey(code)) handleKey(code, distances, x, y) }
 
+    /** The model's features of the tap about to type a letter (or an apostrophe), for that letter's row in [taps]. */
+    private var pendingModelTap: FloatArray? = null
+    override fun onModelTap(features: FloatArray) { pendingModelTap = features.copyOf() }
+
     override fun onLetterLayout(spots: List<Pair<Char, KeySpot>>) {
         if (spots == keySpots) return
         keySpots = spots
+        modelLayout = TapSearch.Layout(spots.associate { (ch, s) -> ch to (s.x / s.w to s.y / s.h) })
+        // Letters moved to the other half than on the usual split, for habit slips (f tapped for a g moved right).
+        modelMoved = keyboardView?.let { v -> MovedKeys.of(settings.profile(resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE).split) { v.centreTap(it) } }
+        StudentEngine.corrector?.let { it.layout = modelLayout; it.moved = modelMoved }
         if (modelReady) predictor.setLayout(grid, spots)
     }
 
@@ -759,9 +802,12 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         }
         if (code == Keys.BACKSPACE) { armedUndo = null; pendingLearning = null }
         else if (code == Keys.SPACE || code == Keys.ENTER || code.length == 1) { keepPendingLearning(); finishArmedLearning() }
-        val separator = if (code == Keys.SPACE) " " else code.takeIf { it.length == 1 && it[0] in ".,?!;:" }
+        // By what the key types, so punctuation assigned in the editor (stored as a literal, "=.") ends a word too.
+        val separator = if (code == Keys.SPACE) " " else (KeyText.output(code, state) ?: code).takeIf { it.length == 1 && it[0] in ".,?!;:" }
         // Taken before the word is corrected or picked, while its taps still describe it.
         val finishing = if (separator != null) finishingWord() else null
+        // A space or punctuation typed inside a word splits it on purpose: no correction for either half.
+        val splitsWord = separator != null && !editor().selected && editor().after.firstOrNull()?.let(TextInputRules::wordChar) == true
         val endsSentence = separator != null && separator in SENTENCE_ENDS
         if (separator != null && separator != " ") {
             lastWord = null
@@ -803,6 +849,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             code == Keys.SPACE -> typeSpace()
             code == Keys.ENTER -> pressEnter()
             KeyText.isLayerKey(code) -> tapLayerKey(code)
+            code == Keys.SHIFT -> tapShift()
             else -> {
                 if (state.layer == Layer.ABC && code.length == 1 && code[0].isLetter() && currentGlide()) {
                     val shifted = state.shift
@@ -815,11 +862,15 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
                 KeyText.output(code, state)?.let {
                     commit(it, typing = true, distances = distances, x = x, y = y)
                     letterCommitted = it.length == 1 && it[0].isLetter()
+                    // Back to letters after a symbol (Settings, per layer); digits keep the layer, for numbers.
+                    val back = when (state.layer) { Layer.NUM -> Prefs.RETURN_FROM_NUM; Layer.SYM -> Prefs.RETURN_FROM_SYM; else -> null }
+                    if (back != null && settings.bool(back) && it.none(Char::isDigit)) state.layer = Layer.ABC
                 }
             }
         }
         if (endedBefore != null) deferLearning(endingGlide ?: currentWord(endedBefore), previousWord(endedBefore), previousWord2(endedBefore))
-        if (separator == " ") {
+        if (separator != null && modelAutocorrect()) modelDecide(finishing, splitsWord)
+        else if (separator == " ") {
             lookBack(finishing)
             // A double space may just have typed ". ", ending the sentence.
             if (editor().before.trimEnd(' ').lastOrNull()?.let { it in SENTENCE_ENDS } == true) endSentence(null)
@@ -829,7 +880,8 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     private fun finishingWord(): FinishedWord? {
-        if (state.layer != Layer.ABC || currentGlide()) return null
+        // Model autocorrect also finishes a word whose punctuation came from the 123 layer (hike, then 123 and .).
+        if (state.layer != Layer.ABC && !modelAutocorrect() || currentGlide()) return null
         val word = editor().before.takeLastWhile(TextInputRules::wordChar).takeIf { it.isNotEmpty() } ?: return null
         return FinishedWord(word, taps.takeIf { it.hasTaps(word) }?.copy(), "")
     }
@@ -874,6 +926,137 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         lastWord = FinishedWord(finished.typed, finished.taps, editor().before.takeLast(48), if (modelReady) predictor.candidatesFor(finished.typed) else null)
         sentenceWords += lastWord!!
     }
+
+    /** The trained model corrects and suggests in English, the only language for now. */
+    private fun modelAutocorrect() = state.language == "en"
+
+    /** A word the model decided at its space, kept so the next word's space can recheck it with both sides. */
+    private data class ModelWord(val typed: String, val taps: List<FloatArray>, val written: String, val first: Boolean,
+                            val headTail: String, val named: Boolean)
+    private var modelLast: ModelWord? = null
+
+    /**
+     * Model autocorrect (StudentCorrector): the word just finished is decided by the model with
+     * the text before it, and the word before it is rechecked now that this one follows. The model runs on its own
+     * thread, so the result lands a moment after the separator: it applies only while the text up to here is unchanged
+     * (whatever was typed since is kept after it), and backspace right away undoes it.
+     */
+    private fun modelDecide(finished: FinishedWord?, splitsWord: Boolean) {
+        val previous = modelLast
+        modelLast = null
+        val corrector = StudentEngine.corrector
+        val mode = AutocorrectMode.entries[settings.int(Prefs.AUTOCORRECT)]
+        val read = editor()
+        val cursor = readCursor()
+        if (finished == null || corrector == null || mode == AutocorrectMode.OFF || !correctAllowed || read.selected ||
+            !cursor.known || splitsWord) return
+        val before = read.before
+        // The word, then what ended it: a space, or punctuation and maybe an automatic space.
+        val body = before.trimEnd(' ').let { if (it.lastOrNull()?.let(TextInputRules::wordChar) == false) it.dropLast(1) else it }
+        val word = body.takeLastWhile(TextInputRules::wordChar)
+        val taps = modelWordTaps(word, word.length, finished.taps)
+        // Typed into the middle of the text: what follows is read too.
+        val right = contextText(read.after.take(300))
+        if (word.isEmpty() || word != finished.typed || taps.isEmpty() || word.count { it.isLetter() } < 2 && word.length > 1) return
+        val head = body.dropLast(word.length)
+        val after = before.substring(body.length)
+        val first = CorrectionRules.sentenceStart(body, word.length)
+        val named = CorrectionRules.named(body, word)
+        // The word before, when it is still as it was left with one space between.
+        val prev = previous?.takeIf { !it.named && head.endsWith(" ") && head.dropLast(1).endsWith(it.written) &&
+            head.dropLast(1 + it.written.length).endsWith(it.headTail) }
+        val prevHead = prev?.let { head.dropLast(1 + it.written.length) }
+        val snapshotEnd = cursor.end
+        val tail = before.takeLast(256)
+        val p = predictor
+        val logging = settings.bool(Prefs.LOG_DECISIONS)
+        val queuedAt = SystemClock.uptimeMillis()
+        if (logging) keyboardView?.let(DecisionLog::geometry)
+        StudentEngine.worker.execute {
+            // Turned off or reloaded since: this corrector's model may be closed.
+            if (StudentEngine.corrector !== corrector) return@execute
+            val startedAt = SystemClock.uptimeMillis()
+            val fix = if (named) null else try {
+                corrector.atSpace(contextText(head), right, word, taps, first)?.takeIf { !p.rejected(word, it) && !p.isLearned(word) }
+            } catch (e: Throwable) { null }
+            if (logging) DecisionLog.decision(corrector, contextText(head), right, word, taps, first, fix,
+                startedAt - queuedAt, SystemClock.uptimeMillis() - startedAt, corrector.reused)
+            // This word's fix lands first; the word before is rechecked after, with this one as it now reads.
+            main.post { applyModel(snapshotEnd, tail, head, word, fix, after, taps, first, named) }
+            if (prev == null) return@execute
+            val now = fix ?: word
+            val prevFix = try {
+                corrector.recheck(contextText(prevHead!!), (now + after.trim() + " " + right).trim(), prev.written, prev.typed, prev.taps, prev.first)
+                    ?.takeIf { f -> !p.rejected(prev.written, f) && !p.isLearned(prev.written) }
+            } catch (e: Throwable) { null }
+            if (prevFix != null) main.post { applyRecheck(prev, prevFix, listOf(now, word).distinct(), after) }
+        }
+    }
+
+    private fun applyModel(snapshotEnd: Int, tail: String, head: String, word: String,
+                           fix: String?, after: String, taps: List<FloatArray>, first: Boolean, named: Boolean) {
+        if (destroyed || !modelAutocorrect()) return
+        val written = fix ?: word
+        // Remembered for the next word's recheck whether or not anything changes.
+        if (fix == null) { modelLast = ModelWord(word, taps, written, first, head.takeLast(32), named); return }
+        val ic = currentInputConnection ?: return
+        val read = editor()
+        val cursor = readCursor()
+        val since = cursor.end - snapshotEnd
+        if (read.selected || !cursor.known || since < 0 || since > read.before.length ||
+            !read.before.dropLast(since).endsWith(tail)) return
+        val typedSince = read.before.takeLast(since)
+        val oldSegment = word + after
+        val newSegment = written + after
+        // The word being typed since keeps its taps: the text before it changes under them, not the word.
+        val tapsHeld = tapBefore != null && read.before.takeLast(64) == tapBefore && read.after.take(64) == tapAfter
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(oldSegment.length + typedSince.length, 0)
+        ic.commitText(newSegment + typedSince, 1)
+        editorRead = null
+        ic.endBatchEdit()
+        if (tapsHeld) rememberTapContext(cursor.end - oldSegment.length + newSegment.length)
+        if (typedSince.isEmpty()) armedUndo = ReversibleCommit(oldSegment.removeSuffix(after), newSegment, after,
+            editor().before.takeLast(64), editor().after.take(64), correction = true) {}
+        modelLast = ModelWord(word, taps, written, first, head.takeLast(32), named)
+        updateSuggestions()
+    }
+
+    /**
+     * The recheck's change to the word before, once this word's own fix has landed: found where the text still reads
+     * that word, a space, this word as written ([current], fixed or not) and what ended it, with at most a few words
+     * typed since. Backspace undoes it when nothing was typed since.
+     */
+    private fun applyRecheck(prev: ModelWord, prevFix: String, current: List<String>, after: String) {
+        if (destroyed || !modelAutocorrect()) return
+        val ic = currentInputConnection ?: return
+        val read = editor()
+        if (read.selected) return
+        val before = read.before
+        for (cur in current) {
+            val expected = prev.written + " " + cur + after
+            val at = before.lastIndexOf(expected)
+            if (at < 0 || before.length - at - expected.length > 48 || !before.substring(0, at).endsWith(prev.headTail)) continue
+            val rest = before.substring(at + prev.written.length)
+            val tapsHeld = tapBefore != null && before.takeLast(64) == tapBefore && read.after.take(64) == tapAfter
+            ic.beginBatchEdit()
+            ic.deleteSurroundingText(before.length - at, 0)
+            ic.commitText(prevFix + rest, 1)
+            editorRead = null
+            ic.endBatchEdit()
+            if (tapsHeld) readCursor().takeIf { it.known }?.let { rememberTapContext(it.end) }
+            if (rest.length == 1 + cur.length + after.length) armedUndo = ReversibleCommit(prev.written + " " + cur, "$prevFix $cur$after",
+                after, editor().before.takeLast(64), editor().after.take(64), correction = true) {}
+            // The word after it now follows the changed word.
+            modelLast?.let { last -> if (last.written == cur) modelLast = last.copy(headTail = (before.substring(0, at) + prevFix + " ").takeLast(32)) }
+            updateSuggestions()
+            return
+        }
+    }
+
+    /** The text before a word as the model read it in training: one space between words, curly apostrophes straight. */
+    private fun contextText(text: String) = text.takeLast(600).replace('\u2019', '\'').replace('\u2018', '\'')
+        .replace(WHITESPACE, " ").trim()
 
     /**
      * Whole-sentence re-decoding: the sentence just ended, so its tapped words are re-decided together, using all
@@ -1066,14 +1249,18 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val original = if (spaced) autoWord.orEmpty() else if (currentGlide() && !hasAutomaticSpace()) glideWord.orEmpty() else currentWord(before)
         val prev = previousWord(if (spaced) before.dropLast(1) else before)
         val prev2 = previousWord2(if (spaced) before.dropLast(1) else before)
-        val plan = TextInputRules.replacement(original.length, read.after, settings.bool(Prefs.AUTOMATIC_SPACE) && !settings.bool(Prefs.SWIPE_LETTERS) && suggest,
+        val plan = TextInputRules.replacement(original.length, read.after, settings.bool(Prefs.AUTOMATIC_SPACE) && suggest,
             read.selected, if (spaced) original.length else 0)
         clearTaps(); clearGlide(); clearAutomaticSpace()
         ic.beginBatchEdit()
         if (!read.selected) ic.deleteSurroundingText(plan.before, plan.after)
         editorRead = null
         ic.commitText(text, 1); editorRead = null
-        if (plan.space) automaticSpace(text)
+        if (plan.space) automaticSpace(text, picked = true)
+        else if (!read.selected && editor().after.firstOrNull() == ' ') {
+            // Picked inside the text: past the word and the space after it, ready for what comes next.
+            readCursor().takeIf { it.known }?.let { ic.setSelection(it.end + 1, it.end + 1); editorRead = null }
+        }
         ic.endBatchEdit()
         protectedBefore = editor().before.takeLast(64); protectedAfter = editor().after.take(64)
         deferLearning(text, prev, prev2, picked = true)
@@ -1294,7 +1481,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         clearGlide()
         val auto = hasAutomaticSpace()
         val edit = TextInputRules.punctuation(text, editor().before, editor().after, auto,
-            settings.bool(Prefs.AUTOMATIC_PUNCTUATION), !suggest, settings.bool(Prefs.AUTOMATIC_SPACE) && !settings.bool(Prefs.SWIPE_LETTERS))
+            settings.bool(Prefs.AUTOMATIC_PUNCTUATION), !suggest, settings.bool(Prefs.AUTOMATIC_SPACE) && (auto || !settings.bool(Prefs.SWIPE_LETTERS)))
         clearAutomaticSpace()
         if (edit != null && !editor().selected) {
             clearTaps()
@@ -1316,29 +1503,46 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val prefix = currentWord(editor().before.takeLast(64))
         val cursor = tapCursor ?: selEnd
         val ch = text.singleOrNull()
-        val track = typing && ch != null && (ch.isLetter() || ch.isDigit() && prefix.isNotEmpty()) &&
-            !editor().selected
-        if (track) taps.append(prefix, text, distances, x, y, keyboardView?.layoutGeneration ?: 0) else clearTaps()
+        val modelTap = pendingModelTap
+        pendingModelTap = null
+        // The model reads the apostrophe's tap too (don't), so with it on, an apostrophe inside a word keeps the taps.
+        val track = typing && ch != null && (ch.isLetter() || ch.isDigit() && prefix.isNotEmpty() ||
+            ch == '\'' && prefix.isNotEmpty() && modelTap != null && modelAutocorrect()) && !editor().selected
+        if (track) taps.append(prefix, text, distances, x, y, keyboardView?.layoutGeneration ?: 0, modelTap) else clearTaps()
         ic.commitText(text, 1)
         editorRead = null
         if (track) rememberTapContext(cursor + text.length)
         if (state.shift && !state.capsLock) state.shift = false
     }
 
-    /** On ABC: tap for a one-shot capital, double-tap for caps lock, tap again to clear. Elsewhere: switch layer. */
+    /**
+     * On ABC: tap for a one-shot capital, double-tap for caps lock, tap again to clear; with a Shift key on the
+     * letters it is Shift's job, and the abc key goes to 123 as on the iPhone. Elsewhere: switch layer.
+     */
     private fun tapLayerKey(code: String) {
-        if (code == Keys.ABC && state.layer == Layer.ABC) {
-            val now = SystemClock.uptimeMillis()
-            when {
-                state.capsLock -> { state.capsLock = false; state.shift = false }
-                state.shift && now - lastAbcTap < DOUBLE_TAP_MS -> { state.capsLock = true; state.shift = false }
-                else -> state.shift = !state.shift
-            }
-            lastAbcTap = now
+        // With Shift placed, the layer key showing the layer you're on (a folded abc, 123, #+= key) is iPhone-like:
+        // from the letters to 123, and from 123 or #+= back to the letters. A swipe still steps through its faces.
+        if (grid.hasShift() && KeyText.layerOf(code) == state.layer) {
+            state.layer = if (state.layer == Layer.ABC) Layer.NUM else Layer.ABC
+            state.shift = false
+        } else if (code == Keys.ABC && state.layer == Layer.ABC) {
+            tapShift()
         } else {
             state.layer = KeyText.layerOf(code)
             state.shift = false
         }
+    }
+
+    /** Shift (or the abc key without one): tap for a one-shot capital, double-tap for caps lock, tap again to clear. */
+    private fun tapShift() {
+        if (state.layer != Layer.ABC) return
+        val now = SystemClock.uptimeMillis()
+        when {
+            state.capsLock -> { state.capsLock = false; state.shift = false }
+            state.shift && now - lastAbcTap < DOUBLE_TAP_MS -> { state.capsLock = true; state.shift = false }
+            else -> state.shift = !state.shift
+        }
+        lastAbcTap = now
     }
 
     private fun typeSpace(learnWord: Boolean = true) {
@@ -1348,10 +1552,23 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val picked = before == protectedBefore && editor().after.take(64) == protectedAfter
         val endedWord = if (currentGlide()) glideWord.orEmpty() else word
         val learningContext = if (hasAutomaticSpace()) before.dropLast(1) else before
+        val edited = word.isNotEmpty() && taps.hasTaps(word)
         clearTaps()
         clearGlide()
         val now = SystemClock.uptimeMillis()
         clearAutomaticSpace()
+        // The end of a word just edited in place, with a space already after it: step over that space rather than
+        // doubling it, so the word is finished (and corrected) and typing goes on after it. A word not typed in
+        // (the cursor put after it to add a word) gets its space as usual.
+        val read = editor()
+        val cursor = readCursor()
+        if (state.layer == Layer.ABC && edited && !read.selected && cursor.known && read.after.firstOrNull() == ' ') {
+            ic.setSelection(cursor.end + 1, cursor.end + 1)
+            editorRead = null
+            lastSpaceAt = now
+            if (learnWord) deferLearning(endedWord, previousWord(learningContext), previousWord2(learningContext), picked)
+            return
+        }
         if (state.layer == Layer.ABC && TextInputRules.doubleSpace(settings.bool(Prefs.AUTOMATIC_PUNCTUATION) && settings.bool(Prefs.DOUBLE_SPACE_PERIOD), before, now - lastSpaceAt, !suggest)) {
             val last2 = editor().before.takeLast(2)
             if (last2.length == 2 && last2[1] == ' ' && last2[0].isLetterOrDigit()) {
@@ -1435,6 +1652,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private fun updateSuggestions(letterCommitted: Boolean = false) = editorPhase { suggestionsPhase(letterCommitted) }
 
     private fun suggestionsPhase(letterCommitted: Boolean) {
+        liveAsk++
         if (!suggest || !modelReady) {
             deadEnd = false
             keyboardView?.keyWeights = emptyMap()
@@ -1484,7 +1702,71 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val prev2 = previousWord2(before)
         predictor.updateContext(if (predictor.language == "en") editor().before else before, prefix)
         view.keyWeights = if (settings.bool(Prefs.KEY_TINT) || settings.bool(Prefs.SMART_TARGETS)) predictor.nextLetters(prefix, prev, prev2, taps) else emptyMap()
+        if (modelAutocorrect() && modelSuggestions(read.before, prefix)) return
         view.setSuggestions(predictor.explore(prefix, prev, prev2, taps = taps), predictor.closest(prefix, prev, prev2, taps = taps), prefix)
+    }
+
+    /**
+     * The model's taps for [word], one per letter: its first [tappedLength] letters keep their taps from [tapped]
+     * (the letters typed in this word just now); letters that were already there get a tap on their key's centre, as
+     * typed carefully. Empty when nothing in the word was tapped here, or a letter has no key showing (a digit).
+     */
+    private fun modelWordTaps(word: String, tappedLength: Int, tapped: ComposingTaps?): List<FloatArray> {
+        val view = keyboardView ?: return emptyList()
+        if (tappedLength > 0 && tapped?.hasTaps(word.take(tappedLength)) != true) return emptyList()
+        return List(minOf(word.length, StudentSlot.MAX_TAPS)) { i ->
+            (if (i < tappedLength) tapped?.modelTap(i) else null) ?: view.centreTap(word[i]) ?: return emptyList()
+        }
+    }
+
+    /** Bumped on every suggestions update, so a model answer for older text is dropped. */
+    @Volatile private var liveAsk = 0
+
+    /**
+     * Model autocorrect: the wheels from the model (StudentCorrector.wheels), worked out on its thread after each tap.
+     * The same decision is what the space bar asks for, so it finds it ready when the word's taps haven't changed.
+     * The words shown stay until the answer lands, and a wheel being turned or chosen is left alone. False when the
+     * model can't answer for this word (no taps, say), for the LSTM's words instead.
+     */
+    private fun modelSuggestions(before: String, prefix: String): Boolean {
+        val corrector = StudentEngine.corrector ?: return false
+        // The whole word at the cursor (it may go on after it), and the text after it as context.
+        val after = editor().after
+        val suffix = if (prefix.isEmpty()) "" else after.takeWhile(TextInputRules::wordChar).toString()
+        val word = prefix + suffix
+        val tapped = prefix.isNotEmpty() && taps.hasTaps(prefix)
+        val wordTaps = if (word.isEmpty()) emptyList() else modelWordTaps(word, if (tapped) prefix.length else 0, taps.takeIf { tapped })
+        if (word.isNotEmpty() && wordTaps.isEmpty()) return false
+        val head = before.dropLast(prefix.length)
+        val first = CorrectionRules.sentenceStart(before, prefix.length)
+        val left = contextText(head)
+        val right = contextText(after.drop(suffix.length).take(300))
+        val named = word.isNotEmpty() && CorrectionRules.named(before + suffix, word)
+        val seed = prefix.lowercase() + "\t" + left.takeLast(40)
+        val ask = liveAsk
+        val p = predictor
+        val corrects = AutocorrectMode.entries[settings.int(Prefs.AUTOCORRECT)] != AutocorrectMode.OFF && correctAllowed
+        // A letter typed or deleted: the scoring for the word as it was is no use. Not at a space, where the space bar
+        // reuses the scoring of the word's last tap.
+        if (word.isNotEmpty()) corrector.cancelLive()
+        fun show(lists: Pair<List<String>, List<String>>, change: String?) = main.post {
+            val view = keyboardView
+            if (ask == liveAsk && !destroyed && view != null && view.wheelsIdle) view.setSuggestions(lists.first, lists.second, prefix, change)
+        }
+        StudentEngine.worker.execute {
+            if (ask != liveAsk || StudentEngine.corrector !== corrector) return@execute
+            try {
+                if (word.isEmpty()) { show(corrector.wheels(corrector.next(left), null, "", seed), null); return@execute }
+                // The wheels at once from the reading, then again with the space bar's choice once it is scored.
+                show(corrector.wheels(corrector.typing(left, right, wordTaps), null, word, seed), null)
+                if (ask != liveAsk) return@execute
+                val live = corrector.live(left, right, word, wordTaps, first, stoppable = true) ?: return@execute
+                // Outlined only when the space bar would really write it (modelDecide's own checks): after taps here.
+                val change = if (!named && corrects && tapped && suffix.isEmpty()) live.fix?.takeIf { !p.rejected(word, it) && !p.isLearned(word) } else null
+                show(corrector.wheels(live.wheel, live.takeUnless { named }, word, seed), change)
+            } catch (e: Throwable) {}
+        }
+        return true
     }
 
     /** Turns on a one-shot capital at the start of a sentence, when the field asks for it. */
@@ -1504,3 +1786,4 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
 /** Punctuation that ends a sentence and triggers whole-sentence re-decoding. */
 private const val SENTENCE_ENDS = ".?!"
+private val WHITESPACE = Regex("\\s+")

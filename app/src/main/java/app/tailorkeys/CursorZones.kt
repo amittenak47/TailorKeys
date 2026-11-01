@@ -1,7 +1,7 @@
 package app.tailorkeys
 
 enum class CursorControl(val title: String) {
-    AUTO("Auto"), TOUCH_BAR("Touch bar"), CENTER_GAP("Center gap"), OUTER_EDGES("Outer edges"), OFF("Off")
+    AUTO("Auto"), TOUCH_BAR("Touch bar"), SPACE_BAR("Space bar"), CENTER_GAP("Center gap"), OUTER_EDGES("Outer edges"), OFF("Off")
 }
 
 /** A strip between the letters and the space row: the split default, and an option on every other layout. */
@@ -80,7 +80,7 @@ internal enum class CursorZoneKind { CENTER, OUTER, EMPTY, NONE }
 
 /** Selects the center gap or outer padding for layouts that are not in one-hand mode. */
 internal fun cursorZoneKind(control: CursorControl, outer: List<CursorZone>, minWidth: Float): CursorZoneKind = when (control) {
-    CursorControl.OFF, CursorControl.TOUCH_BAR -> CursorZoneKind.NONE
+    CursorControl.OFF, CursorControl.TOUCH_BAR, CursorControl.SPACE_BAR -> CursorZoneKind.NONE
     CursorControl.CENTER_GAP -> CursorZoneKind.CENTER
     CursorControl.AUTO, CursorControl.OUTER_EDGES ->
         if (outer.size == 2 && outer.all { it.hasRoom(minWidth) }) CursorZoneKind.OUTER else CursorZoneKind.CENTER

@@ -22,3 +22,6 @@ __pycache__/
 *.pyc
 *.pt
 *.pth
+# The exported autocorrect model (tools/lm/export.py, about 50 MB): copied in from ../tk-lm-data/export, not committed
+# until we decide how it ships.
+app/src/main/assets/model/*.onnx

@@ -15,8 +15,9 @@ object Prefs {
     // Size and split are stored separately for portrait (_p) and landscape (_l).
     private val HEIGHT_P = IntPref("height_p", 44, 24, 70)
     private val HEIGHT_L = IntPref("height_l", 58, 24, 70)
-    private val WIDTH_P = IntPref("width_p", 100, 50, 100)
-    private val WIDTH_L = IntPref("width_l", 100, 50, 100)
+    // Past 100 only for a split keyboard: the halves are at the screen edges and grow into the middle gap.
+    private val WIDTH_P = IntPref("width_p", 100, 50, 120)
+    private val WIDTH_L = IntPref("width_l", 100, 50, 120)
     private val BOTTOM_P = IntPref("bottom_pad_p", 0, 0, 48)
     private val BOTTOM_L = IntPref("bottom_pad_l", 0, 0, 48)
     private val GAP_P = IntPref("split_gap_p", 16, 2, 40)
@@ -35,6 +36,10 @@ object Prefs {
     fun width(landscape: Boolean) = if (landscape) WIDTH_L else WIDTH_P
     fun bottomPadding(landscape: Boolean) = if (landscape) BOTTOM_L else BOTTOM_P
     fun splitGap(landscape: Boolean) = if (landscape) GAP_L else GAP_P
+    /** The narrowest middle gap, in percent of the width, that a split Width past 100 can leave. */
+    const val MIN_SPLIT_GAP = 2
+    /** The largest Width: 100, or for a split keyboard as far as the default gap allows down to MIN_SPLIT_GAP. */
+    fun maxWidth(landscape: Boolean, split: Boolean) = if (split) 100 + splitGap(landscape).default - MIN_SPLIT_GAP else 100
     fun tilt(landscape: Boolean) = if (landscape) TILT_L else TILT_P
     fun splitLeft(landscape: Boolean) = if (landscape) SPLIT_LEFT_L else SPLIT_LEFT_P
     fun splitRight(landscape: Boolean) = if (landscape) SPLIT_RIGHT_L else SPLIT_RIGHT_P
@@ -61,6 +66,9 @@ object Prefs {
 
     val FOLLOW_SYSTEM_TEXT = BoolPref("follow_system_text", true)
     val TYPE_ON_PRESS = BoolPref("type_on_press", false)
+    /** After a symbol from 123, or from #+=, the letters come back (digits keep the layer, for numbers). */
+    val RETURN_FROM_NUM = BoolPref("return_from_num", false)
+    val RETURN_FROM_SYM = BoolPref("return_from_sym", false)
     val NUMBER_ROW = BoolPref("number_row", true)
     val SHOW_HINTS = BoolPref("show_hints", true)
     val CURSOR_GLOW = BoolPref("cursor_glow", false)
@@ -91,6 +99,10 @@ object Prefs {
     val LOCK_SIZE = BoolPref("lock_size", false)
     /** Lock halves: the split grips and the one-hand arrow fade out and stop taking touches. */
     val SPLIT_LOCKED = BoolPref("split_locked", false)
+    /** For testing autocorrect: each decision written to the Android log (DecisionLog). Off: it logs what you type. */
+    val LOG_DECISIONS = BoolPref("log_decisions", false)
+    /** The suggestion bar's height, in percent of its default. */
+    val SUGGESTION_BAR = IntPref("suggestion_bar", 100, 60, 140)
     /** Portrait and landscape share one set of size and split settings. */
     val SAME_ORIENTATIONS = BoolPref("same_orientations", false)
     /** The first-run guide has been finished or skipped. */
@@ -130,7 +142,8 @@ class KeyboardSettings internal constructor(
     constructor(context: Context) : this(
         context.applicationContext.getSharedPreferences("settings", Context.MODE_PRIVATE),
         context.resources.configuration.smallestScreenWidthDp >= 600,
-        context.resources.configuration.locales[0].language.takeIf { it in Prefs.LANGUAGE_NAMES } ?: "en")
+        // English only for now (the autocorrect model is English); the other languages' lists stay bundled.
+        "en")
     fun languages(): List<String> {
         val stored = prefs.all[Prefs.LANGUAGES]
         val enabled = when (stored) {
@@ -210,13 +223,13 @@ class KeyboardSettings internal constructor(
 
     fun profile(landscape: Boolean) = SizeProfile(
         heightPercent = int(Prefs.height(landscape)),
-        widthPercent = int(Prefs.width(landscape)),
+        widthPercent = int(Prefs.width(landscape)).coerceAtMost(Prefs.maxWidth(landscape, split(landscape))),
         align = align(landscape),
         bottomPaddingDp = int(Prefs.bottomPadding(landscape)),
         split = if (prefs.contains(LayoutKeys.TRIAL)) prefs.getString(LayoutKeys.TRIAL_SPLIT, null)?.toBooleanStrictOrNull() ?: split(landscape) else split(landscape),
         // The halves' size leaves the default gap's room for moving them; a gap saved by an older version or a size
-        // preset could leave none, with no slider left to change it.
-        gap = Prefs.splitGap(landscape).default,
+        // preset could leave none, with no slider left to change it. Width past 100 takes it, point for point.
+        gap = (Prefs.splitGap(landscape).default - (int(Prefs.width(landscape)) - 100).coerceAtLeast(0)).coerceAtLeast(Prefs.MIN_SPLIT_GAP),
         tilt = int(Prefs.tilt(landscape)),
         leftInset = int(Prefs.splitLeft(landscape)),
         rightInset = int(Prefs.splitRight(landscape)),

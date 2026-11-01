@@ -1,0 +1,64 @@
+package app.tailorkeys
+
+import android.content.Context
+import java.io.File
+import java.util.concurrent.Executors
+
+/**
+ * The autocorrect model for the keyboard (Settings, Model autocorrect): loaded once per process, off the UI thread.
+ * One worker runs every load and decision in order, so a decision never overlaps another or a reload.
+ */
+internal object StudentEngine {
+    val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "TailorKeys-Student").apply { isDaemon = true } }
+    private const val ASSET = "model/step.int8.onnx"
+
+    /** Ready once loaded; read and used on the worker. */
+    @Volatile var corrector: StudentCorrector? = null
+        private set
+    private var model: StudentModel? = null
+    private var slot: StudentSlot? = null
+    private var searchOffensive: Boolean? = null
+    private var search: TapSearch? = null
+    private var heads: List<String>? = null
+
+    /** Loads the model (on the worker) with offensive words searched or not, then calls [done] there. */
+    fun load(context: Context, offensive: Boolean, done: () -> Unit = {}) = worker.execute {
+        try {
+            val app = context.applicationContext
+            val open = { name: String -> app.assets.open(name) }
+            if (model == null) model = StudentModel(copied(app).path)
+            if (slot == null) slot = StudentSlot(StudentTokenizer.load(open))
+            if (search == null || searchOffensive != offensive) {
+                search = TapSearch(TapSearch.load(open, offensive))
+                searchOffensive = offensive
+            }
+            if (heads == null) heads = open("model/head_words.txt").bufferedReader().readLines().map { it.trim() }.filter { it.isNotEmpty() }
+            val layout = corrector?.layout
+            corrector = StudentCorrector(model!!, search!!, slot!!, heads!!).also { it.layout = layout }
+        } catch (e: Throwable) {
+            android.util.Log.w("TailorKeys", "autocorrect model not loaded", e)
+            corrector = null
+        }
+        done()
+    }
+
+    /** Frees the model's memory when the setting is turned off. */
+    fun release() = worker.execute {
+        corrector = null
+        model?.close(); model = null
+        search = null; searchOffensive = null
+    }
+
+    /** The model file out of the APK (stored uncompressed), copied again only when its size changes. */
+    private fun copied(context: Context): File {
+        val out = File(context.noBackupFilesDir, ASSET)
+        val size = context.assets.openFd(ASSET).use { it.length }
+        if (!out.exists() || out.length() != size) {
+            out.parentFile?.mkdirs()
+            val tmp = File(out.path + ".tmp")
+            context.assets.open(ASSET).use { input -> tmp.outputStream().use { input.copyTo(it, 1 shl 16) } }
+            tmp.renameTo(out)
+        }
+        return out
+    }
+}

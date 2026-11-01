@@ -814,6 +814,8 @@ class Predictor internal constructor(
     }
     fun typedTwice(word: String) = (observed[word.lowercase()] ?: 0) >= 2
     fun isLearned(word: String) = user.containsKey(word.lowercase())
+    /** Whether you undid this change often enough that it isn't made again. */
+    fun rejected(original: String, fix: String) = history.blocked(original, fix)
 
     fun refreshLearning() { if (generation != PersonalStore.generation(directory)) reloadLearning() }
 
