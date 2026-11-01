@@ -49,15 +49,21 @@ internal object StudentEngine {
         search = null; searchOffensive = null
     }
 
-    /** The model file out of the APK (stored uncompressed), copied again only when its size changes. */
+    /**
+     * The model file out of the APK (stored uncompressed), copied again after each install or update of the app: a
+     * retrained model of the same shape has the same size, so the size alone would keep the old one.
+     */
     private fun copied(context: Context): File {
         val out = File(context.noBackupFilesDir, ASSET)
+        val stamp = File(out.path + ".installed")
+        val installed = context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime.toString()
         val size = context.assets.openFd(ASSET).use { it.length }
-        if (!out.exists() || out.length() != size) {
+        if (!out.exists() || out.length() != size || !stamp.exists() || stamp.readText() != installed) {
             out.parentFile?.mkdirs()
             val tmp = File(out.path + ".tmp")
             context.assets.open(ASSET).use { input -> tmp.outputStream().use { input.copyTo(it, 1 shl 16) } }
-            tmp.renameTo(out)
+            if (!tmp.renameTo(out)) throw java.io.IOException("autocorrect model not moved into place")
+            stamp.writeText(installed)
         }
         return out
     }

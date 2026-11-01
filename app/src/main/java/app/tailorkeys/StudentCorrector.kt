@@ -19,8 +19,14 @@ internal class StudentCorrector(private val model: StudentModel, private val sea
     @Volatile var moved: MovedKeys? = null
 
     private var lastWheel = FloatArray(0)
-    /** The runs of a [live] that a newer tap may stop ([cancelLive]); null outside one. */
+    /** The runs of a [live] that a newer tap may stop ([cancelLive]); null outside one. Set and cleared under [stopLock]. */
     @Volatile private var stoppable: ai.onnxruntime.OrtSession.RunOptions? = null
+    /**
+     * Held while [cancelLive] calls setTerminate and while the worker sets or clears [stoppable]. The worker closes the
+     * RunOptions (freeing it natively) only after clearing it, so a cancel from the UI thread never reaches freed memory:
+     * RunOptions.close frees before it marks itself closed, and its closed check isn't synchronized.
+     */
+    private val stopLock = Any()
     /** Whether the last [live] answer was kept from the word's last tap (for DecisionLog). */
     @Volatile var reused = false
     private var asked: Asked? = null
@@ -97,8 +103,8 @@ internal class StudentCorrector(private val model: StudentModel, private val sea
         asked?.takeIf { it.left == left && it.right == right && it.typed == typed && it.first == first && sameTaps(it.taps, taps) }?.let { return it.live }
         reused = false
         val s = if (!stoppable) score(left, right, typed, taps) ?: return null else ai.onnxruntime.OrtSession.RunOptions().use { o ->
-            this.stoppable = o
-            try { score(left, right, typed, taps) } finally { this.stoppable = null }
+            synchronized(stopLock) { this.stoppable = o }
+            try { score(left, right, typed, taps) } finally { synchronized(stopLock) { this.stoppable = null } }
         } ?: return null
         val p = s.best
         // A word left as typed gets a capital mid-sentence only when it is a word (a name), not a typo (mornonf).
@@ -108,7 +114,7 @@ internal class StudentCorrector(private val model: StudentModel, private val sea
     }
 
     /** Stops a stoppable [live] in progress (from any thread): the word it is for has changed. */
-    fun cancelLive() { try { stoppable?.setTerminate(true) } catch (e: Throwable) {} }
+    fun cancelLive() { synchronized(stopLock) { try { stoppable?.setTerminate(true) } catch (e: Throwable) {} } }
 
     /** The wheel after the taps so far, without scoring candidates: quick enough for every tap. */
     fun typing(left: String, right: String, taps: List<FloatArray>): FloatArray {

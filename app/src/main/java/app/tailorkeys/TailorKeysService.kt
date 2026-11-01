@@ -948,8 +948,10 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val mode = AutocorrectMode.entries[settings.int(Prefs.AUTOCORRECT)]
         val read = editor()
         val cursor = readCursor()
+        // modelReady: the predictor (lateinit) holds the undone and learned words checked below; until this service's
+        // first one loads, reading it would throw (the model can be ready first, as StudentEngine outlives the service).
         if (finished == null || corrector == null || mode == AutocorrectMode.OFF || !correctAllowed || read.selected ||
-            !cursor.known || splitsWord) return
+            !cursor.known || splitsWord || !modelReady) return
         val before = read.before
         // The word, then what ended it: a space, or punctuation and maybe an automatic space.
         val body = before.trimEnd(' ').let { if (it.lastOrNull()?.let(TextInputRules::wordChar) == false) it.dropLast(1) else it }
