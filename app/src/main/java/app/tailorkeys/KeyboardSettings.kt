@@ -8,7 +8,8 @@ import org.json.JSONObject
 enum class Align { LEFT, CENTER, RIGHT }
 
 class IntPref(val key: String, val default: Int, val min: Int, val max: Int)
-class BoolPref(val key: String, val default: Boolean)
+/** [device]: kept on this device only (not in Android backups), for switches that must never come back by themselves. */
+class BoolPref(val key: String, val default: Boolean, val device: Boolean = false)
 
 /** Every user setting with its default and allowed range, shared by the keyboard and the settings screen. */
 object Prefs {
@@ -108,8 +109,11 @@ object Prefs {
     val LOCK_SIZE = BoolPref("lock_size", false)
     /** Lock halves: the split grips and the one-hand arrow fade out and stop taking touches. */
     val SPLIT_LOCKED = BoolPref("split_locked", false)
-    /** For testing autocorrect: each decision written to the Android log (DecisionLog). Off: it logs what you type. */
-    val LOG_DECISIONS = BoolPref("log_decisions", false)
+    /**
+     * For testing autocorrect: each decision written to the Android log (DecisionLog). Off: it logs what you type. Kept
+     * out of backups, so a phone restored from one never starts logging.
+     */
+    val LOG_DECISIONS = BoolPref("log_decisions", false, device = true)
     /** The suggestion bar's height, in percent of its default. */
     val SUGGESTION_BAR = IntPref("suggestion_bar", 100, 60, 140)
     /** Portrait and landscape share one set of size and split settings. */
@@ -144,17 +148,25 @@ data class SizeProfile(
 
 class KeyboardSettings internal constructor(
     val prefs: SharedPreferences, private val tablet: Boolean, private val deviceLanguage: String,
+    /** Settings kept on this device only (BoolPref.device): device_private.xml, excluded from backup. */
+    val device: SharedPreferences = prefs,
 ) {
     init {
         // Retire the independent space-row angle; all rows now use the existing shared tilt.
         if (prefs.contains("space_tilt_p") || prefs.contains("space_tilt_l"))
             prefs.edit().remove("space_tilt_p").remove("space_tilt_l").apply()
+        // Device-only switches saved before they had their own file move there, out of the backed-up one.
+        if (device !== prefs) for (p in listOf(Prefs.LOG_DECISIONS)) if (prefs.contains(p.key)) {
+            if (!device.contains(p.key)) device.edit().putBoolean(p.key, prefs.getBoolean(p.key, p.default)).apply()
+            prefs.edit().remove(p.key).apply()
+        }
     }
     constructor(context: Context) : this(
         context.applicationContext.getSharedPreferences("settings", Context.MODE_PRIVATE),
         context.resources.configuration.smallestScreenWidthDp >= 600,
         // English only for now (the autocorrect model is English); the other languages' lists stay bundled.
-        "en")
+        "en",
+        context.applicationContext.getSharedPreferences("device_private", Context.MODE_PRIVATE))
     fun languages(): List<String> {
         val stored = prefs.all[Prefs.LANGUAGES]
         val enabled = when (stored) {
@@ -176,9 +188,9 @@ class KeyboardSettings internal constructor(
     }
 
     fun int(p: IntPref) = prefs.getInt(p.key, p.default).coerceIn(p.min, p.max)
-    fun bool(p: BoolPref) = prefs.getBoolean(p.key, p.default)
+    fun bool(p: BoolPref) = (if (p.device) device else prefs).getBoolean(p.key, p.default)
     fun set(p: IntPref, value: Int) { prefs.edit().putInt(p.key, value.coerceIn(p.min, p.max)).apply(); syncAppearance(p.key) }
-    fun set(p: BoolPref, value: Boolean) { prefs.edit().putBoolean(p.key, value).apply(); syncAppearance(p.key) }
+    fun set(p: BoolPref, value: Boolean) { (if (p.device) device else prefs).edit().putBoolean(p.key, value).apply(); syncAppearance(p.key) }
 
     private val layoutInts get() = listOf(Prefs.CURVE, Prefs.DEPTH, Prefs.KEY_GAP, Prefs.CORNER_RADIUS, Prefs.TEXT_SCALE) +
         listOf(false, true).flatMap { listOf(Prefs.height(it), Prefs.width(it), Prefs.bottomPadding(it), Prefs.splitGap(it), Prefs.tilt(it),
@@ -302,6 +314,38 @@ class KeyboardSettings internal constructor(
         applyLayoutSettings(json)
         syncAppearance()
     }
+
+    /** [profile] with the halves' shapes and placement taken from [halves] (a [halfGeometry] snapshot), when given. */
+    internal fun profile(landscape: Boolean, halves: String?): SizeProfile {
+        val p = profile(landscape)
+        val o = halves?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return p
+        fun v(pref: IntPref) = o.optInt(pref.key, pref.default).coerceIn(pref.min, pref.max)
+        fun shape(side: Int) = Prefs.halfShape(landscape, side).let { HalfShape(v(it[0]), v(it[1]), v(it[2])) }
+        return p.copy(leftInset = v(Prefs.splitLeft(landscape)), rightInset = v(Prefs.splitRight(landscape)),
+            leftShape = shape(0), rightShape = shape(1))
+    }
+
+    /** [setHalfGeometryFor] applied to a [halfGeometry] snapshot instead of the settings in use. */
+    internal fun halvesWith(halves: String, landscape: Boolean, profile: SizeProfile): String {
+        val o = runCatching { JSONObject(halves) }.getOrElse { JSONObject() }
+        for (land in orientations(landscape)) {
+            for ((side, shape) in listOf(profile.leftShape, profile.rightShape).withIndex()) {
+                val p = Prefs.halfShape(land, side)
+                val value = shape.bounded()
+                o.put(p[0].key, value.width).put(p[1].key, value.height).put(p[2].key, value.tilt)
+            }
+            o.put(Prefs.splitLeft(land).key, profile.leftInset.coerceIn(0, 1000))
+            o.put(Prefs.splitRight(land).key, profile.rightInset.coerceIn(0, 1000))
+        }
+        return o.toString()
+    }
+
+    /** A layout's saved settings reduced to its halves' shapes and placement, as a [halfGeometry] snapshot. */
+    internal fun halvesOf(snapshot: String?): String = JSONObject().apply {
+        val o = snapshot?.let { runCatching { JSONObject(it) }.getOrNull() }
+        for (land in listOf(false, true)) for (p in Prefs.halfShape(land, 0) + Prefs.halfShape(land, 1) +
+            listOf(Prefs.splitLeft(land), Prefs.splitRight(land))) put(p.key, o?.optInt(p.key, p.default) ?: p.default)
+    }.toString()
 
     fun setAlignFor(landscape: Boolean, align: Align) {
         val e = prefs.edit()

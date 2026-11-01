@@ -155,6 +155,10 @@ class FreeLayoutTest {
             val reset = both.shapeHalf(side, HalfShape(), true)
             assertEquals(HalfShape(), reset.leftShape); assertEquals(HalfShape(), reset.rightShape)
         }
+        // Mirror turned on after the halves were made different: a tilt drag matches the tilts, not the widths.
+        val tilted = p.shapeHalf(1, p.rightShape.copy(tilt = 10), true)
+        assertEquals(HalfShape(95, 90, 10), tilted.leftShape)
+        assertEquals(HalfShape(105, 110, 10), tilted.rightShape)
         for (dx in listOf(-1000f, 10f, 1000f)) for (side in 0..1) {
             val (left, right) = SplitPlacement.mirroredDrag(side, dx, 10f, 20f, 100f, 108f, 30f)
             assertEquals(left - 10f, right - 20f, .001f)

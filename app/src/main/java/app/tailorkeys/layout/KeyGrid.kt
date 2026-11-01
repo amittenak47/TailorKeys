@@ -47,6 +47,15 @@ class GridKey(val id: Int, var r: Int, var c: Int, var w: Int, val keys: Mutable
     val shaped get() = edges.any { it != 0f }
     /** Copies the center side and the edges from [from], for a copy of the same key. */
     fun withSide(from: GridKey) = also { side = from.side; edges = from.edges.copyOf() }
+    /**
+     * After the key's cells change (moved into fewer columns, say) or edges are read in: edges that would leave it
+     * narrower or shorter than [KeyGrid.MIN_SIZE] are dropped, so a narrowed wide key can't end up with no width.
+     */
+    fun keepSize() = also {
+        for (i in 0..3) if (!edges[i].isFinite()) edges[i] = 0f
+        if (w + edges[2] - edges[0] < KeyGrid.MIN_SIZE) { edges[0] = 0f; edges[2] = 0f }
+        if (1 + edges[3] - edges[1] < KeyGrid.MIN_SIZE) { edges[1] = 0f; edges[3] = 0f }
+    }
 }
 
 /**
@@ -144,6 +153,9 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
             for (r in 0..2) g.setRowScale(r, edited.rowScale(r + layerTop))
         }
         setRowScale(bottom, edited.rowScale(bottom))
+        // The number row shown above this layer is the letters layer's own, like the bottom row: resized here, it
+        // changes there too.
+        for (r in 0 until layerTop) setRowScale(r, edited.rowScale(r))
         val before = items.filter { it.r == bottom }.associateBy { it.id }
         items.removeAll { it.r == bottom }
         for (key in edited.items) if (key.r == bottom) {
@@ -361,7 +373,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         val r0 = key.r; val c0 = key.c; val w0 = key.w
         key.r = r; key.c = c; key.w = minOf(key.w, bounds(c).last - c + 1)
         while (!valid(key) && key.w > 1) key.w--
-        if (valid(key)) return true
+        if (valid(key)) { key.keepSize(); return true }
         key.r = r0; key.c = c0; key.w = w0
         return false
     }
@@ -371,6 +383,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         if (space.w < 2 || region(space.c) == 1 || key.isSpace) return false
         key.r = space.r; key.w = 1
         if (region(space.c) == 0) { space.w--; key.c = space.c + space.w } else { key.c = space.c; space.c++; space.w-- }
+        key.keepSize(); space.keepSize()
         return true
     }
 
@@ -405,8 +418,9 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         val p = (if (right != null && left != null) (if (left.chain.size < right.chain.size) left else right) else right ?: left)
             ?: return false
         p.chain.forEach { it.c += p.dir }
-        p.absorb?.let { s -> if (p.dir > 0) s.c++; s.w-- }
+        p.absorb?.let { s -> if (p.dir > 0) s.c++; s.w--; s.keepSize() }
         key.r = r; key.w = 1; key.c = if (p.dir > 0) b else b - 1
+        key.keepSize()
         return true
     }
 
@@ -558,7 +572,9 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
                     if (j.has("i")) integer(j, "i") else 0).also { k ->
                         CenterSide.entries.firstOrNull { it.name == j.optString("s") }?.let { k.side = it }
                         j.optJSONArray("e")?.takeIf { it.length() == 4 }?.let { e ->
-                            k.edges = FloatArray(4) { i -> e.optDouble(i, 0.0).toFloat().coerceIn(-MAX_EDGE, MAX_EDGE) }
+                            // An imported file may hold anything: NaN is no edge, and the key keeps a usable size.
+                            k.edges = FloatArray(4) { i -> e.optDouble(i, 0.0).toFloat().takeIf { it.isFinite() }?.coerceIn(-MAX_EDGE, MAX_EDGE) ?: 0f }
+                            k.keepSize()
                         }
                     })
             }

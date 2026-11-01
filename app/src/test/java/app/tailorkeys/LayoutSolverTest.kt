@@ -26,6 +26,18 @@ class LayoutSolverTest {
         }
     }
 
+    /** A steep tilt (a half's own tilt on top of the shared one) narrows the keys before it flattens the rows. */
+    @Test fun aSteepTiltNarrowsKeysBeforeFlatteningRows() {
+        val grid = KeyGrid.template(Template.SPLIT)
+        val upright = LayoutSolver().compute(1.5f, 4, 7.5f, 60f, 21f, 6f, 0f, 360f, 270f, 630f, true, false, 0f, 0f, grid)
+        for (tilt in listOf(20f, -20f, 30f, -30f)) {
+            val steep = LayoutSolver().compute(1.5f, 4, 7.5f, 60f, 21f, 6f, 0f, 360f, 270f, 630f, true, false, tilt, 0f, grid)
+            assertTrue(steep.total <= 360.01f)
+            // Rows keep three quarters of their upright height, or the keys are already at their narrowest.
+            assertTrue("tilt $tilt: rows ${steep.un} keys ${steep.cw}", steep.un >= .75f * upright.un - .5f || steep.cw <= .75f * 270f + .5f)
+        }
+    }
+
     @Test fun aTouchBarComesOutOfTheRowsNotTheKeyboardsHeight() {
         val grid = KeyGrid.template(Template.SPLIT)
         for (split in listOf(true, false)) for (tilt in listOf(-10f, 0f, 10f)) {

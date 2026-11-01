@@ -166,20 +166,25 @@ internal class LayoutSolver {
             // left a blank band and narrower keys (measured 2026-11-01).
             val angles = doubleArrayOf(-abs(th), abs(th))
             // 14 halvings resolve widths and heights far below a pixel.
-            fun widest(un: Float): Work {
-                var lo = gap
-                var hi = half
-                repeat(14) {
-                    val cw = (lo + hi) / 2
-                    if (angles.all { a -> blocks(un, cw, a, curve).span <= half }) lo = cw else hi = cw
-                }
+            // The taller of the two mirrored blocks at this row height and key width (a copy: blocks reuses one Work).
+            fun tallest(un: Float, cw: Float): Work {
                 var tallest: Work? = null
                 for (a in angles) {
-                    val candidate = blocks(un, lo, a, curve)
+                    val candidate = blocks(un, cw, a, curve)
                     if (tallest == null || candidate.total > tallest.total) tallest = Work().set(candidate.un, candidate.hc,
                         candidate.cw, candidate.pv, candidate.disp, candidate.padTop, candidate.letterY, candidate.spaceY, candidate.span, candidate.total)
                 }
                 return tallest!!
+            }
+            // The widest keys whose block stays within the side, and with [height] within the height set too.
+            fun widest(un: Float, height: Boolean = false): Work {
+                var lo = gap
+                var hi = half
+                repeat(14) {
+                    val cw = (lo + hi) / 2
+                    if (angles.all { a -> blocks(un, cw, a, curve).let { it.span <= half && (!height || it.total <= target) } }) lo = cw else hi = cw
+                }
+                return tallest(un, lo)
             }
             // Exact primitive cache keys: live tilt/curve reuse the reservation without strings or boxing.
             if (!haveReserved || lastTarget != target || lastHalf != half || lastInner != innerW ||
@@ -187,14 +192,36 @@ internal class LayoutSolver {
                 lastPad != pad || lastHandle != handleH || lastBar != bar || lastTilt != tilt || lastCurve != curve) {
                 var lo = 14 * d
                 var hi = max(lo, (target - stripH - handleH - pad - bottomPad - bar) / n)
-                // Tallest rows that fit, unless a steep tilt would squeeze the keys narrower than MIN_WIDTH of the
-                // half: then rows give way too (per-half tilt can reach 30 degrees).
+                val upright = hi
+                // Tallest rows that fit with the widest keys, unless a steep tilt would squeeze the keys narrower than
+                // MIN_WIDTH of the half: then rows give way too (per-half tilt can reach 30 degrees).
                 fun fits(un: Float) = widest(un).let { it.total <= target && it.span <= half + .5f && it.cw >= MIN_WIDTH * half }
                 repeat(14) {
                     val un = (lo + hi) / 2
                     if (fits(un)) lo = un else hi = un
                 }
-                val w = widest(lo)
+                var w = widest(lo)
+                // A steep tilt can cost the rows most of their height while the keys stay full width (a tilted block
+                // is taller the wider it is): rows keep MIN_ROWS of their upright height and the keys narrow instead,
+                // down to MIN_WIDTH; past that, rows give way at that width.
+                if (lo < MIN_ROWS * upright) {
+                    val narrow = widest(MIN_ROWS * upright, height = true)
+                    w = if (narrow.cw >= MIN_WIDTH * half && narrow.total <= target) narrow else {
+                        val cw = MIN_WIDTH * half
+                        var short = 14 * d
+                        var tall = MIN_ROWS * upright
+                        var found = false
+                        repeat(14) {
+                            val un = (short + tall) / 2
+                            if (angles.all { a -> blocks(un, cw, a, curve).let { it.total <= target && it.span <= half } }) {
+                                short = un; found = true
+                            } else tall = un
+                        }
+                        // Keys at MIN_WIDTH when they fit and keep taller rows, or when even the full-width answer runs
+                        // past the height set.
+                        if (found && (short > lo || w.total > target)) tallest(short, cw) else w
+                    }
+                }
                 reserved[0] = w.un; reserved[1] = w.cw
                 lastTarget = target; lastHalf = half; lastInner = innerW; lastGap = gap
                 lastStrip = stripH; lastBottom = bottomPad; lastDensity = d; lastPad = pad; lastHandle = handleH; lastBar = bar
@@ -208,6 +235,8 @@ internal class LayoutSolver {
     private companion object {
         /** The narrowest a tilted half's keys get, as a share of the half's width, before its rows shorten. */
         const val MIN_WIDTH = .75f
+        /** The share of their upright height rows keep at a steep tilt before the keys narrow instead. */
+        const val MIN_ROWS = .75f
         val EXTREME_ANGLES = doubleArrayOf(Math.toRadians(-10.0), Math.toRadians(10.0))
         val EXTREME_COS = cos(EXTREME_ANGLES[1]).toFloat()
         val EXTREME_SIN = sin(EXTREME_ANGLES[1]).toFloat()

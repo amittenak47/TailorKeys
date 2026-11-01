@@ -19,8 +19,14 @@ internal class StudentCorrector(private val model: StudentModel, private val sea
     @Volatile var moved: MovedKeys? = null
 
     private var lastWheel = FloatArray(0)
-    /** The runs of a [live] that a newer tap may stop ([cancelLive]); null outside one. */
+    /** The runs of a [live] that a newer tap may stop ([cancelLive]); null outside one. Set and cleared under [stopLock]. */
     @Volatile private var stoppable: ai.onnxruntime.OrtSession.RunOptions? = null
+    /**
+     * Held while [cancelLive] calls setTerminate and while the worker sets or clears [stoppable]. The worker closes the
+     * RunOptions (freeing it natively) only after clearing it, so a cancel from the UI thread never reaches freed memory:
+     * RunOptions.close frees before it marks itself closed, and its closed check isn't synchronized.
+     */
+    private val stopLock = Any()
     /** Whether the last [live] answer was kept from the word's last tap (for DecisionLog). */
     @Volatile var reused = false
     private var asked: Asked? = null
@@ -97,18 +103,19 @@ internal class StudentCorrector(private val model: StudentModel, private val sea
         asked?.takeIf { it.left == left && it.right == right && it.typed == typed && it.first == first && sameTaps(it.taps, taps) }?.let { return it.live }
         reused = false
         val s = if (!stoppable) score(left, right, typed, taps) ?: return null else ai.onnxruntime.OrtSession.RunOptions().use { o ->
-            this.stoppable = o
-            try { score(left, right, typed, taps) } finally { this.stoppable = null }
+            synchronized(stopLock) { this.stoppable = o }
+            try { score(left, right, typed, taps) } finally { synchronized(stopLock) { this.stoppable = null } }
         } ?: return null
         val p = s.best
         // A word left as typed gets a capital mid-sentence only when it is a word (a name), not a typo (mornonf).
         val word = written(s.candidates[p], if (p == s.keep && !first && s.candidates[p].lowercase() !in search.index) -1f else s.capital[p], first)
-        val fix = if (p == s.keep) word.takeIf { it != typed && typed == typed.lowercase() } else word.takeIf { slipsFit(typed, it, taps) }
+        val fix = if (p == s.keep) word.takeIf { it != typed && typed == typed.lowercase() }
+            else word.takeIf { slipsFit(typed, it, taps) }?.let { casedAs(typed, it) }
         return Live(fix, s, StudentModel.softmax(lastWheel)).also { asked = Asked(left, right, typed, taps.map { it.copyOf() }, first, it) }
     }
 
     /** Stops a stoppable [live] in progress (from any thread): the word it is for has changed. */
-    fun cancelLive() { try { stoppable?.setTerminate(true) } catch (e: Throwable) {} }
+    fun cancelLive() { synchronized(stopLock) { try { stoppable?.setTerminate(true) } catch (e: Throwable) {} } }
 
     /** The wheel after the taps so far, without scoring candidates: quick enough for every tap. */
     fun typing(left: String, right: String, taps: List<FloatArray>): FloatArray {
@@ -170,7 +177,7 @@ internal class StudentCorrector(private val model: StudentModel, private val sea
         val s = score(left, right, written, taps, also) ?: return null
         val p = s.best
         if (p == s.keep || s.probability[s.keep] >= .5f) return null
-        return written(s.candidates[p], s.capital[p], first).takeIf { slipsFit(typed, it, taps) }
+        return written(s.candidates[p], s.capital[p], first).takeIf { slipsFit(typed, it, taps) }?.let { casedAs(typed, it) }
     }
 
     /**
@@ -190,11 +197,24 @@ internal class StudentCorrector(private val model: StudentModel, private val sea
         }
     }
 
-    private companion object {
+    internal companion object {
+        /**
+         * A fix in the case it was typed in: a word typed in capitals (TEH, caps lock) is fixed in capitals (THE); one
+         * with other capitals after its first letter (iPhnoe) is left as typed, as the keyboard always has.
+         */
+        fun casedAs(typed: String, fix: String): String? {
+            val letters = typed.filter { it.isLetter() }
+            return when {
+                letters.length > 1 && letters.all { it.isUpperCase() } -> fix.uppercase()
+                letters.drop(1).any { it.isUpperCase() } -> null
+                else -> fix
+            }
+        }
+
         /** How far (squared, in key spacings) a stray digit's tap may be from the letter it becomes: about a row. */
-        const val SLIP_REACH = 1.6f
+        private const val SLIP_REACH = 1.6f
         /** Other candidates shown on the right wheel from this probability. */
-        const val ALSO_SHOWN = .05f
+        private const val ALSO_SHOWN = .05f
     }
 
     private fun written(word: String, capital: Float, first: Boolean) =
