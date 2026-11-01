@@ -5,6 +5,50 @@ import kotlin.math.*
 
 /** Pure size/tilt solver, shared by the view and opt-in JVM benchmarks. */
 internal class LayoutSolver {
+    /** Row bands fill the key height; the touch bar owns a fixed band before the bottom row. */
+    data class RowBands(val tops: FloatArray, val heights: FloatArray, val barTop: Float)
+
+    fun rowBands(grid: KeyGrid, un: Float, bar: Float = 0f): RowBands {
+        val total = (0 until grid.rows).sumOf { grid.rowScale(it).toDouble() }.toFloat()
+        val heights = FloatArray(grid.rows) { un * grid.rows * grid.rowScale(it) / total }
+        val tops = FloatArray(grid.rows)
+        var y = 0f
+        var barTop = 0f
+        for (r in tops.indices) {
+            if (r == grid.rows - 1) { barTop = y; y += bar }
+            tops[r] = y
+            y += heights[r]
+        }
+        return RowBands(tops, heights, barTop)
+    }
+
+    /** Inverts normalization so a dragged edge follows the finger while the other rows share the remainder. */
+    fun rowScaleForHeight(grid: KeyGrid, row: Int, blockHeight: Float, wanted: Float): Float {
+        val height = wanted.coerceIn(1f, max(1f, blockHeight - 1f))
+        val others = (0 until grid.rows).filter { it != row }.sumOf { grid.rowScale(it).toDouble() }.toFloat()
+        return height * others / (blockHeight - height).coerceAtLeast(1f)
+    }
+
+    /** Each half solves its own keys; requested widths share the screen if their sum would close the gap. */
+    data class SplitSolution(val left: Solution, val right: Solution)
+
+    fun computeSplit(
+        d: Float, n: Int, gap: Float, stripH: Float, handleH: Float, pad: Float, bottomPad: Float,
+        target: Float, half: Float, innerW: Float, tilt: Float, curve: Float, grid: KeyGrid,
+        left: HalfShape, right: HalfShape, bar: Float = 0f, maxHeight: Float = Float.MAX_VALUE,
+    ): SplitSolution {
+        val shapes = listOf(left.bounded(), right.bounded())
+        val widths = shapes.map { half * it.width / 100f }
+        val fit = min(1f, (innerW - 8 * d).coerceAtLeast(0f) / widths.sum().coerceAtLeast(1f))
+        val overhead = stripH + handleH + pad + bottomPad
+        fun side(i: Int): Solution {
+            val h = min(maxHeight, overhead + (target - overhead).coerceAtLeast(0f) * shapes[i].height / 100f)
+            return compute(d, n, gap, stripH, handleH, pad, bottomPad, h, widths[i] * fit, innerW,
+                true, false, (tilt + shapes[i].tilt).toFloat(), curve, grid, bar)
+        }
+        return SplitSolution(side(0), side(1))
+    }
+
     /** Row width stays anchored to its half; compacted columns share the available width. */
     fun rowUnit(grid: KeyGrid, row: Int, column: Int, halfWidth: Float): Float =
         halfWidth / grid.rowColumns(row, column)
@@ -19,11 +63,8 @@ internal class LayoutSolver {
             this.padTop = padTop; this.letterY = letterY; this.spaceY = spaceY; this.span = span; this.total = total
             return this
         }
-        fun copy(other: Work) = set(other.un, other.hc, other.cw, other.pv, other.disp,
-            other.padTop, other.letterY, other.spaceY, other.span, other.total)
     }
     private val work = Work()
-    private val worstWork = Work()
     private var reservedRows = -1
     private var lastTarget = Float.NaN
     private var lastHalf = Float.NaN
@@ -38,7 +79,7 @@ internal class LayoutSolver {
     private var lastTilt = Float.NaN
     private var lastCurve = Float.NaN
     private var haveReserved = false
-    private val reserved = FloatArray(3)
+    private val reserved = FloatArray(2)
     private val boundsLetters = FloatArray(4)
     fun compute(
         d: Float, n: Int, gap: Float, stripH: Float, handleH: Float, pad: Float, bottomPad: Float,
@@ -47,6 +88,8 @@ internal class LayoutSolver {
     ): Solution {
         // [bar]: a touch bar's height above the bottom row, inside each block, paid for by shorter rows.
         val th = Math.toRadians(tilt.toDouble())
+        val rowWeight = (0 until n).sumOf { grid.rowScale(it).toDouble() }.toFloat()
+        fun bottomTop(un: Float) = un * n * (1 - grid.rowScale(n - 1) / rowWeight) + bar
         fun solution(un: Float, hc: Float, cw: Float, pv: Float, disp: Float, padTop: Float,
                      letterY: Float = 0f, spaceY: Float = hc, span: Float = cw) =
             work.set(un, hc, cw, pv, disp, padTop, letterY, spaceY, span, stripH + padTop + hc + handleH + bottomPad)
@@ -77,7 +120,7 @@ internal class LayoutSolver {
                 pv = rot(cw).first
             }
             val disp = if (split) ceil(cw * abs(sin(angle))).toFloat() else 0f
-            return solution(un, hc, cw, pv, disp, pad + disp + raise)
+            return solution(un, hc, cw, pv, disp, pad + disp + raise, spaceY = bottomTop(un))
         }
 
         // Fit tilt, curve and all rows within the selected height, keeping a pixel of room when shrinking.
@@ -94,7 +137,7 @@ internal class LayoutSolver {
         if (reserve && reservedRows != n) { reservedRows = n; haveReserved = false }
         // The curve only moves columns up, keys upright, so the block's bounds grow by the arc's rise alone.
         fun blocks(un: Float, cw: Float, angle: Double, bend: Float): Work {
-            val letterH = un * (n - 1) + bar
+            val letterH = bottomTop(un)
             val blockH = n * un + bar
             // Axis-aligned bounds of a rotated rectangle, written into [out] as left, top, right, bottom.
             // Allocation-free: this runs hundreds of times per layout.
@@ -118,27 +161,25 @@ internal class LayoutSolver {
         }
         val s = if (reserve) {
             // Fit the tilt and curve in use (both halves' mirrored angles): keys use the height the tilt leaves
-            // instead of a band kept for the steepest tilt. They resize a little as Tilt or Curve changes.
+            // instead of a band kept for the steepest tilt. They resize a little as Tilt or Curve changes. The
+            // tallest rows that fit come first, then the widest keys at that height: scaling both by one factor
+            // left a blank band and narrower keys (measured 2026-11-01).
             val angles = doubleArrayOf(-abs(th), abs(th))
             // 14 halvings resolve widths and heights far below a pixel.
-            fun worst(un: Float): Work {
+            fun widest(un: Float): Work {
                 var lo = gap
                 var hi = half
                 repeat(14) {
                     val cw = (lo + hi) / 2
-                    var fits = true
-                    for (a in angles) {
-                        if (blocks(un, cw, a, curve).span > half) { fits = false; break }
-                        if (!fits) break
-                    }
-                    if (fits) lo = cw else hi = cw
+                    if (angles.all { a -> blocks(un, cw, a, curve).span <= half }) lo = cw else hi = cw
                 }
-                worstWork.total = Float.NEGATIVE_INFINITY
+                var tallest: Work? = null
                 for (a in angles) {
                     val candidate = blocks(un, lo, a, curve)
-                    if (candidate.total > worstWork.total) worstWork.copy(candidate)
+                    if (tallest == null || candidate.total > tallest.total) tallest = Work().set(candidate.un, candidate.hc,
+                        candidate.cw, candidate.pv, candidate.disp, candidate.padTop, candidate.letterY, candidate.spaceY, candidate.span, candidate.total)
                 }
-                return worstWork
+                return tallest!!
             }
             // Exact primitive cache keys: live tilt/curve reuse the reservation without strings or boxing.
             if (!haveReserved || lastTarget != target || lastHalf != half || lastInner != innerW ||
@@ -146,12 +187,15 @@ internal class LayoutSolver {
                 lastPad != pad || lastHandle != handleH || lastBar != bar || lastTilt != tilt || lastCurve != curve) {
                 var lo = 14 * d
                 var hi = max(lo, (target - stripH - handleH - pad - bottomPad - bar) / n)
+                // Tallest rows that fit, unless a steep tilt would squeeze the keys narrower than MIN_WIDTH of the
+                // half: then rows give way too (per-half tilt can reach 30 degrees).
+                fun fits(un: Float) = widest(un).let { it.total <= target && it.span <= half + .5f && it.cw >= MIN_WIDTH * half }
                 repeat(14) {
                     val un = (lo + hi) / 2
-                    if (worst(un).total <= target) lo = un else hi = un
+                    if (fits(un)) lo = un else hi = un
                 }
-                val w = worst(lo)
-                reserved[0] = w.un; reserved[1] = w.cw; reserved[2] = w.total
+                val w = widest(lo)
+                reserved[0] = w.un; reserved[1] = w.cw
                 lastTarget = target; lastHalf = half; lastInner = innerW; lastGap = gap
                 lastStrip = stripH; lastBottom = bottomPad; lastDensity = d; lastPad = pad; lastHandle = handleH; lastBar = bar
                 lastTilt = tilt; lastCurve = curve
@@ -162,6 +206,8 @@ internal class LayoutSolver {
         return Solution(s.un, s.hc, s.cw, s.pv, s.disp, s.padTop, s.letterY, s.spaceY, s.span, s.total)
     }
     private companion object {
+        /** The narrowest a tilted half's keys get, as a share of the half's width, before its rows shorten. */
+        const val MIN_WIDTH = .75f
         val EXTREME_ANGLES = doubleArrayOf(Math.toRadians(-10.0), Math.toRadians(10.0))
         val EXTREME_COS = cos(EXTREME_ANGLES[1]).toFloat()
         val EXTREME_SIN = sin(EXTREME_ANGLES[1]).toFloat()

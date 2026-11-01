@@ -2,6 +2,7 @@ package app.tailorkeys
 
 import app.tailorkeys.KeyboardSettings
 import app.tailorkeys.layout.KeyGrid
+import app.tailorkeys.layout.Layer
 import app.tailorkeys.layout.Template
 import org.json.JSONArray
 import org.json.JSONObject
@@ -299,7 +300,10 @@ internal class LayoutLibrary(
         }
         fun cleanName(name: String) = name.trim().take(24).ifEmpty { "Custom" }
         fun sameGrid(a: KeyGrid, b: KeyGrid): Boolean = a.rows == b.rows && a.items.size == b.items.size &&
-            a.items.sortedWith(compareBy({ it.r }, { it.c })).zip(b.items.sortedWith(compareBy({ it.r }, { it.c }))).all { (x, y) ->
+            Layer.entries.all { layer ->
+                val left = a.layer(layer); val right = b.layer(layer)
+                (0 until a.rows).all { left.rowScale(it) == right.rowScale(it) }
+            } && a.items.sortedWith(compareBy({ it.r }, { it.c })).zip(b.items.sortedWith(compareBy({ it.r }, { it.c }))).all { (x, y) ->
                 x.r == y.r && x.c == y.c && x.w == y.w && x.keys == y.keys
             }
     }

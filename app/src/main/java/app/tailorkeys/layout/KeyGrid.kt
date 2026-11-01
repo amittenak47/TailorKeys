@@ -55,6 +55,16 @@ class GridKey(val id: Int, var r: Int, var c: Int, var w: Int, val keys: Mutable
  */
 class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>, private var nextId: Int) {
 
+    /** Relative row heights, normalized when placed so the rows still fill their block. */
+    private var rowScales = FloatArray(rows.coerceIn(4, 5)) { 1f }
+
+    fun rowScale(row: Int): Float = rowScales.getOrElse(row) { 1f }
+
+    /** Invalid imported values fall back to the cell; bounded scales keep every row usable. */
+    fun setRowScale(row: Int, scale: Float) {
+        if (row in rowScales.indices) rowScales[row] = if (scale.isFinite()) scale.coerceIn(.4f, 2.5f) else 1f
+    }
+
     /**
      * Keys set aside in the editor: removed keys and faces taken off a swipe key wait here (newest last)
      * until they are placed again or deleted. Typing ignores the tray.
@@ -69,7 +79,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
 
     /** Deep copy with the same key ids, so a preview can be matched key for key with the live grid. */
     fun copy(): KeyGrid = KeyGrid(rows, items.mapTo(mutableListOf()) { GridKey(it.id, it.r, it.c, it.w, it.keys.toMutableList(), it.idx).withSide(it) }, nextId)
-        .also { copy -> tray.forEach { copy.tray.add(it.toMutableList()) }; layers.forEach { (l, g) -> copy.layers[l] = g.copy() }; copy.source = source }
+        .also { copy -> tray.forEach { copy.tray.add(it.toMutableList()) }; layers.forEach { (l, g) -> copy.layers[l] = g.copy() }; copy.source = source; copy.rowScales = rowScales.copyOf() }
 
     /** The first of a layer's three rows: below the number row when there is one. */
     private val layerTop get() = rows - 4
@@ -91,7 +101,13 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
             val keys = sharedKeys(key)
             shown += GridKey(SHARED_ID + key.id, key.r, key.c, key.w, keys, if (keys == key.keys) key.idx else 0).withSide(key)
         }
-        return KeyGrid(rows, shown, own.nextId).also { g -> own.tray.forEach { g.tray.add(it.toMutableList()) }; g.source = this to layer }
+        return KeyGrid(rows, shown, own.nextId).also { g -> own.tray.forEach { g.tray.add(it.toMutableList()) }; g.source = this to layer
+            for (r in 0 until rows) g.setRowScale(r, when {
+                r == rows - 1 -> rowScale(r)
+                r >= layerTop -> own.rowScale(r - layerTop)
+                else -> rowScale(r)
+            })
+        }
     }
 
     /** What a letters' bottom-row key shows on 123 and #+=. */
@@ -123,7 +139,11 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         val own = edited.items.filter { it.r in layerTop until bottom }.mapTo(mutableListOf()) {
             GridKey(if (isShared(it)) next++ else it.id, it.r - layerTop, it.c, it.w, it.keys.toMutableList(), it.idx).withSide(it)
         }
-        layers[layer] = KeyGrid(4, own, next).also { g -> edited.tray.forEach { g.tray.add(it.toMutableList()) } }
+        layers[layer] = KeyGrid(4, own, next).also { g ->
+            edited.tray.forEach { g.tray.add(it.toMutableList()) }
+            for (r in 0..2) g.setRowScale(r, edited.rowScale(r + layerTop))
+        }
+        setRowScale(bottom, edited.rowScale(bottom))
         val before = items.filter { it.r == bottom }.associateBy { it.id }
         items.removeAll { it.r == bottom }
         for (key in edited.items) if (key.r == bottom) {
@@ -260,7 +280,8 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
                     a.r == b.r && a.c == b.c && a.w == b.w && a.keys == b.keys }) {
                 val result = template(t, lang)
                 if (rows == 5) result.setNumberRow(true)
-                result.items.zip(items).forEach { (a, b) -> a.idx = b.idx }
+                result.items.zip(items).forEach { (a, b) -> a.idx = b.idx; a.withSide(b) }
+                result.rowScales = rowScales.copyOf()
                 tray.forEach { result.tray.add(it.toMutableList()) }
                 layers.forEach { (l, g) -> result.layers[l] = g.copy() }
                 return result
@@ -445,11 +466,13 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
             items.forEach { it.r++ }
             "1234567890".forEachIndexed { i, d -> items.add(GridKey(nextId++, 0, if (i < 5) i else i + 1, 1, mutableListOf("d$d"))) }
             rows = 5
+            rowScales = floatArrayOf(1f) + rowScales
         } else if (!on && rows == 5) {
             items.removeAll { it.r == 0 && it.keys.all(KeyText::isDigit) }
             if (items.any { it.r == 0 }) return false
             items.forEach { it.r-- }
             rows = 4
+            rowScales = rowScales.drop(1).toFloatArray()
         }
         return true
     }
@@ -466,12 +489,21 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
     }
     private fun trayJson() = JSONArray().apply { tray.forEach { put(JSONArray(it)) } }
 
+    private fun writeRowScales(json: JSONObject): JSONObject = json.apply {
+        if (rowScales.any { it != 1f }) put("rowHeights", JSONArray(rowScales.map { Math.round(it * 1000) / 1000.0 }))
+    }
+
+    private fun readRowScales(json: JSONObject) {
+        val values = json.optJSONArray("rowHeights") ?: return
+        for (r in 0 until rows) setRowScale(r, values.optDouble(r, 1.0).toFloat())
+    }
+
     fun toJson(): String {
-        val json = JSONObject().put("rows", rows).put("items", itemsJson())
+        val json = writeRowScales(JSONObject().put("rows", rows).put("items", itemsJson()))
         if (tray.isNotEmpty()) json.put("tray", trayJson())
         // Edited 123 and #+= layers ride along; layouts without them (and older apps) use the defaults.
         if (layers.isNotEmpty()) json.put("layers", JSONObject().apply {
-            for (l in listOf(Layer.NUM, Layer.SYM)) layers[l]?.let { put(l.name.lowercase(), JSONObject().put("items", it.itemsJson()).put("tray", it.trayJson())) }
+            for (l in listOf(Layer.NUM, Layer.SYM)) layers[l]?.let { put(l.name.lowercase(), it.writeRowScales(JSONObject().put("items", it.itemsJson()).put("tray", it.trayJson()))) }
         })
         return json.toString()
     }
@@ -632,6 +664,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
                 if (a.length() !in 1..55) return null
                 val items = parseItems(a)
                 KeyGrid(o.get("rows").toString().toInt(), items, items.size).takeIf { it.isSound() }?.also { grid ->
+                    grid.readRowScales(o)
                     parseTray(o.optJSONArray("tray"), grid)
                     // An edited layer is kept only if every key fits its three rows; otherwise it falls back to the default.
                     o.optJSONObject("layers")?.let { ls ->
@@ -640,6 +673,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
                             val parsed = parseItems(lj.getJSONArray("items"))
                             val own = KeyGrid(4, parsed, parsed.size)
                             if (parsed.size > 3 * COLS || !parsed.all { own.valid(it) && it.r < 3 }) continue
+                            own.readRowScales(lj)
                             parseTray(lj.optJSONArray("tray"), own)
                             grid.layers[l] = own
                         }

@@ -43,6 +43,15 @@ object Prefs {
     fun tilt(landscape: Boolean) = if (landscape) TILT_L else TILT_P
     fun splitLeft(landscape: Boolean) = if (landscape) SPLIT_LEFT_L else SPLIT_LEFT_P
     fun splitRight(landscape: Boolean) = if (landscape) SPLIT_RIGHT_L else SPLIT_RIGHT_P
+    /** Width/height percentages and additive tilt for each split half, per orientation. */
+    fun halfShape(landscape: Boolean, side: Int): List<IntPref> = halfShapes[(if (landscape) 2 else 0) + side]
+    private val halfShapes = listOf(false, true).flatMap { land -> (0..1).map { side ->
+        val suffix = "${if (side == 0) "left" else "right"}_${if (land) "l" else "p"}"
+        listOf(IntPref("half_width_$suffix", 100, 50, 150), IntPref("half_height_$suffix", 100, 50, 150),
+            IntPref("half_tilt_$suffix", 0, -20, 20))
+    } }
+    /** The editor starts with symmetric half adjustments. */
+    val MIRROR_HALVES = BoolPref("mirror_halves", true)
     fun alignKey(landscape: Boolean) = if (landscape) "align_l" else "align_p"
     fun splitKey(landscape: Boolean) = if (landscape) "split_l" else "split_p"
 
@@ -129,6 +138,8 @@ data class SizeProfile(
     val tilt: Int,
     val leftInset: Int = 0,
     val rightInset: Int = 0,
+    val leftShape: HalfShape = HalfShape(),
+    val rightShape: HalfShape = HalfShape(),
 )
 
 class KeyboardSettings internal constructor(
@@ -171,7 +182,7 @@ class KeyboardSettings internal constructor(
 
     private val layoutInts get() = listOf(Prefs.CURVE, Prefs.DEPTH, Prefs.KEY_GAP, Prefs.CORNER_RADIUS, Prefs.TEXT_SCALE) +
         listOf(false, true).flatMap { listOf(Prefs.height(it), Prefs.width(it), Prefs.bottomPadding(it), Prefs.splitGap(it), Prefs.tilt(it),
-            Prefs.splitLeft(it), Prefs.splitRight(it)) }
+            Prefs.splitLeft(it), Prefs.splitRight(it)) + Prefs.halfShape(it, 0) + Prefs.halfShape(it, 1) }
     private val layoutBools get() = listOf(Prefs.SAME_ORIENTATIONS, Prefs.LOCK_SIZE, Prefs.FOLLOW_SYSTEM_TEXT, Prefs.SHOW_HINTS, Prefs.KEY_TINT, Prefs.KEYS_3D, Prefs.DEPTH_COMPACT)
 
     /** Explicit defaults make settings portable between devices and between Android and iOS. */
@@ -233,6 +244,8 @@ class KeyboardSettings internal constructor(
         tilt = int(Prefs.tilt(landscape)),
         leftInset = int(Prefs.splitLeft(landscape)),
         rightInset = int(Prefs.splitRight(landscape)),
+        leftShape = halfShape(landscape, 0),
+        rightShape = halfShape(landscape, 1),
     )
 
     // Setters for per-orientation settings: they write both orientations while SAME_ORIENTATIONS is on.
@@ -255,6 +268,39 @@ class KeyboardSettings internal constructor(
         }
         e.apply()
         syncAppearance(landscape = landscape)
+    }
+
+    private fun halfShape(landscape: Boolean, side: Int): HalfShape {
+        val p = Prefs.halfShape(landscape, side)
+        return HalfShape(int(p[0]), int(p[1]), int(p[2]))
+    }
+
+    /** Saves one complete half gesture, including placement; linked orientations get the same adjustments. */
+    internal fun setHalfGeometryFor(landscape: Boolean, profile: SizeProfile) {
+        val e = prefs.edit()
+        for (land in orientations(landscape)) {
+            for ((side, shape) in listOf(profile.leftShape, profile.rightShape).withIndex()) {
+                val p = Prefs.halfShape(land, side)
+                val value = shape.bounded()
+                e.putInt(p[0].key, value.width).putInt(p[1].key, value.height).putInt(p[2].key, value.tilt)
+            }
+            e.putInt(Prefs.splitLeft(land).key, profile.leftInset.coerceIn(0, 1000))
+            e.putInt(Prefs.splitRight(land).key, profile.rightInset.coerceIn(0, 1000))
+        }
+        e.apply()
+        syncAppearance(landscape = landscape)
+    }
+
+    /** Only half adjustments and placement travel through editor undo; the base sliders stay independent. */
+    internal fun halfGeometry(): String = JSONObject().apply {
+        for (land in listOf(false, true)) for (p in Prefs.halfShape(land, 0) + Prefs.halfShape(land, 1) +
+            listOf(Prefs.splitLeft(land), Prefs.splitRight(land))) put(p.key, int(p))
+    }.toString()
+
+    /** Restores both orientations from a half gesture's undo snapshot. */
+    internal fun restoreHalfGeometry(json: String) {
+        applyLayoutSettings(json)
+        syncAppearance()
     }
 
     fun setAlignFor(landscape: Boolean, align: Align) {
@@ -316,6 +362,9 @@ class KeyboardSettings internal constructor(
         val e = prefs.edit()
         for (pref in listOf(Prefs::height, Prefs::width, Prefs::bottomPadding, Prefs::splitGap, Prefs::tilt, Prefs::splitLeft, Prefs::splitRight))
             e.putInt(pref(to).key, int(pref(from)))
+        for (side in 0..1) Prefs.halfShape(to, side).zip(Prefs.halfShape(from, side)).forEach { (dest, src) ->
+            e.putInt(dest.key, int(src))
+        }
         e.putString(Prefs.alignKey(to), align(from).name)
         e.putBoolean(Prefs.splitKey(to), split(from))
         e.putBoolean(Prefs.SAME_ORIENTATIONS.key, true)

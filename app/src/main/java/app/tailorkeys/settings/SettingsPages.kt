@@ -57,9 +57,6 @@ internal fun LazyListScope.sizeOptions(state: SettingsState, page: Boolean, onPa
                 ToggleRow("Split keyboard", p.split) { state.settings.setSplitFor(page, it) }
                 ToggleRow("Lock halves", state.bool(Prefs.SPLIT_LOCKED)) { state.set(Prefs.SPLIT_LOCKED, it) }
                 if (p.split) {
-                    Text("Drag the bar under a half to move it. Double-tap the bar to put it back at the edge. Width sets how big the halves are; past 100% they grow into the middle gap.",
-                        Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 4.dp),
-                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     SettingSlider("Tilt", p.tilt, Prefs.tilt(page), degrees(p.tilt)) { state.setFor(page, Prefs::tilt, it) }
                     val curve = state.int(Prefs.CURVE)
                     SettingSlider("Curve", curve, Prefs.CURVE, "$curve%") { state.setFor(page, { Prefs.CURVE }, it) }

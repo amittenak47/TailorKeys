@@ -111,6 +111,7 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         revisions.read(Prefs.height(page).key, Prefs.width(page).key, Prefs.alignKey(page),
             Prefs.bottomPadding(page).key, Prefs.splitKey(page), Prefs.splitGap(page).key,
             Prefs.tilt(page).key, Prefs.splitLeft(page).key, Prefs.splitRight(page).key)
+        revisions.read(*(Prefs.halfShape(page, 0) + Prefs.halfShape(page, 1)).map { it.key }.toTypedArray())
         return settings.profile(page)
     }
     fun cursorControl() = run { revisions.read(Prefs.CURSOR_CONTROL); settings.cursorControl() }
