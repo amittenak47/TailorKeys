@@ -118,6 +118,36 @@ class LayoutSplitTest {
         assertEquals(18, s.int(Prefs.CORNER_RADIUS))
     }
 
+    /** A layout saved before layouts carried settings, edited on the preview, keeps only its halves: Use leaves the rest. */
+    @Test fun previewHalfEditsOnAnOldLayoutStoreOnlyTheHalves() {
+        val s = settings(); val library = LayoutLibrary(s).also { it.migrate() }
+        val old = library.add("Old", s.loadGrid(), settings = null)
+        library.use(library.entries().first { it.key == "preset:STANDARD" })
+        s.set(Prefs.CORNER_RADIUS, 18)
+        val left = HalfShape(108, 120, 7)
+        val halves = s.halvesWith(s.halvesOf(null), false, s.profile(false).copy(leftShape = left))
+        library.edit(old.key, old.grid(), halves)
+        val edited = library.entries().first { it.key == old.key }
+        assertFalse(JSONObject(edited.settings!!).has("corner_radius"))
+        s.set(Prefs.CORNER_RADIUS, 5)
+        library.use(edited)
+        assertEquals(5, s.int(Prefs.CORNER_RADIUS))
+        assertEquals(left, s.profile(false).leftShape)
+    }
+
+    /** Half edits on a previewed layout link the orientations as that layout does, not as the layout in use does. */
+    @Test fun previewHalfEditsFollowThePreviewedLayoutsOrientationLink() {
+        val s = settings()
+        s.set(Prefs.SAME_ORIENTATIONS, true)
+        val own = JSONObject(s.layoutSettings()).put(Prefs.SAME_ORIENTATIONS.key, false).toString()
+        val left = HalfShape(108, 120, 7)
+        val halves = s.halvesWith(s.halvesOf(own), false, s.profile(false).copy(leftShape = left))
+        assertEquals(left, s.profile(false, halves).leftShape)
+        assertEquals(HalfShape(), s.profile(true, halves).leftShape)
+        val linked = s.halvesWith(s.halvesOf(null), false, s.profile(false).copy(leftShape = left))
+        assertEquals(left, s.profile(true, linked).leftShape)
+    }
+
     @Test fun importedSettingsAreBoundedAndCannotChangeTypingPreferences() {
         val s = settings()
         s.applyLayoutSettings("""{"height_p":999999999999,"text_scale":5,"show_hints":false,"theme":"UNKNOWN","swipe_typing":false,"auto_cap":false}""")

@@ -80,7 +80,7 @@ internal fun LayoutLibraryPage(state: SettingsState, listState: LazyListState, e
     LaunchedEffect(importPanel, code) {
         state.importing = importPanel
         state.importPreviewValid = imported != null || code.isBlank()
-        if (importPanel && imported != null) state.preview.grid = imported
+        if (importPanel && imported != null) state.showImported(imported, decoded?.settings)
         else if (importPanel) state.showSelected()
     }
     fun closeImport() { importPanel = false; state.importing = false; state.showSelected() }

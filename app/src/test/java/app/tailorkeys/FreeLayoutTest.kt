@@ -133,6 +133,11 @@ class FreeLayoutTest {
         val layerOnly = KeyGrid.default()
         layerOnly.setLayer(Layer.SYM, layerOnly.layer(Layer.SYM).apply { setRowScale(1, 1.5f) })
         assertFalse(LayoutLibrary.sameGrid(layerOnly, KeyGrid.default()))
+        // A changed key on the 123 layer alone makes a different layout too.
+        val numKey = KeyGrid.default()
+        numKey.setLayer(Layer.NUM, numKey.layer(Layer.NUM).apply { items.first { it.r < rows - 1 }.keys[0] = "~" })
+        assertFalse(LayoutLibrary.sameGrid(numKey, KeyGrid.default()))
+        assertTrue(LayoutLibrary.sameGrid(KeyGrid.default(), KeyGrid.default()))
         assertNull(KeyGrid.fromJson(JSONObject(old.toJson()).put("rows", Int.MAX_VALUE).toString()))
         val invalid = JSONObject(old.toJson()).put("rowHeights", JSONArray("[0,100,\"bad\"]"))
         val bounded = KeyGrid.fromJson(invalid.toString())!!

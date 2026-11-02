@@ -223,7 +223,8 @@ internal class LayoutLibrary(
 
     private fun withHalves(snapshot: String?, halves: String?): String? {
         if (halves == null) return snapshot
-        val out = JSONObject(snapshot ?: loadSettings())
+        // A layout saved before layouts carried settings stores only its halves: Use leaves the rest of Size/Look as it is.
+        val out = snapshot?.let { JSONObject(it) } ?: JSONObject()
         val h = JSONObject(halves)
         for (k in h.keys()) out.put(k, h.get(k))
         return out.toString()
@@ -312,14 +313,15 @@ internal class LayoutLibrary(
             return left.length() == right.length() && left.keys().asSequence().all { right.has(it) && left.opt(it) == right.opt(it) }
         }
         fun cleanName(name: String) = name.trim().take(24).ifEmpty { "Custom" }
-        fun sameGrid(a: KeyGrid, b: KeyGrid): Boolean = a.rows == b.rows && a.items.size == b.items.size &&
-            Layer.entries.all { layer ->
-                val left = a.layer(layer); val right = b.layer(layer)
-                (0 until a.rows).all { left.rowScale(it) == right.rowScale(it) }
-            } && a.items.sortedWith(compareBy({ it.r }, { it.c })).zip(b.items.sortedWith(compareBy({ it.r }, { it.c }))).all { (x, y) ->
-                // A resized or moved key (its edges) makes a different layout too.
-                x.r == y.r && x.c == y.c && x.w == y.w && x.keys == y.keys && x.edges.contentEquals(y.edges)
-            }
+        /** Every layer's keys and row heights match: the letters, and the 123 and #+= layers' own keys. */
+        fun sameGrid(a: KeyGrid, b: KeyGrid): Boolean = a.rows == b.rows && Layer.entries.all { layer ->
+            val left = a.layer(layer); val right = b.layer(layer)
+            (0 until a.rows).all { left.rowScale(it) == right.rowScale(it) } && left.items.size == right.items.size &&
+                left.items.sortedWith(compareBy({ it.r }, { it.c })).zip(right.items.sortedWith(compareBy({ it.r }, { it.c }))).all { (x, y) ->
+                    // A resized or moved key (its edges), or a center key sent to the other side, makes a different layout too.
+                    x.r == y.r && x.c == y.c && x.w == y.w && x.keys == y.keys && x.side == y.side && x.edges.contentEquals(y.edges)
+                }
+        }
     }
 }
 

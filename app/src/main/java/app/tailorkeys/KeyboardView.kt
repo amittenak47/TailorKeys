@@ -615,12 +615,18 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             conts += Cont(0, 5, s.cw / 5, 0, base(s, 0), s.un)
             val cwc = max(10 * d, min(min(s.cw, rs.cw) / 5, keyGap - 4 * d))
             // The halves turn about their inner bottom corners, so the center column's rows end there. With negative
-            // tilt those corners sit above the halves' shared bottom edge (the outer corners hang lower).
+            // tilt those corners sit above the halves' shared bottom edge (the outer corners hang lower). Its top
+            // meets the halves' inner top corners (the lower one when the halves tilt differently), a turned block's
+            // height times cos(tilt) above its pivot: its rows shorten to match theirs, and the upright column never
+            // rises above the halves into the strip, where the gear would take the touch.
             fun pivotY(sol: LayoutSolver.Solution) = contentBottom - sol.hc + sol.letterY + n * sol.un + barH
-            val centerTop = (pivotY(s) + pivotY(rs)) / 2 - n * unit - barH
+            fun innerTop(sol: LayoutSolver.Solution, shape: HalfShape) =
+                pivotY(sol) - (n * sol.un + barH) * cos(Math.toRadians((tilt + shape.tilt).toDouble())).toFloat()
+            val centerBottom = (pivotY(s) + pivotY(rs)) / 2
+            val centerTop = max(innerTop(s, p.leftShape), innerTop(rs, p.rightShape))
             conts += Cont(5, 1, cwc, -1, Matrix().apply {
                 setTranslate(innerLeft + s.span + (keyGap - cwc) / 2, centerTop)
-            }, unit)
+            }, max(0f, (centerBottom - centerTop - barH) / n))
             conts += Cont(6, 5, rs.cw / 5, 1, base(rs, 1), rs.un)
         }
 
@@ -1091,7 +1097,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         else -> {
             val item = placed[id].item
             val face = accessibilityValue(id)!!
-            if (editMode) "$face, row ${item.r + 1}, column ${item.c + 1}. Click to select; editing actions available" else if (item.isStack) "$face, swipe key, ${item.keys.size} options" else if (item.isSpace && multipleLanguages) "$face, ${state.language.uppercase()}, swipe to change language" else face
+            if (editMode) "$face, row ${item.r + 1}, column ${item.c + 1}. Click to select; editing actions available" else if (item.isStack) "$face, swipe key, ${item.keys.size} options" else face
         }
         }
     }
@@ -1234,11 +1240,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             }
             else -> {
                 val item = placed.getOrNull(id)?.item ?: return false
-                if (item.isSpace && multipleLanguages) {
-                    listener?.onSwitchLanguage(step)
-                    haptic(HapticFeedbackConstants.CLOCK_TICK)
-                    return true
-                }
                 if (!item.isStack) return false
                 item.idx = stackStep(item, step)
                 listener?.onStackFace(item.keys[item.idx])
@@ -1286,7 +1287,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 if (Build.VERSION.SDK_INT >= 30 && (item?.isStack == true || wheel)) it.stateDescription = value
                 it.isClickable = !isCursorAccessibility(id) && (!wheel || value != null)
                 if (it.isClickable) it.addAction(AccessibilityNodeInfo.ACTION_CLICK)
-                if (!editMode && (item?.isStack == true || item?.isSpace == true && multipleLanguages || wheel && value != null || isCursorAccessibility(id))) {
+                if (!editMode && (item?.isStack == true || wheel && value != null || isCursorAccessibility(id))) {
                     it.isScrollable = true
                     it.addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
                     it.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
@@ -1824,7 +1825,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
      * from where the finger is, and no space is typed. Left and right style: the left half's space bar moves left.
      */
     private fun spaceToCursor(id: Int, t: Tracker, x: Float, y: Float) {
-        if (trackers[id] !== t || t.consumed || cursorTracker != null) return
+        if (trackers[id] !== t || t.consumed || cursorTracker != null) {
+            // Another touch already moves the cursor: this one stays a plain space press.
+            t.spaceHold?.let { timers.removeCallbacks(it) }; t.spaceHold = null
+            return
+        }
         val pk = t.pk ?: return
         stopTimers(t)
         t.spaceHold = null
@@ -2103,7 +2108,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         var pressedText: String? = null
         var followingText = ""
         var pressChoices: List<String>? = null
-        var languageDirection = 0
         var consumed = false
         var moved = false
         var x0 = 0f
@@ -2244,7 +2248,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 trackers[e.getPointerId(i)]?.let { it.tapX = e.getX(i); it.tapY = e.getY(i) }
                 trackers[e.getPointerId(i)]?.let { recordGlide(e.getPointerId(i), it, e.getX(i), e.getY(i), e.eventTime) }
                 trackers[e.getPointerId(i)]?.let { t ->
-                    if (popup?.owner === t || t.kind == K_WHEEL || t.kind == K_CURSOR || t.pk?.item?.isSpace == true && multipleLanguages)
+                    if (popup?.owner === t || t.kind == K_WHEEL || t.kind == K_CURSOR)
                         pointerMove(e.getPointerId(i), e.getX(i), e.getY(i), e.eventTime)
                 }
                 pointerUp(e.getPointerId(i), e.eventTime)
@@ -2469,15 +2473,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             invalidate()
             return
         }
-        if (t.pk?.item?.isSpace == true && !t.consumed && multipleLanguages) {
-            val dx = x - t.x0
-            if (abs(dx) > 8 * density) timers.removeCallbacks(t.longPress)
-            if (abs(dx) > t.pk!!.rect.width() / t.pk!!.item.w && abs(y - t.y0) < t.pk!!.rowHeight) {
-                t.languageDirection = if (dx > 0) 1 else -1
-                t.consumed = true
-            }
-            return
-        }
         if (recordGlide(id, t, x, y, time)) return
         if (chordTouches.isCandidate(id)) return
         when (t.kind) {
@@ -2545,11 +2540,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             val choice = it.choices.getOrNull(it.selected)
             dismissPopup()
             choice?.let { value -> commitPopup(t, value) }
-            return
-        }
-        if (t.languageDirection != 0) {
-            listener?.onSwitchLanguage(t.languageDirection)
-            haptic(HapticFeedbackConstants.CLOCK_TICK)
             return
         }
         if (glideId == id) {
@@ -2866,7 +2856,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             var best: Placed? = null
             var bestScore = Double.NEGATIVE_INFINITY
             // Topmost first, as drawn and as the hit test above: a key resized over a neighbour must not take the
-            // neighbour's middle where the neighbour is drawn on top.
+            // neighbour's middle where the neighbour is drawn on top. A key under the touch below the topmost one is
+            // hidden there, so its middle doesn't take the top key's edge either.
+            var covered = false
             for (i in placed.size - 1 downTo 0) {
                 val pk = placed[i]
                 if (pk.item === skip || !isLetter(pk)) continue
@@ -2874,6 +2866,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 pk.inverse.mapPoints(pt)
                 undrift(pk, pt)
                 val r = pk.rect
+                if (r.contains(pt[0], pt[1])) { if (covered) continue; covered = true }
                 val insetX = r.width() * .15f; val insetY = r.height() * .15f
                 if (pt[0] >= r.left + insetX && pt[0] < r.right - insetX && pt[1] >= r.top + insetY && pt[1] < r.bottom - insetY) return pk
                 val expandX = r.width() * .35f; val expandY = r.height() * .35f
@@ -2931,7 +2924,12 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         }
         // Both are saved as drawn, so a stored inset that had to shrink to fit doesn't move the other half later.
         val w = width.toFloat()
-        settings.setSplitInsetsFor(isLandscape, SplitPlacement.permille(insets[0], w), SplitPlacement.permille(insets[1], w))
+        val left = SplitPlacement.permille(insets[0], w); val right = SplitPlacement.permille(insets[1], w)
+        // A layout previewed but not in use keeps its own placement (previewHalves), saved with its halves.
+        if (previewHalves != null) {
+            saveHalves(displayProfile().copy(leftInset = left, rightInset = right))
+            listener?.onEdited()
+        } else settings.setSplitInsetsFor(isLandscape, left, right)
         haptic(HapticFeedbackConstants.CLOCK_TICK)
         relayout()
     }
@@ -3142,7 +3140,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 if (shapeDown(x, y)) return true
                 // Tapping off the shaped key only finishes it: no other key is picked up or selected.
                 if (wasShaping) return true
-                if (trayRect.contains(x, y)) {
+                // Keys are drawn over the tray band, so a key nudged into it is picked up before the mini keys. There
+                // only a key's own rectangle counts: touch slack from the bottom row mustn't take the mini keys.
+                val pk = findKey(x, y, strict = true)
+                if (trayRect.contains(x, y) && pk?.let { k -> floatArrayOf(x, y).also { k.inverse.mapPoints(it) }.let { k.rect.contains(it[0], it[1]) } } != true) {
                     val i = trayChips.indexOfFirst { it.contains(x, y) }
                     if (i >= 0 && i < trayKeys.size) {
                         resetPreview()
@@ -3151,7 +3152,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     }
                     return true
                 }
-                val pk = findKey(x, y, strict = true) ?: return true
+                if (pk == null) return true
                 val pt = floatArrayOf(x, y)
                 pk.inverse.mapPoints(pt)
                 if (pk.item.isStack && hypot(pt[0] - (pk.rect.right - 8 * density), pt[1] - (pk.rect.top + 8 * density)) < 12 * density) {
@@ -3389,6 +3390,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private fun groupMove(x: Float, y: Float) {
         val gd = groupDrag ?: return
         if (selectedRow != null && gd.handle < 0) return
+        // Lock halves keeps them where they sit here too; their size and tilt still change.
+        if (selectedHalf != null && gd.handle < 0 && halvesLocked) return
         if (!gd.moved && hypot(x - gd.x, y - gd.y) < ViewConfiguration.get(context).scaledTouchSlop) return
         gd.moved = true
         val points = floatArrayOf(gd.x, gd.y, x, y).also { gd.inverse.mapPoints(it) }
@@ -3457,9 +3460,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 // With Mirror on, both halves go back to the sliders entirely.
                 val p = if (mirror) displayProfile().copy(leftShape = HalfShape(), rightShape = HalfShape())
                     else displayProfile().shapeHalf(side, HalfShape(), false)
+                // Locked halves keep their places; only their shapes reset.
                 saveHalves(p.copy(
-                    leftInset = if (side == 0 || mirror) 0 else p.leftInset,
-                    rightInset = if (side == 1 || mirror) 0 else p.rightInset))
+                    leftInset = if (!halvesLocked && (side == 0 || mirror)) 0 else p.leftInset,
+                    rightInset = if (!halvesLocked && (side == 1 || mirror)) 0 else p.rightInset))
             }
             selectedRow != null -> ed.setRowScale(selectedRow!!, 1f)
             shaping != null -> shaping!!.edges = FloatArray(4)

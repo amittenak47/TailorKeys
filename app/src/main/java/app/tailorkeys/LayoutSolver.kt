@@ -218,8 +218,10 @@ internal class LayoutSolver {
                             } else tall = un
                         }
                         // Keys at MIN_WIDTH when they fit and keep taller rows, or when even the full-width answer runs
-                        // past the height set.
-                        if (found && (short > lo || w.total > target)) tallest(short, cw) else w
+                        // past the height set. When 14 dp rows overflow even at MIN_WIDTH, the keys narrow further: the
+                        // height set holds.
+                        if (found && (short > lo || w.total > target)) tallest(short, cw)
+                        else if (!found && w.total > target) widest(14 * d, height = true) else w
                     }
                 }
                 reserved[0] = w.un; reserved[1] = w.cw

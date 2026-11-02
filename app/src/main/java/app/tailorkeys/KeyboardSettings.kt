@@ -325,10 +325,14 @@ class KeyboardSettings internal constructor(
             leftShape = shape(0), rightShape = shape(1))
     }
 
-    /** [setHalfGeometryFor] applied to a [halfGeometry] snapshot instead of the settings in use. */
+    /**
+     * [setHalfGeometryFor] applied to a [halfGeometry] snapshot instead of the settings in use. A snapshot from a
+     * layout's saved settings ([halvesOf]) links the orientations as that layout does.
+     */
     internal fun halvesWith(halves: String, landscape: Boolean, profile: SizeProfile): String {
         val o = runCatching { JSONObject(halves) }.getOrElse { JSONObject() }
-        for (land in orientations(landscape)) {
+        val linked = o.opt(Prefs.SAME_ORIENTATIONS.key) as? Boolean ?: bool(Prefs.SAME_ORIENTATIONS)
+        for (land in if (linked) listOf(false, true) else listOf(landscape)) {
             for ((side, shape) in listOf(profile.leftShape, profile.rightShape).withIndex()) {
                 val p = Prefs.halfShape(land, side)
                 val value = shape.bounded()
@@ -340,11 +344,15 @@ class KeyboardSettings internal constructor(
         return o.toString()
     }
 
-    /** A layout's saved settings reduced to its halves' shapes and placement, as a [halfGeometry] snapshot. */
+    /**
+     * A layout's saved settings reduced to its halves' shapes and placement, as a [halfGeometry] snapshot, with its
+     * "same size when rotated" when saved (see [halvesWith]).
+     */
     internal fun halvesOf(snapshot: String?): String = JSONObject().apply {
         val o = snapshot?.let { runCatching { JSONObject(it) }.getOrNull() }
         for (land in listOf(false, true)) for (p in Prefs.halfShape(land, 0) + Prefs.halfShape(land, 1) +
             listOf(Prefs.splitLeft(land), Prefs.splitRight(land))) put(p.key, o?.optInt(p.key, p.default) ?: p.default)
+        (o?.opt(Prefs.SAME_ORIENTATIONS.key) as? Boolean)?.let { put(Prefs.SAME_ORIENTATIONS.key, it) }
     }.toString()
 
     fun setAlignFor(landscape: Boolean, align: Align) {

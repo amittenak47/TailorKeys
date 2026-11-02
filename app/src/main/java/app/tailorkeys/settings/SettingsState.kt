@@ -22,6 +22,7 @@ import app.tailorkeys.Prefs
 import app.tailorkeys.SizeProfile
 import app.tailorkeys.layout.KeyGrid
 import app.tailorkeys.layout.Template
+import org.json.JSONObject
 
 /** Bridges preference notifications and the existing, undoable keyboard editor into Compose state. */
 @Stable
@@ -63,6 +64,12 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         selectLayout(saved)
     }
     fun showSelected() { previewingSelected = true; preview.previewSplit = selectedLayout().splitFor(landscape); preview.previewHalves = halvesFor(selectedLayout()); preview.grid = selectedLayout().grid() }
+    /** A code being imported: its own halves and split when it carries settings, else the ones in use, as Import saves it. */
+    fun showImported(grid: KeyGrid, imported: String?) {
+        preview.previewSplit = imported?.let { runCatching { JSONObject(it).opt(Prefs.splitKey(landscape)) as? Boolean }.getOrNull() }
+        preview.previewHalves = imported?.let(settings::halvesOf)
+        preview.grid = grid
+    }
     fun showApplied() { previewingSelected = false; preview.previewSplit = null; preview.previewHalves = null; preview.grid = settings.loadGrid() }
     fun chordLanguage(): String { revisions.read(Prefs.CURRENT_LANGUAGE, Prefs.LANGUAGES); return settings.currentLanguage() }
     fun chordLetters(): Set<Char> {
@@ -87,6 +94,8 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
             override fun onSuggestion(text: String) = Unit
             override fun onPickIme() = Unit
             override fun onEdited() {
+                // An import shown on the preview isn't saved anywhere until Import adds it.
+                if (importing) return
                 val entry = library.entries().firstOrNull { it.key == if (previewingSelected) selectedKey else library.inUse }
                 if (entry?.custom == true) library.edit(entry.key, grid, previewHalves) else settings.saveGrid(grid)
             }

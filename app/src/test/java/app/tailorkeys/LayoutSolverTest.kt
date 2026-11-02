@@ -38,6 +38,16 @@ class LayoutSolverTest {
         }
     }
 
+    /** Wide, short halves at a steep tilt: when 14 dp rows overflow even at the narrowest keys, the keys narrow further. */
+    @Test fun keysNarrowPastTheirMinimumBeforeTheHeightIsExceeded() {
+        val grid = KeyGrid.template(Template.SPLIT)
+        for (tilt in listOf(20f, -20f)) {
+            val steep = LayoutSolver().compute(2.625f, 4, 7.5f, 100f, 21f, 6f, 0f, 380f, 1000f, 2300f, true, false, tilt, .7f, grid)
+            assertTrue("tilt $tilt: total ${steep.total}", steep.total <= 380.01f)
+            assertTrue(steep.cw < .75f * 1000f)
+        }
+    }
+
     @Test fun aTouchBarComesOutOfTheRowsNotTheKeyboardsHeight() {
         val grid = KeyGrid.template(Template.SPLIT)
         for (split in listOf(true, false)) for (tilt in listOf(-10f, 0f, 10f)) {
