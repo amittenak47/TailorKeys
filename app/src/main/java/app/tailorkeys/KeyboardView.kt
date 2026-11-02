@@ -166,6 +166,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val selectionChips = Array(3) { RectF() }
     private val resetChip = RectF()
     private val mirrorChip = RectF()
+    /** Lock halves in the editor's bar: the same setting as Quick Options and Settings > Split. */
+    private val lockChip = RectF()
     /** Live half drags stay in the view until release, then save and notify once. */
     private var halfPreview: SizeProfile? = null
     /** Frozen start geometry for a corner, tilt dot, row edge, or sideways half gesture. */
@@ -698,8 +700,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         } else { doneRect.setEmpty(); moreRect.setEmpty() }
         val controlRight = if (inKeyboard) moreRect.left else right
         hintRect.set(undoRect.right, 0f, controlRight, stripH)
-        resetChip.set(undoRect.right, 0f, undoRect.right + (controlRight - undoRect.right) * .45f, toolH)
-        mirrorChip.set(resetChip.right, 0f, controlRight, toolH)
+        resetChip.set(undoRect.right, 0f, undoRect.right + (controlRight - undoRect.right) * .3f, toolH)
+        mirrorChip.set(resetChip.right, 0f, resetChip.right + (controlRight - undoRect.right) * .35f, toolH)
+        lockChip.set(mirrorChip.right, 0f, controlRight, toolH)
         selectionChips.forEach { it.setEmpty() }
         if (!split && selection == Selection.HALF) { clearSelection(); selection = Selection.KEY }
         val modes = if (split) Selection.entries else listOf(Selection.ROW, Selection.KEY)
@@ -1041,7 +1044,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             ids += A_UNDO
             Selection.entries.filter { !selectionChips[it.ordinal].isEmpty }.forEach { ids += A_SELECTION + it.ordinal }
             ids += A_RESET
-            if (displayProfile().split) ids += A_MIRROR
+            if (displayProfile().split) { ids += A_MIRROR; ids += A_LOCK }
             if (!moreRect.isEmpty) ids += A_SETTINGS
             if (!doneRect.isEmpty) ids += A_DONE
         } else {
@@ -1067,6 +1070,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         A_DONE -> doneRect
         A_RESET -> resetChip
         A_MIRROR -> mirrorChip
+        A_LOCK -> lockChip
         in A_SELECTION..(A_SELECTION + 2) -> selectionChips[id - A_SELECTION]
         else -> RectF(placed[id].rect).also { placed[id].matrix.mapRect(it) }
         }
@@ -1093,6 +1097,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         A_DONE -> "Done"
         A_RESET -> "Reset selection"
         A_MIRROR -> "Mirror ${if (settings.bool(Prefs.MIRROR_HALVES)) "on" else "off"}"
+        A_LOCK -> "Lock halves ${if (settings.bool(Prefs.SPLIT_LOCKED)) "on" else "off"}"
         in A_SELECTION..(A_SELECTION + 2) -> Selection.entries[id - A_SELECTION].name.lowercase() + " selection"
         else -> {
             val item = placed[id].item
@@ -1212,6 +1217,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             A_DONE -> finishEditing()
             A_RESET -> resetSelection()
             A_MIRROR -> settings.set(Prefs.MIRROR_HALVES, !settings.bool(Prefs.MIRROR_HALVES))
+            A_LOCK -> settings.set(Prefs.SPLIT_LOCKED, !settings.bool(Prefs.SPLIT_LOCKED))
             in A_SELECTION..(A_SELECTION + 2) -> { clearSelection(); selection = Selection.entries[id - A_SELECTION] }
             A_SWITCH -> switchRect?.let { moveKeyboardToward(it.centerX(), it.centerY()) }
             else -> {
@@ -1268,6 +1274,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 it.contentDescription = accessibilityLabel(id)
                 it.isEnabled = isEnabled && (id != A_UNDO || history.isNotEmpty())
                 if (id == A_MIRROR) { it.isCheckable = true; it.isChecked = settings.bool(Prefs.MIRROR_HALVES) }
+                if (id == A_LOCK) { it.isCheckable = true; it.isChecked = settings.bool(Prefs.SPLIT_LOCKED) }
                 if (id in A_SELECTION..(A_SELECTION + 2)) it.isSelected = selection.ordinal == id - A_SELECTION
                 it.isVisibleToUser = isShown && windowVisibility == VISIBLE
                 it.isFocusable = true
@@ -1703,14 +1710,16 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val selected = shaping != null || selectedHalf != null || selectedRow != null
         drawLabel(canvas, resetChip, "Reset", 13 * sp, palette.smallAccent, if (selected) 255 else 70)
         if (displayProfile().split) {
-            val on = settings.bool(Prefs.MIRROR_HALVES)
-            val r = RectF(mirrorChip.right - 30 * density, mirrorChip.centerY() - 8 * density,
-                mirrorChip.right - 4 * density, mirrorChip.centerY() + 8 * density)
-            fill.color = if (on) palette.accent else palette.hint; fill.alpha = 255
-            canvas.drawRoundRect(r, 8 * density, 8 * density, fill)
-            fill.color = if (on) palette.onAccent else palette.background
-            canvas.drawCircle(if (on) r.right - 8 * density else r.left + 8 * density, r.centerY(), 6 * density, fill)
-            drawLabel(canvas, RectF(mirrorChip.left, mirrorChip.top, r.left, mirrorChip.bottom), "Mirror", 12 * sp, palette.text, 255)
+            fun toggle(chip: RectF, label: String, on: Boolean) {
+                val r = RectF(chip.right - 30 * density, chip.centerY() - 8 * density, chip.right - 4 * density, chip.centerY() + 8 * density)
+                fill.color = if (on) palette.accent else palette.hint; fill.alpha = 255
+                canvas.drawRoundRect(r, 8 * density, 8 * density, fill)
+                fill.color = if (on) palette.onAccent else palette.background
+                canvas.drawCircle(if (on) r.right - 8 * density else r.left + 8 * density, r.centerY(), 6 * density, fill)
+                drawLabel(canvas, RectF(chip.left, chip.top, r.left, chip.bottom), label, 12 * sp, palette.text, 255)
+            }
+            toggle(mirrorChip, "Mirror", settings.bool(Prefs.MIRROR_HALVES))
+            toggle(lockChip, "Lock", settings.bool(Prefs.SPLIT_LOCKED))
         }
         if (!doneRect.isEmpty) {
             drawGear(canvas, moreRect.centerX(), moreRect.centerY(), s, palette.gear)
@@ -3095,7 +3104,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             MotionEvent.ACTION_DOWN -> {
                 // The toolbar's chips; elsewhere in the bar a key raised into it can still be picked up and moved back.
                 val onChip = undoRect.contains(x, y) || moreRect.contains(x, y) || doneRect.contains(x, y) || resetChip.contains(x, y) ||
-                    mirrorChip.contains(x, y) || selectionChips.any { it.contains(x, y) }
+                    mirrorChip.contains(x, y) || lockChip.contains(x, y) || selectionChips.any { it.contains(x, y) }
                 if (y < stripH && (onChip || findKey(x, y, strict = true) == null)) {
                     when {
                         undoRect.contains(x, y) -> undo()
@@ -3104,6 +3113,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                         resetChip.contains(x, y) -> resetSelection()
                         mirrorChip.contains(x, y) && displayProfile().split -> {
                             settings.set(Prefs.MIRROR_HALVES, !settings.bool(Prefs.MIRROR_HALVES)); invalidate()
+                        }
+                        lockChip.contains(x, y) && displayProfile().split -> {
+                            settings.set(Prefs.SPLIT_LOCKED, !settings.bool(Prefs.SPLIT_LOCKED)); invalidate()
                         }
                         else -> selectionChips.indexOfFirst { it.contains(x, y) }.takeIf { it >= 0 }?.let {
                             clearSelection(); selection = Selection.entries[it]; invalidate()
@@ -3391,7 +3403,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val gd = groupDrag ?: return
         if (selectedRow != null && gd.handle < 0) return
         // Lock halves keeps them where they sit here too; their size and tilt still change.
-        if (selectedHalf != null && gd.handle < 0 && halvesLocked) return
+        if (selectedHalf != null && gd.handle < 0 && settings.bool(Prefs.SPLIT_LOCKED)) return
         if (!gd.moved && hypot(x - gd.x, y - gd.y) < ViewConfiguration.get(context).scaledTouchSlop) return
         gd.moved = true
         val points = floatArrayOf(gd.x, gd.y, x, y).also { gd.inverse.mapPoints(it) }
@@ -3461,9 +3473,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 val p = if (mirror) displayProfile().copy(leftShape = HalfShape(), rightShape = HalfShape())
                     else displayProfile().shapeHalf(side, HalfShape(), false)
                 // Locked halves keep their places; only their shapes reset.
+                val locked = settings.bool(Prefs.SPLIT_LOCKED)
                 saveHalves(p.copy(
-                    leftInset = if (!halvesLocked && (side == 0 || mirror)) 0 else p.leftInset,
-                    rightInset = if (!halvesLocked && (side == 1 || mirror)) 0 else p.rightInset))
+                    leftInset = if (!locked && (side == 0 || mirror)) 0 else p.leftInset,
+                    rightInset = if (!locked && (side == 1 || mirror)) 0 else p.rightInset))
             }
             selectedRow != null -> ed.setRowScale(selectedRow!!, 1f)
             shaping != null -> shaping!!.edges = FloatArray(4)
@@ -3832,6 +3845,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         const val A_SELECTION = 10010
         const val A_RESET = 10013
         const val A_MIRROR = 10014
+        const val A_LOCK = 10015
         const val REPEAT_DELAY_MS = 400L
         const val REPEAT_INTERVAL_MS = 50L
         const val K_KEY = 0

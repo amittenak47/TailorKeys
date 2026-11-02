@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1260.0" height="306.6" viewBox="0 0 1260.0 306.6" font-family="sans-serif">
+<style>:root{--bg:#fff;--kb:#eceef2;--strip:#dde1e8;--key:#8a93a6;--line:#c4c9d4;--ink:#1d2330}@media (prefers-color-scheme: dark){:root{--bg:#15181e;--kb:#252a33;--strip:#30363f;--key:#6b7385;--line:#3b424e;--ink:#e8ebf0}}.title{font-size:15px;font-weight:600;fill:var(--ink)}.body{font-size:13px;fill:var(--ink)}.small{font-size:10px;fill:var(--ink);opacity:.6}</style>
+<rect width="100%" height="100%" fill="var(--bg)"/>
+<text x="20" y="28" class="title">Final (option C): phone landscape 2400x1080, Height 58%, Curve 70% (curve not drawn), no touch bar</text>
+<g transform="translate(20,50)">
+<rect width="600.0" height="156.6" rx="6" fill="var(--kb)" stroke="var(--line)"/>
+<rect width="600.0" height="22.3125" rx="6" fill="var(--strip)"/>
+<text x="300.0" y="15.15625" text-anchor="middle" class="small">suggestion strip</text>
+<rect y="147.4125" width="600.0" height="9.1875" fill="var(--strip)" opacity=".6"/>
+<polygon points="18.5,28.1 57.2,34.9 53.9,53.6 15.3,46.8" fill="var(--key)"/>
+<polygon points="59.6,35.3 98.3,42.2 95.0,60.8 56.4,54.0" fill="var(--key)"/>
+<polygon points="100.8,42.6 139.4,49.4 136.1,68.1 97.5,61.3" fill="var(--key)"/>
+<polygon points="141.9,49.8 180.5,56.6 177.2,75.3 138.6,68.5" fill="var(--key)"/>
+<polygon points="183.0,57.1 221.6,63.9 218.3,82.6 179.7,75.8" fill="var(--key)"/>
+<polygon points="14.8,49.2 53.5,56.0 50.2,74.7 11.5,67.9" fill="var(--key)"/>
+<polygon points="55.9,56.5 94.6,63.3 91.3,82.0 52.6,75.1" fill="var(--key)"/>
+<polygon points="97.0,63.7 135.7,70.5 132.4,89.2 93.7,82.4" fill="var(--key)"/>
+<polygon points="138.1,71.0 176.8,77.8 173.5,96.5 134.8,89.6" fill="var(--key)"/>
+<polygon points="179.2,78.2 217.9,85.0 214.6,103.7 175.9,96.9" fill="var(--key)"/>
+<polygon points="11.1,70.4 49.7,77.2 46.4,95.8 7.8,89.0" fill="var(--key)"/>
+<polygon points="52.2,77.6 90.8,84.4 87.5,103.1 48.9,96.3" fill="var(--key)"/>
+<polygon points="93.3,84.9 131.9,91.7 128.6,110.3 90.0,103.5" fill="var(--key)"/>
+<polygon points="134.4,92.1 173.0,98.9 169.8,117.6 131.1,110.8" fill="var(--key)"/>
+<polygon points="175.5,99.3 214.1,106.2 210.9,124.8 172.2,118.0" fill="var(--key)"/>
+<polygon points="7.4,91.5 46.0,98.3 42.7,117.0 4.1,110.2" fill="var(--key)"/>
+<polygon points="48.5,98.7 87.1,105.6 83.8,124.2 45.2,117.4" fill="var(--key)"/>
+<polygon points="89.6,106.0 128.2,112.8 124.9,131.5 86.3,124.7" fill="var(--key)"/>
+<polygon points="130.7,113.2 169.3,120.0 166.0,138.7 127.4,131.9" fill="var(--key)"/>
+<polygon points="171.8,120.5 210.4,127.3 207.1,146.0 168.5,139.2" fill="var(--key)"/>
+<polygon points="581.5,28.1 542.8,34.9 546.1,53.6 584.7,46.8" fill="var(--key)"/>
+<polygon points="540.4,35.3 501.7,42.2 505.0,60.8 543.6,54.0" fill="var(--key)"/>
+<polygon points="499.2,42.6 460.6,49.4 463.9,68.1 502.5,61.3" fill="var(--key)"/>
+<polygon points="458.1,49.8 419.5,56.6 422.8,75.3 461.4,68.5" fill="var(--key)"/>
+<polygon points="417.0,57.1 378.4,63.9 381.7,82.6 420.3,75.8" fill="var(--key)"/>
+<polygon points="585.2,49.2 546.5,56.0 549.8,74.7 588.5,67.9" fill="var(--key)"/>
+<polygon points="544.1,56.5 505.4,63.3 508.7,82.0 547.4,75.1" fill="var(--key)"/>
+<polygon points="503.0,63.7 464.3,70.5 467.6,89.2 506.3,82.4" fill="var(--key)"/>
+<polygon points="461.9,71.0 423.2,77.8 426.5,96.5 465.2,89.6" fill="var(--key)"/>
+<polygon points="420.8,78.2 382.1,85.0 385.4,103.7 424.1,96.9" fill="var(--key)"/>
+<polygon points="588.9,70.4 550.3,77.2 553.6,95.8 592.2,89.0" fill="var(--key)"/>
+<polygon points="547.8,77.6 509.2,84.4 512.5,103.1 551.1,96.3" fill="var(--key)"/>
+<polygon points="506.7,84.9 468.1,91.7 471.4,110.3 510.0,103.5" fill="var(--key)"/>
+<polygon points="465.6,92.1 427.0,98.9 430.2,117.6 468.9,110.8" fill="var(--key)"/>
+<polygon points="424.5,99.3 385.9,106.2 389.1,124.8 427.8,118.0" fill="var(--key)"/>
+<polygon points="592.6,91.5 554.0,98.3 557.3,117.0 595.9,110.2" fill="var(--key)"/>
+<polygon points="551.5,98.7 512.9,105.6 516.2,124.2 554.8,117.4" fill="var(--key)"/>
+<polygon points="510.4,106.0 471.8,112.8 475.1,131.5 513.7,124.7" fill="var(--key)"/>
+<polygon points="469.3,113.2 430.7,120.0 434.0,138.7 472.6,131.9" fill="var(--key)"/>
+<polygon points="428.2,120.5 389.6,127.3 392.9,146.0 431.5,139.2" fill="var(--key)"/>
+<text y="176.6" class="title">Tilt 10</text>
+<text y="196.6" class="body">Keys 63.6 dp (90%), rows 32.7 dp, centre gap 639 px.</text>
+<text y="213.6" class="body">Before: keys 53 dp (75%), rows 34.8 dp, gap 903 px.</text>
+</g>
+<g transform="translate(640.0,50)">
+<rect width="600.0" height="156.6" rx="6" fill="var(--kb)" stroke="var(--line)"/>
+<rect width="600.0" height="22.3125" rx="6" fill="var(--strip)"/>
+<text x="300.0" y="15.15625" text-anchor="middle" class="small">suggestion strip</text>
+<rect y="147.4125" width="600.0" height="9.1875" fill="var(--strip)" opacity=".6"/>
+<polygon points="4.1,63.9 42.7,57.1 46.0,75.8 7.4,82.6" fill="var(--key)"/>
+<polygon points="45.2,56.6 83.8,49.8 87.1,68.5 48.5,75.3" fill="var(--key)"/>
+<polygon points="86.3,49.4 124.9,42.6 128.2,61.3 89.6,68.1" fill="var(--key)"/>
+<polygon points="127.4,42.2 166.0,35.3 169.3,54.0 130.7,60.8" fill="var(--key)"/>
+<polygon points="168.5,34.9 207.1,28.1 210.4,46.8 171.8,53.6" fill="var(--key)"/>
+<polygon points="7.8,85.0 46.4,78.2 49.7,96.9 11.1,103.7" fill="var(--key)"/>
+<polygon points="48.9,77.8 87.5,71.0 90.8,89.6 52.2,96.5" fill="var(--key)"/>
+<polygon points="90.0,70.5 128.6,63.7 131.9,82.4 93.3,89.2" fill="var(--key)"/>
+<polygon points="131.1,63.3 169.8,56.5 173.0,75.1 134.4,82.0" fill="var(--key)"/>
+<polygon points="172.2,56.0 210.9,49.2 214.1,67.9 175.5,74.7" fill="var(--key)"/>
+<polygon points="11.5,106.2 50.2,99.3 53.5,118.0 14.8,124.8" fill="var(--key)"/>
+<polygon points="52.6,98.9 91.3,92.1 94.6,110.8 55.9,117.6" fill="var(--key)"/>
+<polygon points="93.7,91.7 132.4,84.9 135.7,103.5 97.0,110.3" fill="var(--key)"/>
+<polygon points="134.8,84.4 173.5,77.6 176.8,96.3 138.1,103.1" fill="var(--key)"/>
+<polygon points="175.9,77.2 214.6,70.4 217.9,89.0 179.2,95.8" fill="var(--key)"/>
+<polygon points="15.3,127.3 53.9,120.5 57.2,139.2 18.5,146.0" fill="var(--key)"/>
+<polygon points="56.4,120.0 95.0,113.2 98.3,131.9 59.6,138.7" fill="var(--key)"/>
+<polygon points="97.5,112.8 136.1,106.0 139.4,124.7 100.8,131.5" fill="var(--key)"/>
+<polygon points="138.6,105.6 177.2,98.7 180.5,117.4 141.9,124.2" fill="var(--key)"/>
+<polygon points="179.7,98.3 218.3,91.5 221.6,110.2 183.0,117.0" fill="var(--key)"/>
+<polygon points="595.9,63.9 557.3,57.1 554.0,75.8 592.6,82.6" fill="var(--key)"/>
+<polygon points="554.8,56.6 516.2,49.8 512.9,68.5 551.5,75.3" fill="var(--key)"/>
+<polygon points="513.7,49.4 475.1,42.6 471.8,61.3 510.4,68.1" fill="var(--key)"/>
+<polygon points="472.6,42.2 434.0,35.3 430.7,54.0 469.3,60.8" fill="var(--key)"/>
+<polygon points="431.5,34.9 392.9,28.1 389.6,46.8 428.2,53.6" fill="var(--key)"/>
+<polygon points="592.2,85.0 553.6,78.2 550.3,96.9 588.9,103.7" fill="var(--key)"/>
+<polygon points="551.1,77.8 512.5,71.0 509.2,89.6 547.8,96.5" fill="var(--key)"/>
+<polygon points="510.0,70.5 471.4,63.7 468.1,82.4 506.7,89.2" fill="var(--key)"/>
+<polygon points="468.9,63.3 430.2,56.5 427.0,75.1 465.6,82.0" fill="var(--key)"/>
+<polygon points="427.8,56.0 389.1,49.2 385.9,67.9 424.5,74.7" fill="var(--key)"/>
+<polygon points="588.5,106.2 549.8,99.3 546.5,118.0 585.2,124.8" fill="var(--key)"/>
+<polygon points="547.4,98.9 508.7,92.1 505.4,110.8 544.1,117.6" fill="var(--key)"/>
+<polygon points="506.3,91.7 467.6,84.9 464.3,103.5 503.0,110.3" fill="var(--key)"/>
+<polygon points="465.2,84.4 426.5,77.6 423.2,96.3 461.9,103.1" fill="var(--key)"/>
+<polygon points="424.1,77.2 385.4,70.4 382.1,89.0 420.8,95.8" fill="var(--key)"/>
+<polygon points="584.7,127.3 546.1,120.5 542.8,139.2 581.5,146.0" fill="var(--key)"/>
+<polygon points="543.6,120.0 505.0,113.2 501.7,131.9 540.4,138.7" fill="var(--key)"/>
+<polygon points="502.5,112.8 463.9,106.0 460.6,124.7 499.2,131.5" fill="var(--key)"/>
+<polygon points="461.4,105.6 422.8,98.7 419.5,117.4 458.1,124.2" fill="var(--key)"/>
+<polygon points="420.3,98.3 381.7,91.5 378.4,110.2 417.0,117.0" fill="var(--key)"/>
+<text y="176.6" class="title">Tilt -10</text>
+<text y="196.6" class="body">Same sizes, mirrored: outer corners hang lower.</text>
+<text y="213.6" class="body">Halves stay at the screen edges, where you put them.</text>
+</g>
+</svg>

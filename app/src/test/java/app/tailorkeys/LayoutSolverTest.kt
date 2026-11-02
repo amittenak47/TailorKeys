@@ -33,8 +33,8 @@ class LayoutSolverTest {
         for (tilt in listOf(20f, -20f, 30f, -30f)) {
             val steep = LayoutSolver().compute(1.5f, 4, 7.5f, 60f, 21f, 6f, 0f, 360f, 270f, 630f, true, false, tilt, 0f, grid)
             assertTrue(steep.total <= 360.01f)
-            // Rows keep three quarters of their upright height, or the keys are already at their narrowest.
-            assertTrue("tilt $tilt: rows ${steep.un} keys ${steep.cw}", steep.un >= .75f * upright.un - .5f || steep.cw <= .75f * 270f + .5f)
+            // Rows keep 70% of their upright height, or the keys are already at their narrowest.
+            assertTrue("tilt $tilt: rows ${steep.un} keys ${steep.cw}", steep.un >= .70f * upright.un - .5f || steep.cw <= .75f * 270f + .5f)
         }
     }
 

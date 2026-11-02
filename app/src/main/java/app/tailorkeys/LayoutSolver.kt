@@ -237,8 +237,11 @@ internal class LayoutSolver {
     private companion object {
         /** The narrowest a tilted half's keys get, as a share of the half's width, before its rows shorten. */
         const val MIN_WIDTH = .75f
-        /** The share of their upright height rows keep at a steep tilt before the keys narrow instead. */
-        const val MIN_ROWS = .75f
+        /**
+         * The share of their upright height rows keep at a steep tilt before the keys narrow instead. 70% balances
+         * width and height: phone landscape at tilt 10 keeps keys at 90% with rows 6% shorter than at 75% (2026-11-02).
+         */
+        const val MIN_ROWS = .70f
         val EXTREME_ANGLES = doubleArrayOf(Math.toRadians(-10.0), Math.toRadians(10.0))
         val EXTREME_COS = cos(EXTREME_ANGLES[1]).toFloat()
         val EXTREME_SIN = sin(EXTREME_ANGLES[1]).toFloat()
