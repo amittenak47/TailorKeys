@@ -49,3 +49,7 @@ removed using the list in NOTICE-misspellings.txt. The licenses in those notices
 4. model/head_words.txt and model/tokenizer.json
 head_words.txt holds the 20,000 listed words the text above uses most. tokenizer.json holds byte-level word pieces
 trained by TailorKeys on the text above, with the Hugging Face tokenizers library (Apache License, Version 2.0).
+
+5. model/step.int8.onnx
+The autocorrect model, trained by TailorKeys on the text in section 1 and typing simulated from it. The sources' licenses and
+attribution above apply to it as far as they reach a trained model. TailorKeys makes no claim that they do not.
