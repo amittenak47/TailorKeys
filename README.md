@@ -4,6 +4,12 @@ An Android keyboard built around two things stock keyboards get wrong: **size yo
 
 TailorKeys has no internet permission. Nothing typed on it can leave the phone. That's a privacy promise worth keeping for the Play Store listing.
 
+## Demo
+
+![Typing on TailorKeys at about 80 words a minute without looking at the keys](docs/demo/typing-demo.gif)
+
+Typed on a tablet at about 80 words a minute without looking at the keys, in the keyboard's "Try it" screen. Garbled words are fixed a moment later. The autocorrect model is still in training, so some mistakes stay in. The model is on the `autocorrect-model-keyboard` branch.
+
 ## Build and install
 
 Needs the Android SDK and JDK 17–24. Gradle 8.14 can't run on JDK 25, which is what current Android Studio bundles. From a terminal, point `JAVA_HOME` at JDK 23 first. In Android Studio, set Settings → Build → Gradle → Gradle JDK to jdk-23.
