@@ -2254,6 +2254,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         return true
     }
 
+    private var lastTypedAt = 0L
+
     private fun pointerDown(id: Int, x: Float, y: Float, time: Long) {
         if (glideId != null || isSliding()) return
         // A key resized or moved over a control (a space bar made taller over the grip band, a top-row key raised into
@@ -2261,6 +2263,9 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val shapedKey = findKey(x, y, strict = true)?.takeIf { it.item.shaped && !gearRect.contains(x, y) }
         val zone = if (shapedKey == null) cursorZoneAt(x, y) else null
         val bar = if (zone == null && shapedKey == null) touchBars.firstOrNull { it.contains(x, y) } else null
+        // Mid-typing a wheel is like the gap: a hand that wandered up, so the tap types the nearest letter or space.
+        val slipKey = if (shapedKey == null && zone == null && bar == null && !gearRect.contains(x, y) && FarTaps.midTyping(time - lastTypedAt) &&
+            wheels.any { it.rect.contains(x, y) }) findKey(x, y, far = true, strip = true)?.takeIf { FarTaps.counts(it.item) } else null
         val onControl = shapedKey == null && (zone != null || bar != null || gearRect.contains(x, y) || handleRect.contains(x, y) ||
             wheels.any { it.rect.contains(x, y) } || leftSpace?.contains(x, y) == true || rightSpace?.contains(x, y) == true)
         val initialKey = if (onControl) null else findKey(x, y)
@@ -2291,7 +2296,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             trackers[id] = Tracker(K_GEAR, null)
             return
         }
-        wheels.firstOrNull { it.rect.contains(x, y) && words(it).isNotEmpty() }?.let {
+        wheels.firstOrNull { slipKey == null && it.rect.contains(x, y) && words(it).isNotEmpty() }?.let {
             trackers[id] = Tracker(K_WHEEL, null).also { t -> t.wheel = it; t.x0 = x; t.lastX = x; timers.postDelayed(t.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong()) }
             return
         }
@@ -2313,9 +2318,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             startCursor(id, x, y, time, zone, bar)
             return
         }
-        if (hit == null && (centerZone?.contains(x, y) == true ||
-            leftSpace?.contains(x, y) == true || rightSpace?.contains(x, y) == true)) return
-        pressKey(id, x, y, time, chordKey)
+        if (hit == null && (leftSpace?.contains(x, y) == true || rightSpace?.contains(x, y) == true)) return
+        // With no cursor in it the gap has no use of its own, so a hand that wandered in still types: a letter or a space.
+        if (hit == null && centerZone?.contains(x, y) == true && findKey(x, y, far = true)?.item?.let(FarTaps::counts) != true) return
+        pressKey(id, x, y, time, chordKey, slipKey)
     }
 
     /** A touch that moves the cursor: on a touch bar ([bar], in its own coordinates), a held space bar, or a [zone]. */
@@ -2363,8 +2369,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     /** A key pressed (the rest of [pointerDown]). */
-    private fun pressKey(id: Int, x: Float, y: Float, time: Long, chordKey: Placed?) {
-        val pk = chordKey ?: findKey(x, y) ?: return
+    private fun pressKey(id: Int, x: Float, y: Float, time: Long, chordKey: Placed?, slipKey: Placed? = null) {
+        // Only here do far taps count, after the controls have had their touches; pointerDown's guard saw no key for one.
+        val pk = chordKey ?: findKey(x, y) ?: (slipKey ?: findKey(x, y, far = true))?.takeIf { acceptKeyTap(it.item, time) } ?: return
+        if (FarTaps.counts(pk.item)) lastTypedAt = time
         if (chordKey == null) haptic(HapticFeedbackConstants.KEYBOARD_TAP)
         if (pk.item.isStack) {
             trackers[id] = Tracker(K_STACK, pk).also { it.x0 = x; it.y0 = y; it.tapX = x; it.tapY = y; pressLetter(it); timers.postDelayed(it.longPress, settings.int(Prefs.LONG_PRESS_MS).toLong()) }
@@ -2375,7 +2383,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val t = Tracker(K_KEY, pk)
         t.tapX = x; t.tapY = y
         t.x0 = x; t.y0 = y; t.glideWidth = pk.rect.width()
-        t.glideEligible = !settings.bool(Prefs.TYPE_ON_PRESS) && glideAllowed && settings.bool(Prefs.SWIPE_TYPING) && state.layer == Layer.ABC &&
+        t.glideEligible = slipKey == null && !settings.bool(Prefs.TYPE_ON_PRESS) && glideAllowed && settings.bool(Prefs.SWIPE_TYPING) && state.layer == Layer.ABC &&
             pk.item.keys[0].let { it.length == 1 && it[0].isLetter() }
         if (t.glideEligible) {
             t.glideX = x; t.glideY = y
@@ -2838,7 +2846,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         }
     }
 
-    private fun findKey(x: Float, y: Float, strict: Boolean = false, skip: GridKey? = null): Placed? {
+    private fun findKey(x: Float, y: Float, strict: Boolean = false, skip: GridKey? = null, far: Boolean = false, strip: Boolean = false): Placed? {
         val pt = hitPoint
         val baseSlack = settings.int(Prefs.KEY_GAP) * density / 2 + 1
         val extraSlack = settings.int(Prefs.TOUCH_SLACK) * density
@@ -2888,9 +2896,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             if (best != null) return best
         }
         if (hit != null) return hit
-        if (strict || y < stripH) return null
+        if (strict || y < stripH && !strip) return null
         var best: Placed? = null
         var bestDist = Float.MAX_VALUE
+        var typing: Placed? = null
+        var typingDist = Float.MAX_VALUE
         for (i in placed.indices) {
             val pk = placed[i]
             if (pk.item === skip) continue
@@ -2898,8 +2908,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             pk.matrix.mapPoints(pt)
             val dist = hypot(pt[0] - x, pt[1] - y)
             if (dist < bestDist) { bestDist = dist; best = pk }
+            if (dist < typingDist && FarTaps.counts(pk.item)) { typingDist = dist; typing = pk }
         }
-        return best?.takeIf { bestDist < max(it.rowHeight, unit) * 1.2f }
+        best?.takeIf { bestDist < max(it.rowHeight, unit) * 1.2f }?.let { return it }
+        return typing?.takeIf { far && !editMode && state.layer == Layer.ABC && typingDist < max(it.rowHeight, unit) * FarTaps.REACH }
     }
 
     private fun moveKeyboardToward(x: Float, y: Float) {

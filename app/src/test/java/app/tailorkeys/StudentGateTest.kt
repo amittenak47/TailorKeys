@@ -53,7 +53,8 @@ class StudentGateTest {
         val layout = TapSearch.Layout(SplitTaps.centres + ('\'' to (10.5f to 1.5f)))
         StudentModel(File(assets, "model/step.int8.onnx").path, threads = 6).use { model ->
             val heads = open("model/head_words.txt").bufferedReader().readLines().map { it.trim() }.filter { it.isNotEmpty() }
-            val corrector = StudentCorrector(model, TapSearch(TapSearch.load(open, offensive = false)), StudentSlot(StudentTokenizer.load(open)), heads)
+            val search = TapSearch(TapSearch.load(open, offensive = false), TapSearch.loadMisspellings(open), TapSearch.loadCasual(open))
+            val corrector = StudentCorrector(model, search, StudentSlot(StudentTokenizer.load(open)), heads)
             corrector.layout = layout
             val start = System.currentTimeMillis()
             val atSpace = sentences.map { e ->

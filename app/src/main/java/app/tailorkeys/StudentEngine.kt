@@ -2,14 +2,21 @@ package app.tailorkeys
 
 import android.content.Context
 import java.io.File
-import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 /**
  * The autocorrect model for the keyboard (Settings, Model autocorrect): loaded once per process, off the UI thread.
  * One worker runs every load and decision in order, so a decision never overlaps another or a reload.
  */
 internal object StudentEngine {
-    val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "TailorKeys-Student").apply { isDaemon = true } }
+    val worker = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, LinkedBlockingQueue()) { r ->
+        Thread(r, "TailorKeys-Student").apply { isDaemon = true }
+    }
+
+    /** Something waits for the worker: work that can wait (rechecks) lets it go first. */
+    fun busy() = worker.queue.isNotEmpty()
     private const val ASSET = "model/step.int8.onnx"
 
     /** Ready once loaded; read and used on the worker. */
@@ -32,7 +39,7 @@ internal object StudentEngine {
             if (model == null) model = StudentModel(copied(app).path)
             if (slot == null) slot = StudentSlot(StudentTokenizer.load(open))
             if (search == null || searchOffensive != offensive) {
-                search = TapSearch(TapSearch.load(open, offensive))
+                search = TapSearch(TapSearch.load(open, offensive), TapSearch.loadMisspellings(open), TapSearch.loadCasual(open))
                 searchOffensive = offensive
             }
             if (heads == null) heads = open("model/head_words.txt").bufferedReader().readLines().map { it.trim() }.filter { it.isNotEmpty() }

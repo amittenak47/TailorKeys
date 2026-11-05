@@ -8,7 +8,7 @@ import org.json.JSONObject
  * the Android log so a typing session can be replayed through tools/lm. Off by default, as it logs what you type.
  *   TKGEOM  each letter's centre tap on this layout (KeyboardView.centreTap), once per keyboard process
  *   TKMODEL the word, the fix, and the time queued and deciding (reused: scored after its last tap already)
- *   TKDUMP  the context, the taps and the top five candidates, as JSON
+ *   TKDUMP  the context, the taps as the model reads them and the top five candidates, as JSON
  */
 internal object DecisionLog {
     private var geometryLogged = false
@@ -27,7 +27,9 @@ internal object DecisionLog {
             val live = corrector.live(left, right, word, taps, first)
             val top = live?.scored?.let { s -> s.candidates.indices.sortedByDescending { s.probability[it] }.take(5)
                 .joinToString(",") { "${JSONObject.quote(s.candidates[it])}:${"%.3f".format(s.probability[it])}" } }
-            val tapsJson = taps.joinToString(",", "[", "]") { t -> t.joinToString(",", "[", "]") { "%.3f".format(it) } }
+            // The taps as the model reads them (moved letters also counted near where they usually are), for replaying.
+            val read = corrector.moved?.apply(taps) ?: taps
+            val tapsJson = read.joinToString(",", "[", "]") { t -> t.joinToString(",", "[", "]") { "%.3f".format(it) } }
             Log.i("TKDUMP", "{\"left\":${JSONObject.quote(left.takeLast(200))},\"right\":${JSONObject.quote(right.take(100))}," +
                 "\"typed\":${JSONObject.quote(word)},\"fix\":${JSONObject.quote(fix ?: "")},\"top\":{$top},\"taps\":$tapsJson}")
         } catch (e: Throwable) {}

@@ -24,7 +24,7 @@ class StudentSlotTest {
     @Test fun scoresAsPython() {
         assumeTrue("no exported model", model.exists())
         val open = { name: String -> File(assets, name).inputStream() }
-        val search = TapSearch(TapSearch.load(open, offensive = false))
+        val search = TapSearch(TapSearch.load(open, offensive = false), TapSearch.loadMisspellings(open), TapSearch.loadCasual(open))
         val slot = StudentSlot(StudentTokenizer.load(open))
         val cases = File("src/test/resources/student_slot_cases.jsonl").readLines().map { JSONObject(it) }
         var sameCands = 0
@@ -38,7 +38,7 @@ class StudentSlotTest {
                 val layout = TapSearch.Layout(c.keys().asSequence().toList().associate { k: String ->
                     k[0] to c.getJSONArray(k).let { it.getDouble(0).toFloat() to it.getDouble(1).toFloat() } })
                 val want = strings(case.getJSONArray("cands"))
-                val found = search.search(f, layout)
+                val found = search.search(f, layout, typed = case.getString("typed"))
                 // Order never matters (each candidate is scored on its own); words tied on cost may differ (TapSearchTest).
                 val mine = StudentSlot.candidates(case.getString("typed"), found, search.added)
                 val best = search.costs(f).first

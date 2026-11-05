@@ -9,11 +9,16 @@ import java.io.File
 
 /**
  * The Kotlin search against tools/lm/candidates.py, which the model was trained with, on words typed by simulated
- * typists on every training layout (tools/lm/app_fixtures.py search writes the cases). The same candidates in the same
- * order, the same shape words and the same alignments; words tied on cost may swap places.
+ * typists on every training layout (tools/lm/app_fixtures.py search writes the cases), on listed misspellings
+ * searched with their typed spelling, and on casual forms with the casual readings (the keyboard's own search). The
+ * same candidates in the same order, the same words added at the end (shape words, casual readings, listed
+ * corrections) and the same alignments; words tied on cost may swap places.
  */
 class TapSearchTest {
-    private val search by lazy { TapSearch(TapSearch.load({ File("src/main/assets", it).inputStream() }, offensive = false)) }
+    private val open = { name: String -> File("src/main/assets", name).inputStream() }
+    private val search by lazy { TapSearch(TapSearch.load(open, offensive = false), TapSearch.loadMisspellings(open)) }
+    /** As the keyboard searches: with the casual readings, for the casual cases. */
+    private val casual by lazy { TapSearch(search.words, TapSearch.loadMisspellings(open), TapSearch.loadCasual(open)) }
 
     private fun cases() = File("src/test/resources/tap_search_cases.jsonl").readLines().map { JSONObject(it) }
 
@@ -43,7 +48,8 @@ class TapSearchTest {
         for (case in cases) {
             val f = features(case)
             val want = strings(case.getJSONArray("found"))
-            val got = search.search(f, layout(case))
+            val search = if (case.getString("mode").startsWith("casual")) casual else search
+            val got = search.search(f, layout(case), typed = if (case.has("typed")) case.getString("typed") else null)
             val added = search.added
             if (got == want) same++
             val onlyPython = want - got.toSet()
@@ -56,7 +62,7 @@ class TapSearchTest {
             if (added == case.getInt("added") && onlyPython.all { tie(it) || swapped(it, onlyKotlin) } &&
                 onlyKotlin.all { tie(it) || swapped(it, onlyPython) }) tied++
             else misses += "${case.getString("layout")} ${case.getString("word")} ${case.getString("mode")}: " +
-                "python $onlyPython, kotlin $onlyKotlin, shape words ${case.getInt("added")} / $added"
+                "python $onlyPython, kotlin $onlyKotlin, added at the end ${case.getInt("added")} / $added"
         }
         println("same order $same/${cases.size}, differing only by ties $tied\n" + misses.joinToString("\n"))
         assertTrue(misses.joinToString("\n"), misses.isEmpty())

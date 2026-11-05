@@ -18,18 +18,29 @@ import kotlin.math.min
  * cheapest by taps alone, then with a little and with more weight on how common the word is, and a fourth of words
  * with a skipped key. Two-word splits follow, where a tap near the space bar was the space. When no word fits the taps
  * well, a shape list comes last: words that fit once each hand's shared shift is taken out (typing without looking).
+ * An exact casual form ([casual], model/casual.txt) adds its standard readings after that, phrases and ambiguous
+ * readings included (gonna -> going to, ur -> your and you're). A listed misspelling ([misspellings],
+ * model/misspellings.txt) adds its corrections at the very end, which the taps may never reach (definately ->
+ * definitely: a and i are on different halves).
  *
  * Features are per tap: squared distances in key spacings to a to z, the apostrophe (100 when the layout lacks it),
  * then the space bar.
  */
-internal class TapSearch(val words: List<String>) {
+internal class TapSearch(val words: List<String>, misspellings: Map<String, List<String>> = emptyMap(),
+                          private val casual: Map<String, List<String>> = emptyMap()) {
     private class Bucket(val ids: IntArray, val codes: ByteArray, val extra: FloatArray)
 
     /** Word ids by word. */
     val index: Map<String, Int> = HashMap<String, Int>(words.size * 2).apply { words.forEachIndexed { i, w -> put(w, i) } }
     private val logRank = FloatArray(words.size) { ln(1.0 + it).toFloat() }
     private val buckets: Map<Int, Bucket>
-    /** Shape words the last search added at the end of its list: a caller that caps the list grows its cap by these. */
+    /** A listed misspelling's corrections that are in [words], in the list's order. */
+    private val listed: Map<String, List<String>> =
+        misspellings.mapValues { (_, fixes) -> fixes.filter { it in index } }.filterValues { it.isNotEmpty() }
+    /**
+     * Shape words, casual readings and listed corrections the last search added at the end of its list: a caller that
+     * caps the list grows its cap by these.
+     */
     var added = 0
         private set
 
@@ -143,14 +154,18 @@ internal class TapSearch(val words: List<String>) {
 
     /**
      * Up to 4k words: the k cheapest by taps, the k cheapest with each weight * log(rank) added, the k cheapest with
-     * a skipped key (with the first weight), then two-word splits; given the layout, the shape list last when the best
-     * word costs more than SHAPE_FIT per tap.
+     * a skipped key (with the first weight), then two-word splits; given the layout, the shape list when the best
+     * word costs more than SHAPE_FIT per tap; then an exact casual form's readings; last, a listed misspelling's
+     * corrections. [typed], the letters as typed, comes first (lowercase) and is what the casual and misspelling lists
+     * are looked up by; without it, the letters under the taps.
      */
-    fun search(features: List<FloatArray>, layout: Layout? = null, k: Int = 8, common: FloatArray = COMMON): List<String> {
+    fun search(features: List<FloatArray>, layout: Layout? = null, k: Int = 8, common: FloatArray = COMMON,
+               typed: String? = null): List<String> {
         added = 0
         if (features.isEmpty()) return emptyList()
         val (best, gap) = costs(features)
         val out = LinkedHashSet<String>()
+        if (!typed.isNullOrEmpty()) out.add(typed.lowercase())
         for (i in cheapest(best, 0f, k)) out.add(words[i])
         for (w in common) for (i in cheapest(best, w, k)) out.add(words[i])
         for (i in cheapest(gap, common[0], k)) out.add(words[i])
@@ -161,7 +176,34 @@ internal class TapSearch(val words: List<String>) {
             added = found.size
             result += found
         }
+        val letters = if (typed != null) typed.lowercase() else letters(features)
+        val readings = letters?.let { casual[it] }.orEmpty().filter { typed == null || it != typed.lowercase() }
+        if (readings.isNotEmpty()) {
+            // Moved to the end even when the taps found them, as the listed corrections below.
+            added = result.takeLast(added).count { it !in readings } + readings.size
+            result.removeAll { it in readings }
+            result += readings
+        }
+        val fixes = letters?.let { listed[it] }
+        if (fixes != null) {
+            // Moved to the end even when the taps found them, so a caller's cap never drops them.
+            added = result.takeLast(added).count { it !in fixes } + fixes.size
+            result.removeAll { it in fixes }
+            result += fixes
+        }
         return result
+    }
+
+    /** The letters under the taps (candidates.letters); none when a tap has no letter position (all 100). */
+    private fun letters(features: List<FloatArray>): String? {
+        val out = StringBuilder(features.size)
+        for (f in features) {
+            var best = 0
+            for (c in 1 until LETTERS.length) if (f[c] < f[best]) best = c
+            if ((0 until LETTERS.length).all { f[it] == 100f }) return null
+            out.append(LETTERS[best])
+        }
+        return out.toString()
     }
 
     /** The ids of the k cheapest finite scores of cost + weight * log(rank), cheapest first (ties by id). */
@@ -292,6 +334,34 @@ internal class TapSearch(val words: List<String>) {
             val out = ArrayList(words)
             for ((w, _) in ranked) if (w.isNotEmpty() && seen.add(w)) out.add(w)
             return out.filter { w -> w.length in 1..MAX_LEN && w.all { it in LETTERS } }
+        }
+
+        /**
+         * Listed misspellings to their corrections, in the file's order (model/misspellings.txt, "wrong<TAB>right" per
+         * line, written by tools/lm/app_misspellings.py); none when the file is missing.
+         */
+        fun loadMisspellings(openAsset: (String) -> InputStream, folder: String = "model/") = loadPairs(openAsset, folder + "misspellings.txt")
+
+        /**
+         * Casual forms to their standard readings, in the file's order (model/casual.txt, "casual<TAB>standard" per line,
+         * written by tools/lm/app_casual.py); none when the file is missing.
+         */
+        fun loadCasual(openAsset: (String) -> InputStream, folder: String = "model/") = loadPairs(openAsset, folder + "casual.txt")
+
+        private fun loadPairs(openAsset: (String) -> InputStream, path: String): Map<String, List<String>> {
+            val out = LinkedHashMap<String, MutableList<String>>()
+            try {
+                openAsset(path).bufferedReader().useLines { lines ->
+                    for (line in lines) {
+                        val tab = line.indexOf('\t')
+                        if (tab <= 0) continue
+                        val fix = line.substring(tab + 1).trim()
+                        val fixes = out.getOrPut(line.substring(0, tab).trim()) { ArrayList() }
+                        if (fix.isNotEmpty() && fix !in fixes) fixes.add(fix)
+                    }
+                }
+            } catch (_: java.io.IOException) { return emptyMap() }
+            return out
         }
 
         fun align(features: List<FloatArray>, word: String): Alignment? {

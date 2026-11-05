@@ -14,16 +14,35 @@ import kotlin.math.min
  * token read so far): one row while reading (context pieces, then each tap as it lands), one row per candidate when
  * scoring. Not thread-safe: one caller at a time, off the UI thread.
  */
-internal class StudentModel(path: String, threads: Int = 4) : AutoCloseable {
+internal class StudentModel(path: String, threads: Int = 2) : AutoCloseable {
     private val env = OrtEnvironment.getEnvironment()
     private val session: OrtSession = env.createSession(path, OrtSession.SessionOptions().apply {
         setIntraOpNumThreads(threads)
         setInterOpNumThreads(1)
         setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
     })
+    /**
+     * Graphs from 2026-11-02 on also take each tap's source (tsrc) and the casual setting (style). Both go in at their
+     * defaults, a letter tap and "fix", as nothing in the keyboard sets them yet; older graphs don't have them.
+     */
+    private val newer = "style" in session.inputNames
 
     /** A saved reading: per layer and head, each token's key and value, laid out [layers, 1, heads, tokens, dim]. */
     class Reading(val tokens: Int, val keys: FloatArray, val values: FloatArray) {
+        /**
+         * The reading of its first [n] tokens: their keys and values, as each token sees only those before it. Exact,
+         * but for int8 rounding, which depends on how the tokens were grouped into calls.
+         */
+        fun prefix(n: Int): Reading = when {
+            n >= tokens -> this
+            n <= 0 -> EMPTY
+            else -> Reading(n, cut(keys, n), cut(values, n))
+        }
+
+        private fun cut(a: FloatArray, n: Int) = FloatArray(LAYERS * HEADS * n * DIM).also { out ->
+            for (block in 0 until LAYERS * HEADS) System.arraycopy(a, block * tokens * DIM, out, block * n * DIM, n * DIM)
+        }
+
         companion object { val EMPTY = Reading(0, FloatArray(0), FloatArray(0)) }
     }
 
@@ -35,10 +54,10 @@ internal class StudentModel(path: String, threads: Int = 4) : AutoCloseable {
 
     /**
      * Rows of new tokens at positions after [past]. With one row, the reading grown by it and the wheel's word scores
-     * after its last token; with several (candidates), their score and capital logits. [options] lets another thread
-     * stop the run (setTerminate), which then throws.
+     * after its last token; with several (candidates), or [scoring] one, their score and capital logits. [options] lets
+     * another thread stop the run (setTerminate), which then throws.
      */
-    fun run(past: Reading, rows: List<Row>, options: OrtSession.RunOptions? = null): Output {
+    fun run(past: Reading, rows: List<Row>, options: OrtSession.RunOptions? = null, scoring: Boolean = rows.size != 1): Output {
         val n = rows.size
         val t = rows.maxOf { it.ids.size }
         val longs = { f: (Row, Int) -> Long -> LongArray(n * t).also { a -> for (r in 0 until n) for (j in rows[r].ids.indices) a[r * t + j] = f(rows[r], j) } }
@@ -70,12 +89,18 @@ internal class StudentModel(path: String, threads: Int = 4) : AutoCloseable {
             "past_k" to OnnxTensor.createTensor(env, FloatBuffer.wrap(past.keys), cache),
             "past_v" to OnnxTensor.createTensor(env, FloatBuffer.wrap(past.values), cache),
         )
+        if (newer) {
+            inputs["tsrc"] = OnnxTensor.createTensor(env, LongBuffer.wrap(LongArray(n * t)), shape)
+            inputs["style"] = OnnxTensor.createTensor(env, LongBuffer.wrap(LongArray(n)), longArrayOf(n.toLong()))
+        }
         try {
-            (if (options != null) session.run(inputs, options) else session.run(inputs)).use { out ->
+            // Scoring candidates needs only their scores and capitals: the keys, values and wheel aren't asked for.
+            val wanted = if (scoring) SCORING else session.outputNames
+            (if (options != null) session.run(inputs, wanted, options) else session.run(inputs, wanted)).use { out ->
                 fun floats(name: String) = (out.get(name).get() as OnnxTensor).floatBuffer.let { b -> FloatArray(b.remaining()).also { b.get(it) } }
                 val score = floats("score")
                 val capital = floats("capital")
-                if (n != 1) return Output(null, null, score, capital)
+                if (scoring) return Output(null, null, score, capital)
                 val k = floats("k")
                 val v = floats("v")
                 return Output(Reading(past.tokens + t, grow(past.keys, past.tokens, k, t), grow(past.values, past.tokens, v, t)),
@@ -104,6 +129,7 @@ internal class StudentModel(path: String, threads: Int = 4) : AutoCloseable {
         const val HEADS = 9
         const val DIM = 64
         const val TAP_INPUTS = 56
+        private val SCORING = setOf("score", "capital")
 
         /** Probabilities from scores, as a softmax. */
         fun softmax(score: FloatArray): FloatArray {
