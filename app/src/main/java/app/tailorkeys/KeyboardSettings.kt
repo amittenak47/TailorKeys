@@ -110,7 +110,7 @@ object Prefs {
     /** Lock halves: the split grips and the one-hand arrow fade out and stop taking touches. */
     val SPLIT_LOCKED = BoolPref("split_locked", false)
     /**
-     * For testing autocorrect: each decision written to the Android log (DecisionLog). Off: it logs what you type. Kept
+     * For testing autocorrect: real typing kept in a file on this device (TypingLog). Off: it logs what you type. Kept
      * out of backups, so a phone restored from one never starts logging.
      */
     val LOG_DECISIONS = BoolPref("log_decisions", false, device = true)

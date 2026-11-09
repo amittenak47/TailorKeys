@@ -1,5 +1,4 @@
 TailorKeys is licensed under the PolyForm Noncommercial License 1.0.0 (see LICENSE).
 
 That license does not cover the third-party data in app/src/main/assets. Those files keep their own licenses, listed in
-the notices beside them: NOTICE-dictionary.txt, NOTICE-words-extra.txt, NOTICE-casual.txt, NOTICE-misspellings.txt,
-NOTICE-model.txt and insert/NOTICE.txt.
+the notices beside them: NOTICE-dictionary.txt, NOTICE-words-extra.txt and insert/NOTICE.txt.

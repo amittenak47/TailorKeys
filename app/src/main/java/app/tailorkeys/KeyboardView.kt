@@ -68,8 +68,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         /** A letter tap: [distances] to each letter (drift removed), and where it landed ([x], [y], view pixels). */
         fun onTapKey(code: String, distances: FloatArray, x: Float, y: Float) { onKey(code) }
         /**
-         * The same tap's features for the autocorrect model (TapSearch): squared distances to a to z, the apostrophe and
-         * the space bar, across in key spacings and down in row spacings, as the model trained; just before [onTapKey].
+         * The same tap's features (TapFeatures): squared distances to a to z, the apostrophe and the space bar, across
+         * in key spacings and down in row spacings; just before [onTapKey]. The typing log keeps them (TypingLog).
          */
         fun onModelTap(features: FloatArray) {}
         /** A space tap's squared distance to the nearest letter, as in [onModelTap]; just before [onKey]. */
@@ -202,16 +202,10 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         invalidate()
     }
 
-    /** Neither wheel turned or chosen since the words were set, so new words can replace them unnoticed. */
-    val wheelsIdle: Boolean get() = armedWheel == null && wheels.all { it.index == 0 && it.dragDx == 0f }
-
-    /** The right wheel's first word when the space bar will write it instead of the letters typed (outlined). */
-    private var spaceWord: String? = null
-
-    fun setSuggestions(left: List<String>, right: List<String>, prefix: String, spaceWord: String? = null) {
-        if (sugLeft == left && sugRight == right && this.prefix == prefix && this.spaceWord == spaceWord) return
+    fun setSuggestions(left: List<String>, right: List<String>, prefix: String) {
+        if (sugLeft == left && sugRight == right && this.prefix == prefix) return
         clearArmedWord()
-        sugLeft = left; sugRight = right; this.prefix = prefix; this.spaceWord = spaceWord
+        sugLeft = left; sugRight = right; this.prefix = prefix
         for (w in wheels) { w.index = 0; w.dragDx = 0f }
         rebuildWheelMetrics()
         refreshAccessibilityState()
@@ -246,7 +240,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private val letterWeights = DoubleArray(ComposingTaps.LETTERS)
     private val chordLit = BooleanArray(ComposingTaps.LETTERS)
     private val tapDistances = FloatArray(ComposingTaps.LETTERS)
-    private val modelTap = FloatArray(TapSearch.FEATURES)
+    private val modelTap = FloatArray(TapFeatures.FEATURES)
     private val tapPoint = FloatArray(2)
     private val cells = ArrayList<Cell>()
     /** One block of columns (left half, center column, right half) and its transform. */
@@ -795,7 +789,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             pk.item.keys[0][0].lowercaseChar() to GestureDecoder.Point(pt[0], pt[1])
         }
         letterWidth = letters.map { it.rect.width() }.sorted().let { if (it.isEmpty()) 1f else it[it.size / 2] }
-        if (state.layer == Layer.ABC && !editMode) letterTaps = TapSearch.LETTERS.mapNotNull { c -> keyFor(c)?.let { c to centreFeatures(it) } }.toMap()
         // Layout neighbours for corrections without taps: the drawn keys with tilt and curve undone (rects are
         // block-local) and the blocks pushed together, so the split gap and an empty center column don't count.
         if (profile == null) {
@@ -2042,14 +2035,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                     wheelText.isFakeBoldText = highContrast
                     continue
                 }
-                // What the space bar will write instead of the letters typed: outlined, not filled like a chosen word.
-                if (wh.side == 1 && k == 0 && index == 0 && spaceWord != null && word == spaceWord) {
-                    val half = wh.widths[index] / 2
-                    val h = wheelText.descent() - wheelText.ascent() + 8 * density
-                    stroke.color = palette.accent; stroke.strokeWidth = 1.5f * density
-                    canvas.drawRoundRect(cx - half - 8 * density, wh.rect.centerY() - h / 2,
-                        cx + half + 8 * density, wh.rect.centerY() + h / 2, h / 2, h / 2, stroke)
-                }
                 // The part you've already typed is highlighted.
                 if (prefix.isNotEmpty() && word.startsWith(prefix, ignoreCase = true)) {
                     wheelText.color = palette.accent; wheelText.alpha = alpha; wheelText.isFakeBoldText = true
@@ -2703,35 +2688,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         } else {
             if (code == Keys.SPACE && !tapX.isNaN() && !tapY.isNaN()) {
                 tapFeatures(tapX, tapY, tapDistances, modelTap, drift = true)
-                listener?.onSpaceTap((0 until TapSearch.SPACE - 1).minOf { modelTap[it] })
+                listener?.onSpaceTap((0 until TapFeatures.SPACE - 1).minOf { modelTap[it] })
             }
             listener?.onKey(code)
         }
     }
 
-    /**
-     * The model's features (StudentModel) for a tap right on [letter]'s key, as if typed carefully: for letters
-     * already in a word being edited, which have no tap of their own. Null when no key showing has the letter.
-     */
-    fun centreTap(letter: Char): FloatArray? {
-        val c = letter.lowercaseChar()
-        // On the 123 or #+= layer (a word ended with punctuation from there) the letters layer's keys are used.
-        val pk = keyFor(c) ?: return letterTaps[c]?.copyOf()
-        return centreFeatures(pk)
-    }
-
-    /** The letters layer's [centreTap]s, kept from its last layout for when another layer is showing. */
-    private var letterTaps = emptyMap<Char, FloatArray>()
-
-    private fun keyFor(c: Char) = placed.firstOrNull { p -> !p.item.isSpace && p.item.keys.any { it.singleOrNull()?.lowercaseChar() == c } }
-
-    private fun centreFeatures(pk: Placed): FloatArray {
-        val point = floatArrayOf(pk.rect.centerX(), pk.rect.centerY())
-        pk.matrix.mapPoints(point)
-        return FloatArray(TapSearch.FEATURES).also { tapFeatures(point[0], point[1], null, it, drift = false) }
-    }
-
-    /** A tap's squared distances to each letter key ([distances], for the predictor) and its model features ([model]). */
+    /** A tap's squared distances to each letter key ([distances], for the predictor) and its TapFeatures ([model]). */
     private fun tapFeatures(tapX: Float, tapY: Float, distances: FloatArray?, model: FloatArray, drift: Boolean) {
         val tapDistances = distances ?: FloatArray(ComposingTaps.LETTERS)
         tapDistances.fill(100f)
@@ -2749,7 +2712,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 val dy = maxOf(pk.rect.top - tapPoint[1], 0f, tapPoint[1] - pk.rect.bottom) / pitch
                 tapDistances[ComposingTaps.SPACE] = minOf(tapDistances[ComposingTaps.SPACE], dx * dx + dy * dy)
                 val down = maxOf(pk.rect.top - tapPoint[1], 0f, tapPoint[1] - pk.rect.bottom) / (pk.rect.height() + editGap).coerceAtLeast(1f)
-                model[TapSearch.SPACE] = minOf(model[TapSearch.SPACE], dx * dx + down * down)
+                model[TapFeatures.SPACE] = minOf(model[TapFeatures.SPACE], dx * dx + down * down)
                 continue
             }
             // In key spacing (the drawn width plus the gap), as the predictor's costs assume: neighbouring
@@ -2763,7 +2726,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 if (letter.isLetter() && letter.code < ComposingTaps.LETTERS) {
                     tapDistances[letter.code] = minOf(tapDistances[letter.code], dx * dx + dy * dy)
                 }
-                val column = TapSearch.LETTERS.indexOf(letter)
+                val column = TapFeatures.LETTERS.indexOf(letter)
                 if (column >= 0) model[column] = minOf(model[column], dx * dx + down * down)
             }
         }

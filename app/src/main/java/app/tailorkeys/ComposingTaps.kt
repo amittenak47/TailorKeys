@@ -11,8 +11,6 @@ class ComposingTaps {
     private val xs = FloatArray(MAX_LENGTH) { Float.NaN }
     private val ys = FloatArray(MAX_LENGTH)
     private val layouts = IntArray(MAX_LENGTH)
-    /** Per letter, the autocorrect model's tap features (TapSearch: squared distances in key spacings), when tapped. */
-    private val features = arrayOfNulls<FloatArray>(MAX_LENGTH)
     private var enteredCount = 0
     private var count = 0
     var word: String = ""
@@ -25,25 +23,22 @@ class ComposingTaps {
     /** An independent copy, kept for look-back after the word is finished and these rows are reused. */
     fun copy() = ComposingTaps().also { c ->
         costs.copyInto(c.costs); known.copyInto(c.known); entered.copyInto(c.entered)
-        xs.copyInto(c.xs); ys.copyInto(c.ys); layouts.copyInto(c.layouts); features.copyInto(c.features)
+        xs.copyInto(c.xs); ys.copyInto(c.ys); layouts.copyInto(c.layouts)
         c.count = count; c.enteredCount = enteredCount; c.word = word
     }
 
     fun sync(prefix: String) {
         if (word == prefix) return
-        known.fill(false); entered.fill(false); xs.fill(Float.NaN); features.fill(null)
+        known.fill(false); entered.fill(false); xs.fill(Float.NaN)
         count = 0; enteredCount = 0
         word = prefix
         revision++
     }
 
-    /** [model]: the tap's model features; without them they're read from [distances] (in the same units). */
-    fun append(prefix: String, letter: String, distances: FloatArray?, x: Float = Float.NaN, y: Float = Float.NaN, layout: Int = 0,
-               model: FloatArray? = null) {
+    fun append(prefix: String, letter: String, distances: FloatArray?, x: Float = Float.NaN, y: Float = Float.NaN, layout: Int = 0) {
         sync(prefix)
         val index = word.length
         word += letter
-        if (index < MAX_LENGTH) features[index] = if (letter.length != 1) null else model?.copyOf() ?: distances?.let { modelFeatures(it) }
         if (index < MAX_LENGTH && letter.length == 1) { entered[index] = true; enteredCount++ }
         if (index < MAX_LENGTH) { xs[index] = if (letter.length == 1) x else Float.NaN; ys[index] = y; layouts[index] = layout }
         if (index < MAX_LENGTH && letter.length == 1 && distances != null) {
@@ -66,7 +61,7 @@ class ComposingTaps {
         val index = word.lastIndex
         if (index < MAX_LENGTH && known[index]) { known[index] = false; count-- }
         if (index < MAX_LENGTH && entered[index]) { entered[index] = false; enteredCount-- }
-        if (index < MAX_LENGTH) { xs[index] = Float.NaN; features[index] = null }
+        if (index < MAX_LENGTH) xs[index] = Float.NaN
         word = word.dropLast(1)
         revision++
     }
@@ -79,11 +74,6 @@ class ComposingTaps {
     fun x(index: Int) = xs[index]
     fun y(index: Int) = ys[index]
     fun layout(index: Int) = layouts[index]
-    /**
-     * The model's features of the tap for letter [index] of the word, if it had one: letters already there when the
-     * cursor came back to the word (listen, then ing) have none (TailorKeysService.modelWordTaps fills them in).
-     */
-    fun modelTap(index: Int): FloatArray? = if (index < MAX_LENGTH) features[index] else null
     fun cost(index: Int, letter: Char): Int =
         if (letter.code < LETTERS) costs[index * LETTERS + letter.code].toInt() else 10
 
@@ -102,9 +92,5 @@ class ComposingTaps {
         /** The space bar's row in the tap costs: how plausibly a tap was meant for space. */
         const val SPACE = ' '.code
         const val MAX_LENGTH = 64
-
-        /** The model's features from a tap's distances row: a to z, the apostrophe, then the space bar. */
-        fun modelFeatures(distances: FloatArray) = FloatArray(TapSearch.FEATURES) { i ->
-            if (i == TapSearch.SPACE) distances[SPACE] else distances[TapSearch.LETTERS[i].code] }
     }
 }

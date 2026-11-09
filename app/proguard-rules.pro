@@ -19,7 +19,3 @@
     static void checkReturnedValueIsNotNull(java.lang.Object, java.lang.String);
     static void checkFieldIsNotNull(java.lang.Object, java.lang.String);
 }
-
-# ONNX Runtime (the autocorrect model) reaches its Java classes from native code by name; its own rules keep only
-# its telemetry.
--keep class ai.onnxruntime.** { *; }

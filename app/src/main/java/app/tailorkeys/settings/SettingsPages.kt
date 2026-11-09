@@ -344,8 +344,8 @@ internal fun LazyListScope.settingsSection(section: SettingsSection, state: Sett
         OptionGroup {
             ActionRow("Guide") { context.startActivity(Intent(context, OnboardingActivity::class.java)) }
             ActionRow("About", onClick = onAbout)
-            ToggleRow("Log autocorrect decisions", state.bool(Prefs.LOG_DECISIONS),
-                note = "For testing: writes what autocorrect saw and chose to the device log, and keeps your taps and its fixes in a file on this device, including what you type.") {
+            ToggleRow("Keep a typing log", state.bool(Prefs.LOG_DECISIONS),
+                note = "For testing: keeps your taps in a file on this device, including what you type. Nothing leaves the device.") {
                 state.set(Prefs.LOG_DECISIONS, it)
             }
             ActionRow("Reset settings", destructive = true, onClick = onReset)

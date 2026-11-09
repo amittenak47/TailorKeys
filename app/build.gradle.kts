@@ -23,11 +23,6 @@ android {
         compose = true
     }
 
-    // The autocorrect model is copied out of the APK once and opened from a file, which needs it stored as is.
-    androidResources {
-        noCompress += "onnx"
-    }
-
     buildTypes {
         // R8 shrinks, optimizes and obfuscates release builds. Keep build/outputs/mapping/release/mapping.txt
         // from every release you ship: it's the only way to read that version's crash stack traces.
@@ -50,11 +45,6 @@ kotlin {
     }
 }
 
-// Unit tests run the model with the desktop build only; the Android one's native libraries can't load on the PC.
-configurations.matching { it.name.endsWith("UnitTestRuntimeClasspath") }.configureEach {
-    exclude(group = "com.microsoft.onnxruntime", module = "onnxruntime-android")
-}
-
 tasks.withType<Test>().configureEach {
     // Several tests keep a predictor for the whole class; with the extended English lists each holds about 60 MB.
     maxHeapSize = "512m"
@@ -73,10 +63,6 @@ tasks.withType<Test>().configureEach {
 dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
-    // The autocorrect model's runtime (chosen 2026-11-01): Android here, the desktop build for unit tests. The desktop
-    // build stays at 1.17.3: later Windows builds need the C++ runtime 14.40+, and the JDK loads its own older copy.
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")
-    testImplementation("com.microsoft.onnxruntime:onnxruntime:1.17.3")
     // Last stable Compose line compatible with compileSdk 36 / AGP 8.11.
     val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
     implementation(composeBom)

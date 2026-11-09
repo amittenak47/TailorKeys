@@ -8,11 +8,10 @@ import java.util.concurrent.Executors
 
 /**
  * Real typing for tools/lm (Settings, Help and about, "Log autocorrect decisions"; off by default, as it keeps what you
- * type): every key with where it was tapped and the model's features for it, and every model fix as it is written,
- * one JSON object per line in files/typing-log/<field start>.jsonl, a file per field. Kept on this device only; read
- * with adb (run-as on a debug build). Only where the decision log may run (never in passwords or incognito fields).
- *   key   the key's code, the tap's x and y, the model's features for it when it typed a letter
- *   fix   a fix written: from the space bar or a recheck, the word as shown, what it became, ms since the word's space
+ * type): every key with where it was tapped and its tap features (TapFeatures), one JSON object per line in
+ * files/typing-log/<field start>.jsonl, a file per field. Kept on this device only; read with adb (run-as on a debug
+ * build). Never in passwords or incognito fields.
+ *   key   the key's code, the tap's x and y, its tap features when it typed a letter
  *   text  the text before the cursor when a field ends (the last 2,000 characters), to line the keys up against
  */
 internal object TypingLog {
@@ -30,9 +29,6 @@ internal object TypingLog {
         if (!x.isNaN() && !y.isNaN()) put("x", round(x)).put("y", round(y))
         if (features != null) put("f", JSONArray(features.map { round(it) }))
     })
-
-    fun fix(source: String, shown: String, fix: String, delayMs: Long) =
-        add(JSONObject().put("e", "fix").put("source", source).put("shown", shown).put("fix", fix).put("ms", delayMs))
 
     fun text(before: String) = add(JSONObject().put("e", "text").put("before", before.takeLast(2000)))
 
