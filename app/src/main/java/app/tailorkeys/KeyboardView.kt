@@ -444,12 +444,13 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         refreshMotion()
+        readNavigationInset()
         invalidate()
     }
 
     override fun onWindowVisibilityChanged(visibility: Int) {
         super.onWindowVisibilityChanged(visibility)
-        if (visibility == VISIBLE) { refreshMotion(); invalidate() }
+        if (visibility == VISIBLE) { refreshMotion(); readNavigationInset(); invalidate() }
     }
 
     fun reloadSettings() {
@@ -502,6 +503,21 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private var navigationInset = 0
 
     override fun onApplyWindowInsets(insets: WindowInsets): WindowInsets {
+        takeNavigationInset(insets)
+        return super.onApplyWindowInsets(insets)
+    }
+
+    /**
+     * Android sends insets only when they change, so a keyboard view made after that never hears them: it also reads
+     * the window's current insets whenever it is attached or shown.
+     */
+    private fun readNavigationInset() {
+        if (!inKeyboard) return
+        rootWindowInsets?.let(::takeNavigationInset)
+        requestApplyInsets()
+    }
+
+    private fun takeNavigationInset(insets: WindowInsets) {
         val bottom = if (Build.VERSION.SDK_INT >= 30) insets.getInsets(WindowInsets.Type.navigationBars()).bottom else 0
         if (bottom != navigationInset) {
             navigationInset = bottom
@@ -509,7 +525,6 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             requestLayout()
             invalidate()
         }
-        return super.onApplyWindowInsets(insets)
     }
 
     private fun ensureLayout() {
