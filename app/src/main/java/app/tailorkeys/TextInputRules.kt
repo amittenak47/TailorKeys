@@ -38,6 +38,15 @@ object TextInputRules {
     fun doubleSpace(enabled: Boolean, before: CharSequence, elapsed: Long, password: Boolean = false): Boolean =
         enabled && !password && elapsed in 0..599 && before.length >= 2 && before.last() == ' ' && before[before.length - 2].isLetterOrDigit()
 
+    /** How near a letter (squared, in key spacings) a space tap has to be to count as that letter's tap slipping down. */
+    const val SLIP_REACH = 0.6f
+
+    /**
+     * Two quick spaces where only the first sat at the letters' edge of the bar: a letter's tap that fell short, then the
+     * real space, so no sentence ended (can -> "ca. "). Two taps at the same edge are one thumb repeating, and still count.
+     */
+    fun slippedSpace(first: Float, second: Float) = first < SLIP_REACH && second >= SLIP_REACH
+
     fun wordForms(word: String, exists: (String) -> Boolean): List<String> {
         if (word.isEmpty() || !word.all { it.isLetter() }) return emptyList()
         val lower = word.lowercase()

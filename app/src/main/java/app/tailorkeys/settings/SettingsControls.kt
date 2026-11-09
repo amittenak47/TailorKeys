@@ -96,7 +96,7 @@ internal fun SettingsDropdown(label: String, value: String, choices: List<String
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SettingSlider(label: String, value: Int, pref: IntPref, valueText: String,
-    onStart: () -> Unit = {}, trailing: (@Composable () -> Unit)? = null, onChange: (Int) -> Unit) {
+    onStart: () -> Unit = {}, trailing: (@Composable () -> Unit)? = null, max: Int = pref.max, onChange: (Int) -> Unit) {
     var changing by remember { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 8.dp)) {
@@ -110,7 +110,7 @@ internal fun SettingSlider(label: String, value: Int, pref: IntPref, valueText: 
                 val rounded = it.roundToInt()
                 if (rounded != value) onChange(rounded)
             }, onValueChangeFinished = { changing = false },
-                valueRange = pref.min.toFloat()..pref.max.toFloat(),
+                valueRange = pref.min.toFloat()..max.toFloat(),
                 modifier = Modifier.weight(1f).height(44.dp).semantics {
                     contentDescription = label
                     stateDescription = valueText

@@ -2,6 +2,7 @@ package app.tailorkeys
 
 import app.tailorkeys.KeyboardSettings
 import app.tailorkeys.layout.KeyGrid
+import app.tailorkeys.layout.Layer
 import app.tailorkeys.layout.Template
 import org.json.JSONArray
 import org.json.JSONObject
@@ -204,15 +205,28 @@ internal class LayoutLibrary(
         return changed
     }
 
-    fun edit(key: String, grid: KeyGrid) {
+    /**
+     * Saves an edit to a layout. [halves]: its halves' shapes and placement when it is not in use (edited on the
+     * preview, KeyboardSettings.halfGeometry's format), kept in its saved settings; the layout in use keeps the live ones.
+     */
+    fun edit(key: String, grid: KeyGrid, halves: String? = null) {
         require(grid.isSound())
         if (inUse == key) saveGrid(grid)
         if (key == "draft") prefs.write(mapOf(LayoutKeys.DRAFT to draftJson(grid.toJson(),
-            if (inUse == key) loadSettings() else entries().firstOrNull { it.key == key }?.settings)))
+            if (inUse == key) loadSettings() else withHalves(entries().firstOrNull { it.key == key }?.settings, halves))))
         else {
             check(saved().any { it.key == key })
-            prefs.write(mapOf(LayoutKeys.SAVED to encode(saved().map { if (it.key == key) it.copy(json = grid.toJson(), settings = if (inUse == key) loadSettings() else it.settings) else it })))
+            prefs.write(mapOf(LayoutKeys.SAVED to encode(saved().map { if (it.key == key) it.copy(json = grid.toJson(),
+                settings = if (inUse == key) loadSettings() else withHalves(it.settings, halves)) else it })))
         }
+    }
+
+    private fun withHalves(snapshot: String?, halves: String?): String? {
+        if (halves == null) return snapshot
+        val out = JSONObject(snapshot ?: loadSettings())
+        val h = JSONObject(halves)
+        for (k in h.keys()) out.put(k, h.get(k))
+        return out.toString()
     }
 
     private fun draftJson(grid: String, settings: String?) = JSONObject(grid).apply { settings?.let { put("settings", JSONObject(it)) } }.toString()
@@ -299,8 +313,12 @@ internal class LayoutLibrary(
         }
         fun cleanName(name: String) = name.trim().take(24).ifEmpty { "Custom" }
         fun sameGrid(a: KeyGrid, b: KeyGrid): Boolean = a.rows == b.rows && a.items.size == b.items.size &&
-            a.items.sortedWith(compareBy({ it.r }, { it.c })).zip(b.items.sortedWith(compareBy({ it.r }, { it.c }))).all { (x, y) ->
-                x.r == y.r && x.c == y.c && x.w == y.w && x.keys == y.keys
+            Layer.entries.all { layer ->
+                val left = a.layer(layer); val right = b.layer(layer)
+                (0 until a.rows).all { left.rowScale(it) == right.rowScale(it) }
+            } && a.items.sortedWith(compareBy({ it.r }, { it.c })).zip(b.items.sortedWith(compareBy({ it.r }, { it.c }))).all { (x, y) ->
+                // A resized or moved key (its edges) makes a different layout too.
+                x.r == y.r && x.c == y.c && x.w == y.w && x.keys == y.keys && x.edges.contentEquals(y.edges)
             }
     }
 }

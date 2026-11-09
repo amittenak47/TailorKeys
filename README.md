@@ -8,7 +8,9 @@ TailorKeys has no internet permission. Nothing typed on it can leave the phone. 
 
 ![Typing on TailorKeys at about 80 words a minute without looking at the keys](docs/demo/typing-demo.gif)
 
-Typed on a tablet at about 80 words a minute without looking at the keys, in the keyboard's "Try it" screen. Garbled words are fixed a moment later. The autocorrect model is still in training, so some mistakes stay in. The model is on the `autocorrect-model-keyboard` branch.
+Typed on a tablet at about 80 words a minute without looking at the keys, in the keyboard's "Try it" screen, with the first autocorrect prototype. Garbled words are fixed a moment later, and some mistakes stay in.
+
+The autocorrect model is still in training. The prototype is retired and not included, so builds from this repository use the keyboard's earlier corrector for now. What the prototype got wrong, and what it taught us, is in [docs/autocorrect-prototype.md](docs/autocorrect-prototype.md).
 
 ## Build and install
 

@@ -16,6 +16,8 @@ object Keys {
     const val NUM = "num"
     const val SYM = "sym"
     const val INSERT = "insert"
+    /** The optional Shift key, as on the iPhone; without one the abc key shifts. */
+    const val SHIFT = "shift"
     /** An empty cell that holds its place: shown only while rearranging; typing skips it. */
     const val GAP = "gap"
 }
@@ -27,11 +29,33 @@ enum class Template(val title: String, val split: Boolean) {
     THUMBS("Thumb keys", false),
 }
 
+/** Which outside column a center key moves to when the split gap is too narrow for the center column. */
+enum class CenterSide { AUTO, LEFT, RIGHT }
+
 /** One key on the grid. A key with more than one entry in [keys] is a swipe key that cycles through them. */
 class GridKey(val id: Int, var r: Int, var c: Int, var w: Int, val keys: MutableList<String>, var idx: Int = 0) {
     val isStack get() = keys.size > 1
     val isSpace get() = keys.size == 1 && keys[0] == Keys.SPACE
     val isGap get() = keys.size == 1 && keys[0] == Keys.GAP
+    /** Only center keys use it. */
+    var side = CenterSide.AUTO
+    /**
+     * How far each edge sits from the key's cell (left, top, right, bottom): across in the row's key widths, down in
+     * rows. Set by resizing and nudging the key in the editor; all zero for a key that fills its cell.
+     */
+    var edges = FloatArray(4)
+    val shaped get() = edges.any { it != 0f }
+    /** Copies the center side and the edges from [from], for a copy of the same key. */
+    fun withSide(from: GridKey) = also { side = from.side; edges = from.edges.copyOf() }
+    /**
+     * After the key's cells change (moved into fewer columns, say) or edges are read in: edges that would leave it
+     * narrower or shorter than [KeyGrid.MIN_SIZE] are dropped, so a narrowed wide key can't end up with no width.
+     */
+    fun keepSize() = also {
+        for (i in 0..3) if (!edges[i].isFinite()) edges[i] = 0f
+        if (w + edges[2] - edges[0] < KeyGrid.MIN_SIZE) { edges[0] = 0f; edges[2] = 0f }
+        if (1 + edges[3] - edges[1] < KeyGrid.MIN_SIZE) { edges[1] = 0f; edges[3] = 0f }
+    }
 }
 
 /**
@@ -39,6 +63,16 @@ class GridKey(val id: Int, var r: Int, var c: Int, var w: Int, val keys: Mutable
  * A key never crosses between those three regions. Spacebars stretch toward the center over empty cells.
  */
 class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>, private var nextId: Int) {
+
+    /** Relative row heights, normalized when placed so the rows still fill their block. */
+    private var rowScales = FloatArray(rows.coerceIn(4, 5)) { 1f }
+
+    fun rowScale(row: Int): Float = rowScales.getOrElse(row) { 1f }
+
+    /** Invalid imported values fall back to the cell; bounded scales keep every row usable. */
+    fun setRowScale(row: Int, scale: Float) {
+        if (row in rowScales.indices) rowScales[row] = if (scale.isFinite()) scale.coerceIn(.4f, 2.5f) else 1f
+    }
 
     /**
      * Keys set aside in the editor: removed keys and faces taken off a swipe key wait here (newest last)
@@ -53,8 +87,8 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
     private val layers = HashMap<Layer, KeyGrid>()
 
     /** Deep copy with the same key ids, so a preview can be matched key for key with the live grid. */
-    fun copy(): KeyGrid = KeyGrid(rows, items.mapTo(mutableListOf()) { GridKey(it.id, it.r, it.c, it.w, it.keys.toMutableList(), it.idx) }, nextId)
-        .also { copy -> tray.forEach { copy.tray.add(it.toMutableList()) }; layers.forEach { (l, g) -> copy.layers[l] = g.copy() }; copy.source = source }
+    fun copy(): KeyGrid = KeyGrid(rows, items.mapTo(mutableListOf()) { GridKey(it.id, it.r, it.c, it.w, it.keys.toMutableList(), it.idx).withSide(it) }, nextId)
+        .also { copy -> tray.forEach { copy.tray.add(it.toMutableList()) }; layers.forEach { (l, g) -> copy.layers[l] = g.copy() }; copy.source = source; copy.rowScales = rowScales.copyOf() }
 
     /** The first of a layer's three rows: below the number row when there is one. */
     private val layerTop get() = rows - 4
@@ -71,12 +105,18 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
     fun layer(layer: Layer): KeyGrid {
         if (layer == Layer.ABC) return this
         val own = layers[layer] ?: defaultLayer(layer)
-        val shown = own.items.mapTo(mutableListOf()) { GridKey(it.id, it.r + layerTop, it.c, it.w, it.keys.toMutableList(), it.idx) }
+        val shown = own.items.mapTo(mutableListOf()) { GridKey(it.id, it.r + layerTop, it.c, it.w, it.keys.toMutableList(), it.idx).withSide(it) }
         for (key in items) if (key.r == rows - 1) {
             val keys = sharedKeys(key)
-            shown += GridKey(SHARED_ID + key.id, key.r, key.c, key.w, keys, if (keys == key.keys) key.idx else 0)
+            shown += GridKey(SHARED_ID + key.id, key.r, key.c, key.w, keys, if (keys == key.keys) key.idx else 0).withSide(key)
         }
-        return KeyGrid(rows, shown, own.nextId).also { g -> own.tray.forEach { g.tray.add(it.toMutableList()) }; g.source = this to layer }
+        return KeyGrid(rows, shown, own.nextId).also { g -> own.tray.forEach { g.tray.add(it.toMutableList()) }; g.source = this to layer
+            for (r in 0 until rows) g.setRowScale(r, when {
+                r == rows - 1 -> rowScale(r)
+                r >= layerTop -> own.rowScale(r - layerTop)
+                else -> rowScale(r)
+            })
+        }
     }
 
     /** What a letters' bottom-row key shows on 123 and #+=. */
@@ -106,16 +146,23 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         val bottom = rows - 1
         var next = maxOf(edited.nextId, edited.items.filter { !isShared(it) }.maxOfOrNull { it.id + 1 } ?: 0)
         val own = edited.items.filter { it.r in layerTop until bottom }.mapTo(mutableListOf()) {
-            GridKey(if (isShared(it)) next++ else it.id, it.r - layerTop, it.c, it.w, it.keys.toMutableList(), it.idx)
+            GridKey(if (isShared(it)) next++ else it.id, it.r - layerTop, it.c, it.w, it.keys.toMutableList(), it.idx).withSide(it)
         }
-        layers[layer] = KeyGrid(4, own, next).also { g -> edited.tray.forEach { g.tray.add(it.toMutableList()) } }
+        layers[layer] = KeyGrid(4, own, next).also { g ->
+            edited.tray.forEach { g.tray.add(it.toMutableList()) }
+            for (r in 0..2) g.setRowScale(r, edited.rowScale(r + layerTop))
+        }
+        setRowScale(bottom, edited.rowScale(bottom))
+        // The number row shown above this layer is the letters layer's own, like the bottom row: resized here, it
+        // changes there too.
+        for (r in 0 until layerTop) setRowScale(r, edited.rowScale(r))
         val before = items.filter { it.r == bottom }.associateBy { it.id }
         items.removeAll { it.r == bottom }
         for (key in edited.items) if (key.r == bottom) {
             val original = if (isShared(key)) before[key.id - SHARED_ID] else null
             val unchanged = original != null && sharedKeys(original) == key.keys
             items += GridKey(original?.id ?: nextId++, bottom, key.c, key.w,
-                if (unchanged) original!!.keys else key.keys.toMutableList(), if (unchanged) original!!.idx else key.idx)
+                if (unchanged) original!!.keys else key.keys.toMutableList(), if (unchanged) original!!.idx else key.idx).withSide(key)
         }
     }
 
@@ -130,6 +177,60 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         if (key !in items) items.add(key)
         if (index < tray.size) tray.removeAt(index)
         return true
+    }
+
+    /**
+     * Closes up row [r] of [region] (0 left, 1 center, 2 right) after a key was resized or moved: [fixed] (and any
+     * gap) keeps its place and size, and the other keys share the stretches between, from the row's first cell to
+     * its last, each in proportion to its width, edge to edge. Heights stay. Returns whether anything moved.
+     */
+    fun compactRow(r: Int, region: Int, fixed: GridKey? = null): Boolean {
+        fun left(k: GridKey) = k.c + k.edges[0]
+        fun right(k: GridKey) = k.c + k.w + k.edges[2]
+        val row = items.filter { it.r == r && region(it.c) == region }.sortedBy { (left(it) + right(it)) / 2 }
+        if (row.size < 2) return false
+        val end = row.maxOf { it.c + it.w }.toFloat()
+        var from = row.minOf { it.c }.toFloat()
+        val stretch = ArrayList<GridKey>()
+        var changed = false
+        fun fill(to: Float) {
+            if (stretch.isEmpty()) return
+            val total = stretch.sumOf { (right(it) - left(it)).toDouble() }.toFloat().coerceAtLeast(1e-3f)
+            val room = (to - from).coerceAtLeast(MIN_SIZE * stretch.size)
+            var x = from
+            for (k in stretch) {
+                val w = room * (right(k) - left(k)) / total
+                val e0 = (x - k.c).coerceIn(-MAX_EDGE, MAX_EDGE)
+                val e2 = (x + w - k.c - k.w).coerceIn(-MAX_EDGE, MAX_EDGE)
+                if (abs(e0 - k.edges[0]) > 1e-4f || abs(e2 - k.edges[2]) > 1e-4f) { k.edges[0] = e0; k.edges[2] = e2; changed = true }
+                x += w
+            }
+            stretch.clear()
+        }
+        for (k in row) {
+            if (k === fixed || k.isGap) { fill(left(k)); from = right(k) } else stretch += k
+        }
+        fill(end)
+        return changed
+    }
+
+    /** [compactRow] for every row of every region. */
+    fun compactAll(fixed: GridKey? = null): Boolean {
+        var changed = false
+        for (r in 0 until rows) for (region in 0..2) if (compactRow(r, region, fixed)) changed = true
+        return changed
+    }
+
+    /** Whether the letters have a Shift key: then the abc key on them only changes layer. */
+    fun hasShift() = items.any { Keys.SHIFT in it.keys }
+
+    /**
+     * Puts keys in the tray to drag in: Shift when the letters have none, and a period for anywhere it's easier to
+     * reach (the center gap, say), each when the tray doesn't already hold one.
+     */
+    fun offerExtras() {
+        if (!hasShift() && tray.none { Keys.SHIFT in it }) tray.add(mutableListOf(Keys.SHIFT))
+        if (tray.none { "." in it }) tray.add(mutableListOf("."))
     }
 
     /** The faces at tray [index]; one past the last entry is the editor's endless supply of gaps. */
@@ -191,7 +292,8 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
                     a.r == b.r && a.c == b.c && a.w == b.w && a.keys == b.keys }) {
                 val result = template(t, lang)
                 if (rows == 5) result.setNumberRow(true)
-                result.items.zip(items).forEach { (a, b) -> a.idx = b.idx }
+                result.items.zip(items).forEach { (a, b) -> a.idx = b.idx; a.withSide(b) }
+                result.rowScales = rowScales.copyOf()
                 tray.forEach { result.tray.add(it.toMutableList()) }
                 layers.forEach { (l, g) -> result.layers[l] = g.copy() }
                 return result
@@ -271,7 +373,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         val r0 = key.r; val c0 = key.c; val w0 = key.w
         key.r = r; key.c = c; key.w = minOf(key.w, bounds(c).last - c + 1)
         while (!valid(key) && key.w > 1) key.w--
-        if (valid(key)) return true
+        if (valid(key)) { key.keepSize(); return true }
         key.r = r0; key.c = c0; key.w = w0
         return false
     }
@@ -281,6 +383,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         if (space.w < 2 || region(space.c) == 1 || key.isSpace) return false
         key.r = space.r; key.w = 1
         if (region(space.c) == 0) { space.w--; key.c = space.c + space.w } else { key.c = space.c; space.c++; space.w-- }
+        key.keepSize(); space.keepSize()
         return true
     }
 
@@ -315,8 +418,9 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         val p = (if (right != null && left != null) (if (left.chain.size < right.chain.size) left else right) else right ?: left)
             ?: return false
         p.chain.forEach { it.c += p.dir }
-        p.absorb?.let { s -> if (p.dir > 0) s.c++; s.w-- }
+        p.absorb?.let { s -> if (p.dir > 0) s.c++; s.w--; s.keepSize() }
         key.r = r; key.w = 1; key.c = if (p.dir > 0) b else b - 1
+        key.keepSize()
         return true
     }
 
@@ -376,11 +480,13 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
             items.forEach { it.r++ }
             "1234567890".forEachIndexed { i, d -> items.add(GridKey(nextId++, 0, if (i < 5) i else i + 1, 1, mutableListOf("d$d"))) }
             rows = 5
+            rowScales = floatArrayOf(1f) + rowScales
         } else if (!on && rows == 5) {
             items.removeAll { it.r == 0 && it.keys.all(KeyText::isDigit) }
             if (items.any { it.r == 0 }) return false
             items.forEach { it.r-- }
             rows = 4
+            rowScales = rowScales.drop(1).toFloatArray()
         }
         return true
     }
@@ -389,16 +495,29 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
     fun isSound() = rows in 4..5 && items.size in 1..(rows * COLS) && items.all { valid(it) }
 
     private fun itemsJson() = JSONArray().apply {
-        items.forEach { put(JSONObject().put("r", it.r).put("c", it.c).put("w", it.w).put("k", JSONArray(it.keys)).put("i", it.idx)) }
+        items.forEach {
+            put(JSONObject().put("r", it.r).put("c", it.c).put("w", it.w).put("k", JSONArray(it.keys)).put("i", it.idx)
+                .apply { if (it.side != CenterSide.AUTO) put("s", it.side.name) }
+                .apply { if (it.shaped) put("e", JSONArray(it.edges.map { v -> Math.round(v * 1000) / 1000.0 })) })
+        }
     }
     private fun trayJson() = JSONArray().apply { tray.forEach { put(JSONArray(it)) } }
 
+    private fun writeRowScales(json: JSONObject): JSONObject = json.apply {
+        if (rowScales.any { it != 1f }) put("rowHeights", JSONArray(rowScales.map { Math.round(it * 1000) / 1000.0 }))
+    }
+
+    private fun readRowScales(json: JSONObject) {
+        val values = json.optJSONArray("rowHeights") ?: return
+        for (r in 0 until rows) setRowScale(r, values.optDouble(r, 1.0).toFloat())
+    }
+
     fun toJson(): String {
-        val json = JSONObject().put("rows", rows).put("items", itemsJson())
+        val json = writeRowScales(JSONObject().put("rows", rows).put("items", itemsJson()))
         if (tray.isNotEmpty()) json.put("tray", trayJson())
         // Edited 123 and #+= layers ride along; layouts without them (and older apps) use the defaults.
         if (layers.isNotEmpty()) json.put("layers", JSONObject().apply {
-            for (l in listOf(Layer.NUM, Layer.SYM)) layers[l]?.let { put(l.name.lowercase(), JSONObject().put("items", it.itemsJson()).put("tray", it.trayJson())) }
+            for (l in listOf(Layer.NUM, Layer.SYM)) layers[l]?.let { put(l.name.lowercase(), it.writeRowScales(JSONObject().put("items", it.itemsJson()).put("tray", it.trayJson()))) }
         })
         return json.toString()
     }
@@ -419,6 +538,10 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
         const val COLS = 11
         const val CENTER = 5
         const val MAX_TRAY = 24
+        /** How far a key's edge can move from its cell, in key widths or rows. */
+        const val MAX_EDGE = 1.5f
+        /** The smallest a resized key gets, in key widths and rows. */
+        const val MIN_SIZE = 0.4f
         /** Ids of a layer view's shared keys (see [layer]) start here, clear of any id a layout gives its own keys. */
         const val SHARED_ID = 100_000
 
@@ -446,7 +569,14 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
                 val j = a.getJSONObject(i)
                 val ks = j.getJSONArray("k")
                 items.add(GridKey(i, integer(j, "r"), integer(j, "c"), integer(j, "w"), MutableList(ks.length()) { ks.getString(it) },
-                    if (j.has("i")) integer(j, "i") else 0))
+                    if (j.has("i")) integer(j, "i") else 0).also { k ->
+                        CenterSide.entries.firstOrNull { it.name == j.optString("s") }?.let { k.side = it }
+                        j.optJSONArray("e")?.takeIf { it.length() == 4 }?.let { e ->
+                            // An imported file may hold anything: NaN is no edge, and the key keeps a usable size.
+                            k.edges = FloatArray(4) { i -> e.optDouble(i, 0.0).toFloat().takeIf { it.isFinite() }?.coerceIn(-MAX_EDGE, MAX_EDGE) ?: 0f }
+                            k.keepSize()
+                        }
+                    })
             }
             return items
         }
@@ -550,6 +680,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
                 if (a.length() !in 1..55) return null
                 val items = parseItems(a)
                 KeyGrid(o.get("rows").toString().toInt(), items, items.size).takeIf { it.isSound() }?.also { grid ->
+                    grid.readRowScales(o)
                     parseTray(o.optJSONArray("tray"), grid)
                     // An edited layer is kept only if every key fits its three rows; otherwise it falls back to the default.
                     o.optJSONObject("layers")?.let { ls ->
@@ -558,6 +689,7 @@ class KeyGrid private constructor(var rows: Int, val items: MutableList<GridKey>
                             val parsed = parseItems(lj.getJSONArray("items"))
                             val own = KeyGrid(4, parsed, parsed.size)
                             if (parsed.size > 3 * COLS || !parsed.all { own.valid(it) && it.r < 3 }) continue
+                            own.readRowScales(lj)
                             parseTray(lj.optJSONArray("tray"), own)
                             grid.layers[l] = own
                         }

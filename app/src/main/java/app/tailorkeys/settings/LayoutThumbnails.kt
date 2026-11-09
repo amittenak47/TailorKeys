@@ -28,6 +28,7 @@ internal class LayoutThumbnails(private val context: Context, settings: Keyboard
             Prefs.height(landscape).key, Prefs.width(landscape).key, Prefs.alignKey(landscape),
             Prefs.bottomPadding(landscape).key, Prefs.splitKey(landscape), Prefs.splitGap(landscape).key,
             Prefs.tilt(landscape).key, Prefs.splitLeft(landscape).key, Prefs.splitRight(landscape).key, LayoutKeys.TRIAL, LayoutKeys.TRIAL_SPLIT)
+        revisions.read(*(Prefs.halfShape(landscape, 0) + Prefs.halfShape(landscape, 1)).map { it.key }.toTypedArray())
         return cache.signature(entry)
     }
     suspend fun keys(entry: LayoutEntry): List<KeyboardView.ThumbnailKey> {

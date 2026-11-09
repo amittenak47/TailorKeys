@@ -36,8 +36,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
-internal fun LazyListScope.insertPanelOptions(settings: KeyboardSettings, page: String, back: () -> Unit) {
-    item("panel-header") { TextButton(back, Modifier.heightIn(min = 48.dp)) { Text("‹  $page") } }
+internal fun LazyListScope.insertPanelControls(settings: KeyboardSettings, page: String) {
     item("panel-controls") { InsertSettingsControls(settings, page) }
 }
 

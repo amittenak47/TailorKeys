@@ -24,5 +24,19 @@ internal object SplitPlacement {
         if (side == 0) dx.coerceIn(-left, max(-left, room - right - left))
         else dx.coerceIn(min(right, right - (room - left)), right)
 
+    /** Mirrored movement changes both insets equally and preserves room for center keys on either route. */
+    fun mirroredDrag(side: Int, dx: Float, left: Float, right: Float, room: Float,
+                     gapAtEdges: Float, need: Float): Pair<Float, Float> {
+        val low = -min(left, right)
+        val high = max(low, (room - left - right) / 2)
+        val wanted = (if (side == 0) dx else -dx).coerceIn(low, high)
+        val gapLimit = (gapAtEdges - left - right - need) / 2
+        val outsideLimit = need - min(left, right)
+        val delta = if (need <= 0f || wanted <= gapLimit || wanted >= outsideLimit) wanted
+        else listOfNotNull(gapLimit.takeIf { it in low..high }, outsideLimit.takeIf { it in low..high })
+            .minByOrNull { kotlin.math.abs(it - wanted) } ?: 0f
+        return left + delta to right + delta
+    }
+
     fun permille(px: Float, width: Float) = if (width <= 0f) 0 else (px / width * 1000).roundToInt().coerceIn(0, 1000)
 }

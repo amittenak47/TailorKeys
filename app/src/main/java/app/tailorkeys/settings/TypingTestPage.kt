@@ -17,6 +17,13 @@ import android.view.inputmethod.InputMethodManager
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.platform.InterceptPlatformTextInput
 import androidx.compose.ui.platform.PlatformTextInputMethodRequest
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -52,6 +59,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.tailorkeys.DictionaryWords
+import app.tailorkeys.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -64,14 +72,15 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
     val keyboard = LocalSoftwareKeyboardController.current
     val view = LocalView.current
     val focus = remember { FocusRequester() }
-    var mode by remember { mutableStateOf(TypingMode.FREE) }
+    var kind by remember { mutableStateOf(TestKind.FREE) }
+    val mode = if (kind == TestKind.FREE) TypingMode.FREE else TypingMode.TEST
     var sentenceIndex by remember { mutableIntStateOf(SentenceBank.sentences.indices.random()) }
     var generation by remember { mutableIntStateOf(0) }
     fun currentIme() = Settings.Secure.getString(context.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD) ?: "unknown"
     var keyboardId by remember { mutableStateOf(currentIme()) }
     val tailorkeys = isTailorKeysIme(keyboardId)
     var comparing by remember { mutableStateOf(false) }
-    var session by remember(mode, generation) { mutableStateOf(TypingSession(mode, SentenceBank.sentences[sentenceIndex], keyboardId)) }
+    var session by remember(kind, generation) { mutableStateOf(TypingSession(mode, kind.text(sentenceIndex), keyboardId)) }
     var fieldValue by remember(session) { mutableStateOf(TextFieldValue()) }
     var tick by remember(session) { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     var finished by remember(session) { mutableStateOf(false) }
@@ -134,7 +143,7 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
     val progress = session.progress
     val colors = MaterialTheme.colorScheme
     fun restart() {
-        sentenceIndex = (sentenceIndex + 1) % SentenceBank.sentences.size
+        sentenceIndex = (sentenceIndex + kind.sentences.coerceAtLeast(1)) % SentenceBank.sentences.size
         generation++
     }
     Column(Modifier.fillMaxSize().background(colors.background)
@@ -143,62 +152,71 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
         // The keyboard's final height, not its animated one: the card is top-aligned, so following the slide
         // frame by frame only relaid out the page on every frame of it.
         .windowInsetsPadding(WindowInsets.imeAnimationTarget.union(WindowInsets.navigationBars).only(WindowInsetsSides.Bottom))) {
-        Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onBack, Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = "Back to layouts" }) { Text("←", fontSize = 24.sp) }
+        Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onBack) { SettingsIcon(R.drawable.ic_settings_back, "Back to layouts") }
             Column(Modifier.weight(1f)) {
-                Text("Typing test", color = colors.onSurface, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(if (tailorkeys) "TailorKeys · ${entry.name}" else "Typing with $label", color = colors.onSurfaceVariant, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Try it", color = colors.onSurface, style = MaterialTheme.typography.titleLarge, maxLines = 1)
+                Text(if (tailorkeys) entry.name else "Typing with $label", color = colors.onSurfaceVariant, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            if (!finished) TextButton({ comparing = !comparing; if (comparing) keyboard?.hide() }) { Text(if (comparing) "Back to test" else "Compare") }
-            TextButton({ context.getSystemService(InputMethodManager::class.java).showInputMethodPicker() }) { Text("Switch keyboard") }
+            IconToggleButton(comparing, { comparing = it; if (it) keyboard?.hide() }) {
+                SettingsIcon(R.drawable.ic_settings_compare, if (comparing) "Back to the test" else "Compare keyboards")
+            }
+            IconButton({ context.getSystemService(InputMethodManager::class.java).showInputMethodPicker() }) {
+                SettingsIcon(R.drawable.ic_settings_keyboard, "Switch keyboard")
+            }
         }
         // Top-aligned, so the keyboard opening or closing only changes the space below the card.
-        Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp), contentAlignment = Alignment.TopCenter) {
-            Surface(Modifier.widthIn(max = 600.dp).fillMaxWidth().then(if (tailorkeys) Modifier.layoutMorph(entry.key) else Modifier),
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp), contentAlignment = Alignment.TopCenter) {
+            // Landscape and other wide windows: the text and the numbers side by side, so the card stays short.
+            val wide = maxWidth >= 720.dp
+            Surface(Modifier.widthIn(max = if (wide) 960.dp else 600.dp).fillMaxWidth()
+                .then(if (tailorkeys) Modifier.layoutMorph(entry.key) else Modifier)
+                .animateContentSize(tween(320, easing = LayoutEmphasis)),
                 shape = RoundedCornerShape(28.dp), color = colors.surfaceContainerHigh, shadowElevation = 8.dp) {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    if (comparing) {
-                        KeyboardComparison(state.library.keyboardAverages(), ::keyboardLabel, thisTest)
-                    } else if (finished) {
-                        Text("✓ Test complete", color = Color(if (colors.background.luminance() < .5f) 0xFF8ED1B8 else 0xFF1E6B52), fontWeight = FontWeight.Medium,
-                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-                        Row(verticalAlignment = Alignment.Bottom) {
-                            Text("${metrics.wpm.roundToInt()}", fontSize = 72.sp, lineHeight = 80.sp, fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.semantics { contentDescription = "${metrics.wpm.roundToInt()} words per minute" })
-                            Column(Modifier.padding(start = 8.dp, bottom = 8.dp)) {
-                                Text("words per minute")
-                                average?.let { Text("${kotlin.math.abs(metrics.wpm - it).roundToInt()} ${if (metrics.wpm >= it) "above" else "below"} your $label average (${it.roundToInt()})", style = MaterialTheme.typography.labelMedium) }
-                            }
-                        }
-                        SpeedChart(session.samples.toList(), average, Modifier.fillMaxWidth().height(80.dp))
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("0:00", style = MaterialTheme.typography.labelMedium)
-                            Text("Dots mark mistakes", style = MaterialTheme.typography.labelMedium)
-                            Text(formatTime(metrics.elapsed), style = MaterialTheme.typography.labelMedium)
-                        }
-                        MetricRow(metrics, session.text.length, null)
-                        Surface(shape = RoundedCornerShape(16.dp), color = colors.background) {
-                            Column(Modifier.padding(14.dp)) {
-                                Text("WHERE IT SLIPPED", style = MaterialTheme.typography.labelMedium)
-                                Text(AnnotatedString.Builder(session.sentence).apply {
-                                    session.slips.filter { it < length }.forEach { addStyle(SpanStyle(textDecoration = TextDecoration.Underline, color = colors.error), it, it + 1) }
-                                }.toAnnotatedString())
-                            }
-                        }
-                        KeyboardComparison(state.library.keyboardAverages(), ::keyboardLabel, thisTest)
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(::restart, Modifier.weight(1f)) { Text("New sentence") }
-                            FilledTonalButton({ state.useLayout(entry); applied = true }, Modifier.weight(1f), enabled = tailorkeys && !applied) { Text(if (applied) "✓ In use" else "✓ Use layout") }
-                        }
-                        TextButton(onBack, Modifier.align(Alignment.CenterHorizontally)) { Text("← Back to layouts") }
-                    } else {
-                        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                            TypingMode.entries.forEachIndexed { i, option ->
-                                SegmentedButton(mode == option, { if (mode != option) { mode = option } }, shape = SegmentedButtonDefaults.itemShape(i, 2)) {
-                                    Text(if (option == TypingMode.FREE) "Free typing" else "Test sentence")
+                val view = when { comparing -> 2; finished -> 1; else -> 0 }
+                AnimatedContent(view, label = "Try it", transitionSpec = {
+                    (fadeIn(tween(220, 90)) + slideInVertically(tween(320, easing = LayoutEmphasis)) { it / 16 }) togetherWith fadeOut(tween(110))
+                }) { shown ->
+                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        when (shown) {
+                            2 -> KeyboardComparison(state.library.keyboardAverages(), ::keyboardLabel, thisTest)
+                            1 -> {
+                                Row(Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+                                    verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Text("${metrics.wpm.roundToInt()}", fontSize = 64.sp, lineHeight = 68.sp, fontWeight = FontWeight.SemiBold)
+                                    Column(Modifier.padding(bottom = 10.dp)) {
+                                        Text("words per minute")
+                                        average?.let { Text("${kotlin.math.abs(metrics.wpm - it).roundToInt()} ${if (metrics.wpm >= it) "above" else "below"} your average",
+                                            color = colors.onSurfaceVariant, style = MaterialTheme.typography.labelMedium) }
+                                    }
+                                }
+                                SpeedChart(session.samples.toList(), average, Modifier.fillMaxWidth().height(72.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    StatTile("Accuracy", "${(metrics.accuracy * 100).roundToInt()}%", Modifier.weight(1f))
+                                    StatTile("Time", formatTime(metrics.elapsed), Modifier.weight(1f))
+                                }
+                                Surface(shape = RoundedCornerShape(16.dp), color = colors.background) {
+                                    Text(AnnotatedString.Builder(session.sentence).apply {
+                                        session.slips.filter { it < length }.forEach { addStyle(SpanStyle(textDecoration = TextDecoration.Underline, color = colors.error), it, it + 1) }
+                                    }.toAnnotatedString(), Modifier.fillMaxWidth().padding(14.dp))
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Button(::restart, Modifier.weight(1f)) { Text("New ${kind.unit}") }
+                                    if (tailorkeys && !applied) OutlinedButton({ state.useLayout(entry); applied = true }, Modifier.weight(1f)) { Text("Use this layout") }
                                 }
                             }
-                        }
+                            else -> {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    SingleChoiceSegmentedButtonRow(Modifier.weight(1f)) {
+                                        TestKind.entries.forEachIndexed { i, option ->
+                                            SegmentedButton(kind == option, { if (kind != option) kind = option },
+                                                shape = SegmentedButtonDefaults.itemShape(i, TestKind.entries.size)) { Text(option.title, maxLines = 1) }
+                                        }
+                                    }
+                                    FilledTonalIconButton(::restart) {
+                                        SettingsIcon(R.drawable.ic_settings_refresh, if (mode == TypingMode.FREE) "Clear" else "New ${kind.unit}", Modifier.size(20.dp))
+                                    }
+                                }
                         val transformation = remember(mode, words, colors, session) { VisualTransformation { text ->
                             val styled = AnnotatedString.Builder(text)
                             if (mode == TypingMode.TEST) {
@@ -216,8 +234,7 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
                                 override fun transformedToOriginal(offset: Int) = offset.coerceAtMost(text.length)
                             })
                         } }
-                        Column {
-                            if (mode == TypingMode.FREE) Text("Type anything", style = MaterialTheme.typography.labelMedium)
+                                val text = @Composable {
                             NoPersonalizedLearning {
                                 BasicTextField(fieldValue, { next ->
                                     val active = currentIme()
@@ -235,35 +252,40 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
                                     }
                                 }, Modifier.fillMaxWidth().heightIn(min = 96.dp).focusRequester(focus)
                                     .clip(RoundedCornerShape(16.dp)).background(colors.background).padding(16.dp)
-                                    .semantics { contentDescription = if (mode == TypingMode.FREE) "Type anything" else "Copy this sentence: ${session.sentence}" },
+                                    .semantics { contentDescription = if (mode == TypingMode.FREE) "Type anything" else "Copy this ${kind.unit}: ${session.sentence}" },
                                     textStyle = TextStyle(color = colors.onSurface, fontSize = 20.sp, lineHeight = 28.sp),
                                     cursorBrush = SolidColor(colors.primary), visualTransformation = transformation,
                                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, autoCorrectEnabled = false,
-                                        keyboardType = KeyboardType.Text, imeAction = ImeAction.None))
+                                        keyboardType = KeyboardType.Text, imeAction = ImeAction.None),
+                                decorationBox = { inner ->
+                                    if (mode == TypingMode.FREE && fieldValue.text.isEmpty()) Text("Type anything", color = colors.onSurfaceVariant, fontSize = 20.sp)
+                                    inner()
+                                })
+                            }
+                                    if (mode == TypingMode.TEST) LinearProgressIndicator(progress = { progress },
+                                        color = colors.primary, trackColor = colors.onSurface.copy(alpha = .12f),
+                                        drawStopIndicator = {}, modifier = Modifier.fillMaxWidth())
+                                }
+                                val speed = "${metrics.wpm.roundToInt()}"
+                                val speedNote = average?.let { "avg ${it.roundToInt()}" }
+                                if (wide) Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                                    Column(Modifier.weight(1.8f), verticalArrangement = Arrangement.spacedBy(12.dp)) { text() }
+                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        StatTile("Speed", speed, Modifier.fillMaxWidth(), "wpm", speedNote)
+                                        if (mode == TypingMode.TEST) StatTile("Accuracy", "${(metrics.accuracy * 100).roundToInt()}%", Modifier.fillMaxWidth())
+                                        StatTile("Time", formatTime(metrics.elapsed), Modifier.fillMaxWidth())
+                                    }
+                                } else {
+                                    text()
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        StatTile("Speed", speed, Modifier.weight(1f), "wpm", speedNote)
+                                        if (mode == TypingMode.TEST) StatTile("Accuracy", "${(metrics.accuracy * 100).roundToInt()}%", Modifier.weight(1f))
+                                        StatTile("Time", formatTime(metrics.elapsed), Modifier.weight(1f))
+                                    }
+                                }
+                                if (tailorkeys && !applied) OutlinedButton({ state.useLayout(entry); applied = true }, Modifier.fillMaxWidth()) { Text("Use this layout") }
                             }
                         }
-                        if (mode == TypingMode.TEST) LinearProgressIndicator(progress = { progress },
-                            color = colors.primary, trackColor = colors.onSurface.copy(alpha = .12f),
-                            drawStopIndicator = {}, modifier = Modifier.fillMaxWidth())
-                        BoxWithConstraints {
-                            val wide = maxWidth >= 480.dp
-                            if (wide) Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                                SpeedMetric(metrics, session.samples.toList(), session.peakWpm, average, mode, Modifier.weight(1.3f))
-                                MetricRow(metrics, session.text.length, if (mode == TypingMode.TEST) session.sentence.length else null, Modifier.weight(2f))
-                            } else Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                SpeedMetric(metrics, session.samples.toList(), session.peakWpm, average, mode, Modifier.fillMaxWidth())
-                                HorizontalDivider()
-                                MetricRow(metrics, session.text.length, if (mode == TypingMode.TEST) session.sentence.length else null)
-                            }
-                        }
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            TextButton(::restart) { Text(if (mode == TypingMode.FREE) "↻ Clear" else "↻ New sentence") }
-                            Spacer(Modifier.weight(1f))
-                            Text(if (mode == TypingMode.FREE) "Text stays on this device" else if (tailorkeys) "Type on the keys below" else "Results save under $label", style = MaterialTheme.typography.labelMedium)
-                        }
-                        if (mode == TypingMode.FREE) FilledTonalButton({
-                            if (!applied) { state.useLayout(entry); applied = true }
-                        }, Modifier.align(Alignment.End), enabled = tailorkeys && !applied) { Text(if (applied) "✓ In use" else "Use layout") }
                     }
                 }
             }
@@ -271,13 +293,20 @@ internal fun TypingTestPage(state: SettingsState, entry: LayoutEntry, onBack: ()
     }
 }
 
+/** What the page types: anything, one sentence from SentenceBank, or a paragraph of [sentences] in a row. */
+private enum class TestKind(val title: String, val unit: String, val sentences: Int) {
+    FREE("Free", "text", 0), SENTENCE("Sentence", "sentence", 1), PARAGRAPH("Paragraph", "paragraph", 4);
+
+    fun text(from: Int): String = if (sentences == 0) SentenceBank.sentences[from]
+        else (0 until sentences).joinToString(" ") { SentenceBank.sentences[(from + it) % SentenceBank.sentences.size] }
+}
+
 @Composable
 private fun KeyboardComparison(averages: List<KeyboardAverage>, label: (String) -> String, thisTest: TypingResult?) {
     val colors = MaterialTheme.colorScheme
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Compare keyboards", style = MaterialTheme.typography.titleMedium)
-        Text("All Test sentence results", style = MaterialTheme.typography.labelSmall)
-        if (averages.isEmpty()) Text("Finish a test sentence to compare keyboards.")
+        if (averages.isEmpty()) Text("Finish a sentence or paragraph to compare keyboards.")
         Row { Text("Keyboard", Modifier.weight(1.4f)); Text("Avg wpm", Modifier.weight(1f)); Text("Accuracy", Modifier.weight(1f)); Text("Tests", Modifier.weight(.6f)) }
         averages.forEach { row ->
             Surface(color = if (isTailorKeysIme(row.keyboard)) colors.secondaryContainer else colors.surfaceContainer, shape = RoundedCornerShape(12.dp)) {
@@ -306,41 +335,18 @@ private fun KeyboardComparison(averages: List<KeyboardAverage>, label: (String) 
     }
 }
 
+/** One number with its label (and a unit and a note) on a quiet tile. */
 @Composable
-private fun SpeedMetric(metrics: TypingMetrics, samples: List<SpeedSample>, peak: Double, average: Double?, mode: TypingMode, modifier: Modifier) {
-    Column(modifier.semantics(mergeDescendants = true) { contentDescription = "${metrics.wpm.roundToInt()} words per minute, average ${average?.roundToInt() ?: 0}" }) {
-        Text(if (mode == TypingMode.FREE) "SPEED NOW" else "WORDS PER MINUTE", style = MaterialTheme.typography.labelMedium)
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text("${metrics.wpm.roundToInt()}", fontSize = 48.sp, fontWeight = FontWeight.SemiBold)
-            Text("wpm", style = MaterialTheme.typography.bodyMedium)
-            SpeedChart(samples, average, Modifier.weight(1f).height(36.dp))
-        }
-        Text(if (average == null) "Average appears after your first result" else "avg ${average.roundToInt()} · peak ${peak.roundToInt()}", style = MaterialTheme.typography.labelMedium)
-    }
-}
-
-@Composable
-private fun MetricRow(metrics: TypingMetrics, characters: Int, target: Int?, modifier: Modifier = Modifier) {
-    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        Column(Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = "Accuracy ${(metrics.accuracy * 100).roundToInt()} percent" }) {
-            Text("ACCURACY", style = MaterialTheme.typography.labelMedium)
-            val ring = MaterialTheme.colorScheme.tertiary
-            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                Canvas(Modifier.fillMaxSize().padding(3.dp)) {
-                    drawCircle(ring.copy(alpha = .15f), style = Stroke(4.dp.toPx()))
-                    drawArc(Color(0xFF8ED5BE), -90f, (metrics.accuracy * 360).toFloat(), false, style = Stroke(4.dp.toPx()))
-                }
-                Text("${(metrics.accuracy * 100).roundToInt()}%", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+private fun StatTile(label: String, value: String, modifier: Modifier, unit: String? = null, note: String? = null) {
+    val colors = MaterialTheme.colorScheme
+    Surface(modifier.semantics(mergeDescendants = true) {}, shape = RoundedCornerShape(16.dp), color = colors.background) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Text(label, style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(value, fontSize = 26.sp, lineHeight = 30.sp, fontWeight = FontWeight.SemiBold)
+                unit?.let { Text(it, Modifier.padding(bottom = 3.dp), style = MaterialTheme.typography.labelMedium) }
             }
-        }
-        Column(Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = "${metrics.mistakes} mistakes" }) {
-            Text("MISTAKES", style = MaterialTheme.typography.labelMedium)
-            Text("${metrics.mistakes}", fontSize = 32.sp, fontWeight = FontWeight.SemiBold)
-        }
-        Column(Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = "Time ${metrics.elapsed / 1_000} seconds, $characters characters" }) {
-            Text("TIME", style = MaterialTheme.typography.labelMedium)
-            Text(formatTime(metrics.elapsed), fontSize = 32.sp, fontWeight = FontWeight.SemiBold)
-            Text(if (target == null) "$characters characters" else "$characters / $target characters", style = MaterialTheme.typography.labelMedium)
+            note?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant) }
         }
     }
 }

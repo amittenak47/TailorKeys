@@ -5,12 +5,19 @@ import app.tailorkeys.LayoutEntry
 import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.tween
 import android.animation.ValueAnimator
@@ -144,23 +151,35 @@ private fun SettingsContent(state: SettingsState, setupStatus: SetupStatus, onSe
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
             val density = LocalDensity.current
             var previewHeight by remember { mutableStateOf(0.dp) }
+            // Hidden by swiping its handle up, kept across visits; always shown while rearranging keys.
+            var previewHidden by remember { mutableStateOf(state.settings.prefs.getBoolean(PREVIEW_HIDDEN, false)) }
+            val previewShown = !previewHidden || editing
+            val setHidden = { hidden: Boolean ->
+                previewHidden = hidden
+                state.settings.prefs.edit().putBoolean(PREVIEW_HIDDEN, hidden).apply()
+            }
             // A full-size KeyboardView can exceed a short window. Keep the controls reachable without scaling it.
-            val compact = maxHeight < previewHeight + 200.dp
+            val compact = previewShown && maxHeight < previewHeight + 200.dp
             val overflowScroll = rememberScrollState()
             val optionsRequester = remember { BringIntoViewRequester() }
             BringOptionsIntoView(compact, previewHeight, tab, optionsRequester)
             Column(if (compact) Modifier.fillMaxWidth().verticalScroll(overflowScroll) else Modifier.fillMaxSize()) {
                 SettingsHeader(setupStatus, onSetup)
                 Spacer(Modifier.height(16.dp))
-                Box(Modifier.fillMaxWidth().padding(horizontal = 4.dp).layoutMorph("keyboard-preview").clip(RoundedCornerShape(24.dp))) {
-                    AndroidView(factory = { state.preview }, update = { it.editMode = editing },
-                        modifier = Modifier.fillMaxWidth().wrapContentHeight(unbounded = true)
-                            .onSizeChanged { previewHeight = with(density) { it.height.toDp() } })
-                    if (state.importing && !state.importPreviewValid) Box(Modifier.matchParentSize()
-                        .background(MaterialTheme.colorScheme.background.copy(alpha = .94f)), contentAlignment = Alignment.Center) {
-                        Text("No preview for this code", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                AnimatedVisibility(previewShown,
+                    enter = expandVertically(tween(320, easing = LayoutEmphasis), expandFrom = Alignment.Top) + fadeIn(tween(220, 80)),
+                    exit = shrinkVertically(tween(280, easing = LayoutEmphasis), shrinkTowards = Alignment.Top) + fadeOut(tween(140))) {
+                    Box(Modifier.fillMaxWidth().padding(horizontal = 4.dp).layoutMorph("keyboard-preview").clip(RoundedCornerShape(24.dp))) {
+                        AndroidView(factory = { state.preview }, update = { it.editMode = editing },
+                            modifier = Modifier.fillMaxWidth().wrapContentHeight(unbounded = true)
+                                .onSizeChanged { previewHeight = with(density) { it.height.toDp() } })
+                        if (state.importing && !state.importPreviewValid) Box(Modifier.matchParentSize()
+                            .background(MaterialTheme.colorScheme.background.copy(alpha = .94f)), contentAlignment = Alignment.Center) {
+                            Text("No preview for this code", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
+                if (!editing) PreviewHandle(previewShown) { setHidden(it) }
                 BoxWithConstraints((if (compact) Modifier.fillMaxWidth().height(200.dp) else Modifier.fillMaxWidth().weight(1f))
                     .bringIntoViewRequester(optionsRequester)) {
                     // Retain the four lazy lists. Only the selected list is measured/placed, so hidden
@@ -192,6 +211,31 @@ private fun SettingsContent(state: SettingsState, setupStatus: SetupStatus, onSe
             }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Reset settings") } },
             dismissButton = { TextButton({ dialog = null }) { Text("Cancel") } })
         "about" -> AboutDialog { dialog = null }
+    }
+}
+
+private const val PREVIEW_HIDDEN = "settings_preview_hidden"
+
+/**
+ * The handle under the keyboard preview: swipe it up (or tap) to hide the preview, down (or tap) to bring it back.
+ * On the handle, not the preview, whose keys are dragged while rearranging.
+ */
+@Composable
+private fun PreviewHandle(shown: Boolean, setHidden: (Boolean) -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    var dragged by remember { mutableStateOf(0f) }
+    Box(Modifier.fillMaxWidth().heightIn(min = 32.dp)
+        .semantics(mergeDescendants = true) { contentDescription = if (shown) "Hide keyboard preview" else "Show keyboard preview" }
+        .clickable(role = Role.Button) { setHidden(shown) }
+        .draggable(rememberDraggableState { dragged += it }, Orientation.Vertical,
+            onDragStarted = { dragged = 0f },
+            onDragStopped = { velocity -> if (dragged + velocity / 10 < -24f) setHidden(true) else if (dragged + velocity / 10 > 24f) setHidden(false) }),
+        contentAlignment = Alignment.Center) {
+        if (shown) Box(Modifier.size(36.dp, 4.dp).clip(CircleShape).background(colors.onSurfaceVariant.copy(alpha = .5f)))
+        else Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(Modifier.size(36.dp, 4.dp).clip(CircleShape).background(colors.onSurfaceVariant.copy(alpha = .5f)))
+            Text("Show keyboard", style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
+        }
     }
 }
 
@@ -246,26 +290,68 @@ private fun SettingsTab(index: Int, listState: LazyListState, state: SettingsSta
         LayoutLibraryPage(state, listState, editing, onEdit, onTry, active)
         return
     }
+    if (index == 3) {
+        SettingsSectionsTab(listState, state, active, onAbout, onReset)
+        return
+    }
+    OptionsList(listState) {
+        if (index == 1) sizeOptions(state, page, onPage) else lookOptions(state)
+    }
+}
+
+/** A tab's options, at a readable width on wide screens, faded where the list scrolls on. */
+@Composable
+private fun OptionsList(listState: LazyListState, content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit) {
     val background = MaterialTheme.colorScheme.background
-    val panel = state.insertSettingsPage
-    LaunchedEffect(panel) { if (index == 3) listState.scrollToItem(0) }
-    BackHandler(active && index == 3 && panel != null) { state.insertSettingsPage = null }
-    Box(Modifier.fillMaxSize()) {
-        LazyColumn(state = listState, modifier = Modifier.fillMaxSize().clipToBounds(),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = if (index == 0) 20.dp else 16.dp,
-                bottom = if (index == 0) 8.dp else 44.dp),
-            verticalArrangement = Arrangement.spacedBy(if (index == 0) 16.dp else 12.dp)) {
-            when {
-                index == 1 -> sizeOptions(state, page, onPage)
-                index == 2 -> lookOptions(state)
-                panel != null -> insertPanelOptions(state.settings, panel) { state.insertSettingsPage = null }
-                index == 3 -> typingOptions(state, onAbout, onReset) { state.insertSettingsPage = it }
-            }
-        }
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        LazyColumn(state = listState, modifier = Modifier.fillMaxHeight().widthIn(max = 720.dp).fillMaxWidth().clipToBounds(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 44.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
         if (listState.canScrollBackward) Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(16.dp)
             .background(Brush.verticalGradient(listOf(background, Color.Transparent))))
         if (listState.canScrollForward) Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(44.dp)
             .background(Brush.verticalGradient(listOf(Color.Transparent, background))))
+    }
+}
+
+/**
+ * The Settings tab: its sections listed, each opening on its own page that slides in from the right, with a back
+ * arrow (and the system back) to slide back. A panel's page under Panels opens one level further the same way.
+ */
+@Composable
+private fun SettingsSectionsTab(listState: LazyListState, state: SettingsState, active: Boolean, onAbout: () -> Unit, onReset: () -> Unit) {
+    var section by rememberSaveable { mutableStateOf<SettingsSection?>(null) }
+    val panel = state.insertSettingsPage
+    // A panel opened from the keyboard lands on its page, inside Panels.
+    LaunchedEffect(panel) { if (panel != null) section = SettingsSection.PANELS }
+    val back = { if (state.insertSettingsPage != null) state.insertSettingsPage = null else section = null }
+    BackHandler(active && (section != null || panel != null)) { back() }
+    val reduced = LocalLayoutReducedMotion.current
+    AnimatedContent(section to panel, modifier = Modifier.fillMaxSize(), label = "Settings section",
+        transitionSpec = {
+            val depth = { s: Pair<SettingsSection?, String?> -> if (s.second != null) 2 else if (s.first != null) 1 else 0 }
+            val forward = depth(targetState) > depth(initialState)
+            if (reduced) fadeIn(tween(120)) togetherWith fadeOut(tween(90))
+            // Push and pop: the new page comes in from the side it belongs to, the old one moves a little away.
+            else (slideInHorizontally(tween(320, easing = LayoutEmphasis)) { if (forward) it else -it / 4 } + fadeIn(tween(220, 60))) togetherWith
+                (slideOutHorizontally(tween(320, easing = LayoutEmphasis)) { if (forward) -it / 4 else it } + fadeOut(tween(160)))
+        }) { (shown, shownPanel) ->
+        Column(Modifier.fillMaxSize()) {
+            if (shown != null) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                Row(Modifier.widthIn(max = 720.dp).fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(back) { SettingsIcon(R.drawable.ic_settings_back, "Back") }
+                    Text(shownPanel ?: shown.title, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+                }
+            }
+            OptionsList(if (shown == null) listState else rememberLazyListState()) {
+                when {
+                    shownPanel != null -> insertPanelControls(state.settings, shownPanel)
+                    shown != null -> settingsSection(shown, state, onAbout, onReset) { state.insertSettingsPage = it }
+                    else -> settingsSections { section = it }
+                }
+            }
+        }
     }
 }
 

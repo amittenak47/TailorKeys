@@ -51,14 +51,19 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         previewingSelected = true
         importing = false
         preview.previewSplit = entry.splitFor(landscape)
+        preview.previewHalves = halvesFor(entry)
         preview.grid = entry.grid()
     }
+    /** A saved layout shown but not in use keeps its own halves' shapes and placement (KeyboardView.previewHalves). */
+    private fun halvesFor(entry: LayoutEntry?) = entry?.takeIf { it.custom && it.key != library.inUse }?.let { settings.halvesOf(it.settings) }
     fun useLayout(entry: LayoutEntry) {
-        library.use(entry)
-        selectLayout(entry)
+        // As saved now: edits made on the preview since the page last read the list are in it.
+        val saved = library.entries().firstOrNull { it.key == entry.key } ?: entry
+        library.use(saved)
+        selectLayout(saved)
     }
-    fun showSelected() { previewingSelected = true; preview.previewSplit = selectedLayout().splitFor(landscape); preview.grid = selectedLayout().grid() }
-    fun showApplied() { previewingSelected = false; preview.previewSplit = null; preview.grid = settings.loadGrid() }
+    fun showSelected() { previewingSelected = true; preview.previewSplit = selectedLayout().splitFor(landscape); preview.previewHalves = halvesFor(selectedLayout()); preview.grid = selectedLayout().grid() }
+    fun showApplied() { previewingSelected = false; preview.previewSplit = null; preview.previewHalves = null; preview.grid = settings.loadGrid() }
     fun chordLanguage(): String { revisions.read(Prefs.CURRENT_LANGUAGE, Prefs.LANGUAGES); return settings.currentLanguage() }
     fun chordLetters(): Set<Char> {
         revisions.read(Prefs.LAYOUT, Prefs.CURRENT_LANGUAGE, Prefs.LANGUAGES)
@@ -83,7 +88,7 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
             override fun onPickIme() = Unit
             override fun onEdited() {
                 val entry = library.entries().firstOrNull { it.key == if (previewingSelected) selectedKey else library.inUse }
-                if (entry?.custom == true) library.edit(entry.key, grid) else settings.saveGrid(grid)
+                if (entry?.custom == true) library.edit(entry.key, grid, previewHalves) else settings.saveGrid(grid)
             }
         }
     }
@@ -91,6 +96,7 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         if (previewingSelected && !importing) {
             preview.previewSplit = if (selectedKey == library.inUse) settings.profile(landscape).split
                 else library.entries().firstOrNull { it.key == selectedKey }?.splitFor(landscape)
+            preview.previewHalves = halvesFor(library.entries().firstOrNull { it.key == selectedKey })
         }
         if (key == null || key == Prefs.CURRENT_LANGUAGE || key == Prefs.LANGUAGES || key == Prefs.NUMBER_ROW.key) {
             if (!importing && !preview.editMode) {
@@ -103,17 +109,25 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
         revisions.changed(key)
     }
 
-    fun observe() = settings.prefs.registerOnSharedPreferenceChangeListener(listener)
-    fun dispose() = settings.prefs.unregisterOnSharedPreferenceChangeListener(listener)
+    fun observe() {
+        settings.prefs.registerOnSharedPreferenceChangeListener(listener)
+        if (settings.device !== settings.prefs) settings.device.registerOnSharedPreferenceChangeListener(listener)
+    }
+    fun dispose() {
+        settings.prefs.unregisterOnSharedPreferenceChangeListener(listener)
+        if (settings.device !== settings.prefs) settings.device.unregisterOnSharedPreferenceChangeListener(listener)
+    }
     fun int(pref: IntPref): Int { revisions.read(pref.key); return settings.int(pref) }
     fun bool(pref: BoolPref): Boolean { revisions.read(pref.key); return settings.bool(pref) }
     fun profile(page: Boolean): SizeProfile {
         revisions.read(Prefs.height(page).key, Prefs.width(page).key, Prefs.alignKey(page),
             Prefs.bottomPadding(page).key, Prefs.splitKey(page), Prefs.splitGap(page).key,
             Prefs.tilt(page).key, Prefs.splitLeft(page).key, Prefs.splitRight(page).key)
+        revisions.read(*(Prefs.halfShape(page, 0) + Prefs.halfShape(page, 1)).map { it.key }.toTypedArray())
         return settings.profile(page)
     }
     fun cursorControl() = run { revisions.read(Prefs.CURSOR_CONTROL); settings.cursorControl() }
+    fun touchBarStyle() = run { revisions.read(Prefs.TOUCH_BAR_STYLE); settings.touchBarStyle() }
     fun themeId() = run { revisions.read(Prefs.THEME, Prefs.THEMES_CUSTOM); settings.themeId() }
     fun customThemes() = run { revisions.read(Prefs.THEMES_CUSTOM); settings.customThemes() }
     fun theme() = run { revisions.read(Prefs.THEME); settings.theme() }

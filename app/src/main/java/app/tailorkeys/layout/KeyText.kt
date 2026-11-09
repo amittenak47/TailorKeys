@@ -76,6 +76,7 @@ object KeyText {
         Keys.BACKSPACE -> "backspace"
         Keys.ENTER -> enterLabel?.takeIf { it.isNotBlank() } ?: "enter"
         Keys.ABC -> "letters" + when { state.capsLock -> ", caps lock on"; state.shift -> ", shift on"; else -> "" }
+        Keys.SHIFT -> "shift" + when { state.capsLock -> ", caps lock on"; state.shift -> ", on"; else -> "" }
         Keys.NUM -> "numbers"
         Keys.SYM -> "symbols"
         Keys.INSERT -> "Insert, emoji, kaomoji, clipboard and voice"

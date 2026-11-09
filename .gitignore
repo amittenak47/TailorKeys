@@ -22,3 +22,5 @@ __pycache__/
 *.pyc
 *.pt
 *.pth
+# Autocorrect model files are not committed: the model is still in training.
+app/src/main/assets/model/*.onnx

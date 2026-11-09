@@ -205,6 +205,14 @@ class SwipeInputTest {
         assertFalse(TextInputRules.doubleSpace(true, "dog ", 600))
         assertFalse(TextInputRules.doubleSpace(true, "dog ", 300, true))
     }
+    @Test fun aLetterFallingOntoTheSpaceBarEndsNoSentence() {
+        // The 5 November take: n at the bar's top edge, then the real space mid-bar.
+        assertTrue(TextInputRules.slippedSpace(first = .43f, second = 1.2f))
+        // A thumb repeating: mid-bar twice, or at the same edge twice.
+        assertFalse(TextInputRules.slippedSpace(first = 1.2f, second = 1.1f))
+        assertFalse(TextInputRules.slippedSpace(first = .43f, second = .5f))
+        assertFalse(TextInputRules.slippedSpace(first = Float.MAX_VALUE, second = Float.MAX_VALUE))
+    }
     @Test fun pluralAndPossessiveForms() {
         assertEquals(listOf("dogs", "dog's"), TextInputRules.wordForms("dog") { it == "dogs" })
         assertEquals(listOf("Cities", "City's"), TextInputRules.wordForms("City") { it == "cities" })

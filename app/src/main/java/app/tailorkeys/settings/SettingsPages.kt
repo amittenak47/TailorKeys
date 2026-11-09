@@ -20,6 +20,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.tailorkeys.CursorControl
+import app.tailorkeys.TouchBarStyle
 import app.tailorkeys.Align
 import app.tailorkeys.OnboardingActivity
 import app.tailorkeys.RejectedCorrection
@@ -54,15 +55,15 @@ internal fun LazyListScope.sizeOptions(state: SettingsState, page: Boolean, onPa
             GroupTitle("Split")
             OptionGroup {
                 ToggleRow("Split keyboard", p.split) { state.settings.setSplitFor(page, it) }
+                ToggleRow("Lock halves", state.bool(Prefs.SPLIT_LOCKED)) { state.set(Prefs.SPLIT_LOCKED, it) }
                 if (p.split) {
-                    Text("Drag the bar under a half to move it. Double-tap the bar to put it back at the edge. Width sets how big the halves are.",
-                        Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 4.dp),
-                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     SettingSlider("Tilt", p.tilt, Prefs.tilt(page), degrees(p.tilt)) { state.setFor(page, Prefs::tilt, it) }
                     val curve = state.int(Prefs.CURVE)
                     SettingSlider("Curve", curve, Prefs.CURVE, "$curve%") { state.setFor(page, { Prefs.CURVE }, it) }
                     val depth = state.int(Prefs.DEPTH)
-                    SettingSlider("Depth", depth, Prefs.DEPTH, "$depth%") { state.setFor(page, { Prefs.DEPTH }, it) }
+                    val shape = when { depth > 0 -> "Bowl $depth%"; depth < 0 -> "Dome ${-depth}%"; else -> "Off" }
+                    SettingSlider("Depth", depth, Prefs.DEPTH, shape) { state.setFor(page, { Prefs.DEPTH }, it) }
+                    if (depth != 0) ToggleRow("Compact", state.bool(Prefs.DEPTH_COMPACT)) { state.set(Prefs.DEPTH_COMPACT, it) }
                 }
             }
         }
@@ -100,7 +101,7 @@ private fun SizeControls(state: SettingsState, page: Boolean) {
             if (state.bool(Prefs.LOCK_SIZE)) state.setFor(page, Prefs::width, (it / ratio).roundToInt())
         }
         val locked = state.bool(Prefs.LOCK_SIZE)
-        SettingSlider("Width", p.widthPercent, Prefs.width(page), "${p.widthPercent}%", onStart = captureRatio, trailing = {
+        SettingSlider("Width", p.widthPercent, Prefs.width(page), "${p.widthPercent}%", onStart = captureRatio, max = Prefs.maxWidth(page, p.split), trailing = {
             IconToggleButton(locked, { state.set(Prefs.LOCK_SIZE, it) }, Modifier.size(44.dp),
                 colors = IconButtonDefaults.iconToggleButtonColors(
                     checkedContainerColor = MaterialTheme.colorScheme.primaryContainer,
@@ -121,6 +122,8 @@ private fun SizeControls(state: SettingsState, page: Boolean) {
         SettingSlider("Lift keyboard", p.bottomPaddingDp, Prefs.bottomPadding(page), "${p.bottomPaddingDp} dp") {
             state.setFor(page, Prefs::bottomPadding, it)
         }
+        val bar = state.int(Prefs.SUGGESTION_BAR)
+        SettingSlider("Suggestion bar", bar, Prefs.SUGGESTION_BAR, "$bar%") { state.set(Prefs.SUGGESTION_BAR, it) }
     }
 }
 
@@ -133,6 +136,9 @@ internal fun LazyListScope.lookOptions(state: SettingsState) {
                 SettingSlider(label, value, pref, if (pref == Prefs.TEXT_SCALE) "$value%" else "$value") { state.set(pref, it) }
             }
             ToggleRow("Use system text size", state.bool(Prefs.FOLLOW_SYSTEM_TEXT)) { state.set(Prefs.FOLLOW_SYSTEM_TEXT, it) }
+            Text("Key style", Modifier.padding(start = 20.dp, top = 8.dp), style = MaterialTheme.typography.bodyLarge)
+            SettingsSegments(listOf("Flat", "3D"), if (state.bool(Prefs.KEYS_3D)) 1 else 0, "Key style",
+                Modifier.padding(start = 20.dp, end = 20.dp, bottom = 12.dp)) { state.set(Prefs.KEYS_3D, it == 1) }
         }
     }
     item("labels") {
@@ -142,48 +148,119 @@ internal fun LazyListScope.lookOptions(state: SettingsState) {
                 if (!state.setNumberRow(it)) Toast.makeText(context, "Move your keys out of the number row first", Toast.LENGTH_SHORT).show()
             }
             ToggleRow("Key hints", state.bool(Prefs.SHOW_HINTS)) { state.set(Prefs.SHOW_HINTS, it) }
+            ToggleRow("Cursor glow", state.bool(Prefs.CURSOR_GLOW),
+                note = "A soft glow across the keys when you move the cursor.") { state.set(Prefs.CURSOR_GLOW, it) }
         }
     }
 }
 
-internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Unit, onReset: () -> Unit, onPanel: (String) -> Unit) {
-    item("languages") {
-        var open by remember { mutableStateOf(false) }
-        val enabled = state.languages()
+/** The Settings tab's sections, listed first; each opens on its own page (SettingsTab). */
+internal enum class SettingsSection(val title: String) {
+    TYPING("Autocorrect and typing"),
+    SWIPE("Swipe and chords"),
+    CURSOR("Cursor"),
+    FEEDBACK("Sound and vibration"),
+    LEARNING("Learned words"),
+    ACCESSIBILITY("Accessibility"),
+    PANELS("Panels"),
+    HELP("Help and about"),
+}
+
+internal fun LazyListScope.settingsSections(open: (SettingsSection) -> Unit) {
+    item("sections") { OptionGroup { SettingsSection.entries.forEach { ActionRow(it.title) { open(it) } } } }
+}
+
+internal fun LazyListScope.settingsSection(section: SettingsSection, state: SettingsState, onAbout: () -> Unit, onReset: () -> Unit,
+                                           onPanel: (String) -> Unit) = when (section) {
+    SettingsSection.TYPING -> item("typing") {
         OptionGroup {
-            ActionRow("Languages · " + enabled.joinToString(", ") { Prefs.LANGUAGE_NAMES.getValue(it) }) { open = true }
-        }
-        if (open) AlertDialog(onDismissRequest = { open = false }, title = { Text("Languages") },
-            text = {
-                Column {
-                    Prefs.LANGUAGE_NAMES.forEach { (code, name) ->
-                        val checked = code in enabled
-                        Row(Modifier.fillMaxWidth().selectable(checked, enabled = !checked || enabled.size > 1,
-                            role = Role.Checkbox, onClick = { state.setLanguages(if (checked) enabled.toSet() - code else enabled.toSet() + code) }),
-                            verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked, onCheckedChange = null, enabled = !checked || enabled.size > 1)
-                            Text(name, Modifier.padding(start = 12.dp, top = 12.dp, bottom = 12.dp))
-                        }
-                    }
-                }
-            }, confirmButton = { TextButton(onClick = { open = false }) { Text("Done") } })
-    }
-    item("typing") {
-        OptionGroup {
-            val mode = state.int(Prefs.AUTOCORRECT)
-            val modes = listOf("Off", "Confident", "Aggressive")
-            val details = listOf(
-                "Never changes what you type. Suggestions still appear.",
-                "Fixes clear typos: one wrong, missing or swapped letter (teh → the), wrong keys when your taps landed close to the right ones, and missing spaces (ofthe → of the). Real words stay as typed.",
-                "Also fixes several wrong neighbouring keys (watwe → water), real words that don't fit the sentence (are you form → from) and stray spaces (key board → keyboard).")
-            SettingsDropdown("Autocorrect", modes[mode], modes, details = details) { state.set(Prefs.AUTOCORRECT, it) }
-            Text(details[mode] + if (mode == 0) "" else " Fixes happen when you press space; backspace right after undoes one.",
-                Modifier.padding(20.dp, 8.dp), style = MaterialTheme.typography.bodySmall)
+            // One switch: the trained model corrects, or nothing does (Android and iOS offer no system autocorrect
+            // to a keyboard). An older mode (Confident, Aggressive) counts as on.
+            ToggleRow("Autocorrect", state.int(Prefs.AUTOCORRECT) != 0,
+                note = "Fixes typos when you press space, reading the whole sentence. Backspace right after undoes a fix.") {
+                state.set(Prefs.AUTOCORRECT, if (it) 1 else 0)
+            }
             ToggleRow("Block offensive words", state.bool(Prefs.BLOCK_OFFENSIVE),
-                note = "Never suggest or autocorrect to swear words and other words marked offensive. When you type one, it's left as typed.") {
+                note = "Never suggest or autocorrect to swear words. When you type one, it's left as typed.") {
                 state.set(Prefs.BLOCK_OFFENSIVE, it)
             }
             ToggleRow("Auto-capitalize", state.bool(Prefs.AUTO_CAP)) { state.set(Prefs.AUTO_CAP, it) }
+            ToggleRow("Automatic space", state.bool(Prefs.AUTOMATIC_SPACE), note = "After swiped and picked words.") { state.set(Prefs.AUTOMATIC_SPACE, it) }
+            ToggleRow("Automatic punctuation", state.bool(Prefs.AUTOMATIC_PUNCTUATION), note = "Attach punctuation and close brackets and quotes.") { state.set(Prefs.AUTOMATIC_PUNCTUATION, it) }
+            if (state.bool(Prefs.AUTOMATIC_PUNCTUATION)) {
+                ToggleRow("Double-space period", state.bool(Prefs.DOUBLE_SPACE_PERIOD), note = "Tap space twice to end a sentence.") { state.set(Prefs.DOUBLE_SPACE_PERIOD, it) }
+            }
+            ToggleRow("Follow hand drift", state.bool(Prefs.TOUCH_DRIFT), note = "Taps that drift off the keys as you type still count.") { state.set(Prefs.TOUCH_DRIFT, it) }
+            ToggleRow("Back to letters after a 123 symbol", state.bool(Prefs.RETURN_FROM_NUM),
+                note = "Digits stay on 123, for numbers.") { state.set(Prefs.RETURN_FROM_NUM, it) }
+            ToggleRow("Back to letters after a #+= symbol", state.bool(Prefs.RETURN_FROM_SYM)) { state.set(Prefs.RETURN_FROM_SYM, it) }
+        }
+    }
+    SettingsSection.SWIPE -> item("swipe") {
+        var open by remember { mutableStateOf(false) }
+        val language = state.chordLanguage()
+        val letters = state.chordLetters()
+        if (open) {
+            val chords by produceState<List<Chords.Chord>?>(null, language, letters) {
+                value = null
+                value = withContext(Dispatchers.Default) { state.chordList(language, letters) }
+            }
+            AlertDialog(onDismissRequest = { open = false }, title = { Text("Chord list · " + Prefs.LANGUAGE_NAMES.getValue(language)) },
+                text = {
+                    LazyColumn(Modifier.heightIn(max = 400.dp)) {
+                        if (chords == null) item { Text("Loading…") }
+                        else if (chords!!.isEmpty()) item { Text("No chords for this layout.") }
+                        else items(chords!!, key = { it.word }) { Text(it.label, Modifier.padding(vertical = 8.dp)) }
+                    }
+                }, confirmButton = { TextButton(onClick = { open = false }) { Text("Done") } })
+        }
+        OptionGroup {
+            val blocked = state.bool(Prefs.TYPE_ON_PRESS)
+            for ((label, pref) in listOf("Swipe typing" to Prefs.SWIPE_TYPING, "Chords" to Prefs.CHORDING)) {
+                ToggleRow(label, !blocked && state.bool(pref), enabled = !blocked,
+                    note = if (blocked) "Off while Type on press is on" else null) { state.set(pref, it) }
+                if (pref == Prefs.SWIPE_TYPING && state.bool(Prefs.SWIPE_TYPING) && !blocked) {
+                    SettingsDropdown("Swipe style", if (state.bool(Prefs.SWIPE_LETTERS)) "Type the letters" else "Guess the word",
+                        listOf("Guess the word", "Type the letters")) { state.set(Prefs.SWIPE_LETTERS, it == 1) }
+                }
+            }
+            ActionRow("Chord list") { open = true }
+        }
+    }
+    SettingsSection.CURSOR -> item("cursorControl") {
+        Column {
+            SettingsDropdown("Cursor control", state.cursorControl().title, CursorControl.entries.map { it.title }) {
+                state.settings.setCursorControl(CursorControl.entries[it])
+            }
+            val control = state.cursorControl()
+            val bars = control == CursorControl.TOUCH_BAR || control == CursorControl.AUTO || control == CursorControl.SPACE_BAR
+            val arrows = bars && state.touchBarStyle() == TouchBarStyle.LEFT_RIGHT
+            val bar = if (arrows) "Press the left bar to move the cursor left and the right bar to move it right; hold to repeat."
+                else "Hold and push in the bar above the space key to move the cursor."
+            val how = when (control) {
+                CursorControl.TOUCH_BAR -> bar
+                CursorControl.SPACE_BAR -> if (arrows) "Hold the space bar of the left half to move the cursor left, the right half's to move it right. A tap types a space."
+                    else "Hold the space bar, or slide along it, and push to move the cursor. A tap types a space."
+                CursorControl.OFF -> "No cursor area on the keyboard."
+                CursorControl.AUTO -> "Split: $bar Otherwise, hold and push in the empty space."
+                else -> "Hold and push in the empty space to move the cursor."
+            }
+            Text(how, Modifier.padding(16.dp, 8.dp),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (bars) {
+                Text(if (control == CursorControl.SPACE_BAR) "Space bar" else "Touch bar", Modifier.padding(start = 16.dp, top = 4.dp), style = MaterialTheme.typography.bodyLarge)
+                SettingsSegments(TouchBarStyle.entries.map { it.title }, state.touchBarStyle().ordinal, "Touch bar",
+                    Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)) { state.settings.setTouchBarStyle(TouchBarStyle.entries[it]) }
+            }
+            if (state.cursorControl() != CursorControl.OFF) {
+                val sensitivity = state.int(Prefs.CURSOR_SENSITIVITY)
+                SettingSlider("Cursor sensitivity", sensitivity, Prefs.CURSOR_SENSITIVITY,
+                    if (sensitivity == 100) "Default" else "$sensitivity%") { state.set(Prefs.CURSOR_SENSITIVITY, it) }
+            }
+        }
+    }
+    SettingsSection.FEEDBACK -> item("feedback") {
+        OptionGroup {
             val vibrator = LocalContext.current.getSystemService(android.os.Vibrator::class.java)
             if (vibrator?.hasVibrator() == true) {
                 ToggleRow("Vibrate on tap", state.bool(Prefs.HAPTICS)) { state.set(Prefs.HAPTICS, it) }
@@ -193,14 +270,9 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
                 val volume = state.int(Prefs.SOUND_VOLUME)
                 SettingSlider("Sound volume", volume, Prefs.SOUND_VOLUME, "$volume%") { state.set(Prefs.SOUND_VOLUME, it) }
             }
-            ToggleRow("Automatic space", state.bool(Prefs.AUTOMATIC_SPACE), note = "Add a space after swiped and picked words.") { state.set(Prefs.AUTOMATIC_SPACE, it) }
-            ToggleRow("Automatic punctuation", state.bool(Prefs.AUTOMATIC_PUNCTUATION), note = "Attach punctuation and close brackets and quotes.") { state.set(Prefs.AUTOMATIC_PUNCTUATION, it) }
-            if (state.bool(Prefs.AUTOMATIC_PUNCTUATION)) {
-                ToggleRow("Double-space period", state.bool(Prefs.DOUBLE_SPACE_PERIOD), note = "Tap space twice to end a sentence.") { state.set(Prefs.DOUBLE_SPACE_PERIOD, it) }
-            }
         }
     }
-    item("learning") {
+    SettingsSection.LEARNING -> item("learning") {
         val context = LocalContext.current
         var query by remember { mutableStateOf("") }
         var confirm by remember { mutableStateOf(false) }
@@ -255,85 +327,27 @@ internal fun LazyListScope.typingOptions(state: SettingsState, onAbout: () -> Un
             }
         }
     }
-    item("longPress") {
+    SettingsSection.ACCESSIBILITY -> item("accessibility") {
         OptionGroup {
+            ToggleRow("Type on press", state.bool(Prefs.TYPE_ON_PRESS)) { state.set(Prefs.TYPE_ON_PRESS, it) }
             val time = state.int(Prefs.LONG_PRESS_MS)
             SettingSlider("Long-press time", time, Prefs.LONG_PRESS_MS, "$time ms") { state.set(Prefs.LONG_PRESS_MS, it) }
+            val guard = state.int(Prefs.KEY_REPEAT_GUARD)
+            SettingSlider("Ignore repeated taps", guard, Prefs.KEY_REPEAT_GUARD, if (guard == 0) "Off" else "$guard ms") { state.set(Prefs.KEY_REPEAT_GUARD, it) }
+            val slack = state.int(Prefs.TOUCH_SLACK)
+            SettingSlider("Extra tap area", slack, Prefs.TOUCH_SLACK, "$slack dp") { state.set(Prefs.TOUCH_SLACK, it) }
         }
     }
-    item("cursorControl") {
-        Column {
-            SettingsDropdown("Cursor control", state.cursorControl().title, CursorControl.entries.map { it.title }) {
-                state.settings.setCursorControl(CursorControl.entries[it])
-            }
-            Text("Hold and push in the empty space to move the cursor.", Modifier.padding(16.dp, 8.dp),
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (state.cursorControl() != CursorControl.OFF) {
-                val sensitivity = state.int(Prefs.CURSOR_SENSITIVITY)
-                SettingSlider("Cursor sensitivity", sensitivity, Prefs.CURSOR_SENSITIVITY,
-                    if (sensitivity == 100) "Default" else "$sensitivity%") { state.set(Prefs.CURSOR_SENSITIVITY, it) }
-            }
-            ToggleRow("Cursor glow", state.bool(Prefs.CURSOR_GLOW),
-                note = "Show a soft glow across the keys when you move the cursor.") { state.set(Prefs.CURSOR_GLOW, it) }
-        }
-    }
-    item("accessibility") {
-        Column {
-            GroupTitle("Accessibility")
-            OptionGroup {
-                ToggleRow("Type on press", state.bool(Prefs.TYPE_ON_PRESS)) { state.set(Prefs.TYPE_ON_PRESS, it) }
-                val guard = state.int(Prefs.KEY_REPEAT_GUARD)
-                SettingSlider("Ignore repeated taps", guard, Prefs.KEY_REPEAT_GUARD, if (guard == 0) "Off" else "$guard ms") { state.set(Prefs.KEY_REPEAT_GUARD, it) }
-                val slack = state.int(Prefs.TOUCH_SLACK)
-                SettingSlider("Extra tap area", slack, Prefs.TOUCH_SLACK, "$slack dp") { state.set(Prefs.TOUCH_SLACK, it) }
-            }
-        }
-    }
-    item("panels") {
-        Column { GroupTitle("Panels"); InsertSettingsLinks(state.settings, onPanel) }
-    }
-    item("assist") {
-        var open by remember { mutableStateOf(false) }
-        val language = state.chordLanguage()
-        val letters = state.chordLetters()
-        if (open) {
-            val chords by produceState<List<Chords.Chord>?>(null, language, letters) {
-                value = null
-                value = withContext(Dispatchers.Default) { state.chordList(language, letters) }
-            }
-            AlertDialog(onDismissRequest = { open = false }, title = { Text("Chord list · " + Prefs.LANGUAGE_NAMES.getValue(language)) },
-                text = {
-                    LazyColumn(Modifier.heightIn(max = 400.dp)) {
-                        if (chords == null) item { Text("Loading…") }
-                        else if (chords!!.isEmpty()) item { Text("No chords for this layout.") }
-                        else items(chords!!, key = { it.word }) { Text(it.label, Modifier.padding(vertical = 8.dp)) }
-                    }
-                }, confirmButton = { TextButton(onClick = { open = false }) { Text("Done") } })
-        }
-        Column {
-            GroupTitle("Assist")
-            OptionGroup {
-                for ((label, pref) in listOf("Space accepts chosen word" to Prefs.SPACE_ACCEPTS, "Swipe typing" to Prefs.SWIPE_TYPING, "Highlight likely keys" to Prefs.KEY_TINT, "Smart tap areas" to Prefs.SMART_TARGETS, "Follow hand drift" to Prefs.TOUCH_DRIFT, "Vibrate on typos" to Prefs.TYPO_BUZZ, "Chords" to Prefs.CHORDING)) {
-                    if (pref == Prefs.TYPO_BUZZ && LocalContext.current.getSystemService(android.os.Vibrator::class.java)?.hasVibrator() != true) continue
-                    val blocked = state.bool(Prefs.TYPE_ON_PRESS) && (pref == Prefs.SWIPE_TYPING || pref == Prefs.CHORDING)
-                    ToggleRow(label, !blocked && state.bool(pref), enabled = !blocked,
-                        note = if (blocked) "Off while Type on press is on" else null) { state.set(pref, it) }
-                }
-                if (state.bool(Prefs.SWIPE_TYPING) && !state.bool(Prefs.TYPE_ON_PRESS)) {
-                    SettingsDropdown("Swipe style", if (state.bool(Prefs.SWIPE_LETTERS)) "Type the letters" else "Guess the word",
-                        listOf("Guess the word", "Type the letters")) { state.set(Prefs.SWIPE_LETTERS, it == 1) }
-                    Text("Choose word guessing or the letters at turns and pauses.", Modifier.padding(20.dp, 8.dp),
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                ActionRow("Chord list") { open = true }
-            }
-        }
-    }
-    item("more") {
+    SettingsSection.PANELS -> item("panels") { InsertSettingsLinks(state.settings, onPanel) }
+    SettingsSection.HELP -> item("more") {
         val context = LocalContext.current
         OptionGroup {
             ActionRow("Guide") { context.startActivity(Intent(context, OnboardingActivity::class.java)) }
             ActionRow("About", onClick = onAbout)
+            ToggleRow("Log autocorrect decisions", state.bool(Prefs.LOG_DECISIONS),
+                note = "For testing: writes what autocorrect saw and chose to the device log, and keeps your taps and its fixes in a file on this device, including what you type.") {
+                state.set(Prefs.LOG_DECISIONS, it)
+            }
             ActionRow("Reset settings", destructive = true, onClick = onReset)
         }
     }

@@ -10,6 +10,46 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 class LayoutSplitTest {
+    @Test fun halfAdjustmentsTravelWithSettingsCodesAndUndoWithoutChangingBaseSliders() {
+        val s = settings()
+        assertTrue(s.bool(Prefs.MIRROR_HALVES))
+        val left = HalfShape(108, 120, 7)
+        val right = HalfShape(93, 85, -4)
+        s.setHalfGeometryFor(false, s.profile(false).copy(leftShape = left, rightShape = right, leftInset = 60))
+        assertEquals(left, s.profile(false).leftShape)
+        assertEquals(right, s.profile(false).rightShape)
+        assertEquals(HalfShape(), s.profile(true).leftShape)
+        val saved = s.halfGeometry()
+        val code = KeyGrid.default().toCode(s.layoutSettings())
+        val loaded = settings().apply { applyLayoutSettings(KeyGrid.decodeCode(code)!!.settings!!) }
+        assertEquals(left, loaded.profile(false).leftShape)
+        assertEquals(right, loaded.profile(false).rightShape)
+        assertEquals(60, loaded.profile(false).leftInset)
+        s.setFor(false, Prefs::width, 78)
+        s.setFor(false, Prefs::height, 50)
+        assertEquals(left, s.profile(false).leftShape)
+        s.setHalfGeometryFor(false, s.profile(false).shapeHalf(0, HalfShape(), true))
+        s.restoreHalfGeometry(saved)
+        assertEquals(left, s.profile(false).leftShape)
+        assertEquals(right, s.profile(false).rightShape)
+        assertEquals(78, s.profile(false).widthPercent)
+        assertEquals(50, s.profile(false).heightPercent)
+        s.linkOrientations(false)
+        assertEquals(left, s.profile(true).leftShape)
+        s.setHalfGeometryFor(true, s.profile(true).shapeHalf(1, HalfShape(112, 109, 9), true))
+        assertEquals(s.profile(true).leftShape, s.profile(false).leftShape)
+        assertEquals(s.profile(true).rightShape, s.profile(false).rightShape)
+    }
+
+    @Test fun importedHalfSettingsAreBoundedAndOlderSettingsKeepDefaultAdjustments() {
+        val s = settings()
+        s.applyLayoutSettings("""{"half_width_left_p":99999,"half_height_right_l":0,"half_tilt_right_p":-999}""")
+        assertEquals(150, s.profile(false).leftShape.width)
+        assertEquals(50, s.profile(true).rightShape.height)
+        assertEquals(-20, s.profile(false).rightShape.tilt)
+        assertEquals(HalfShape(), settings().profile(false).leftShape)
+    }
+
     @Test fun customLayoutsCaptureBothOrientationsAndLookAndStayInSync() {
         val s = settings()
         s.setFor(false, Prefs::height, 52); s.setFor(true, Prefs::height, 66)
