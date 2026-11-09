@@ -148,6 +148,17 @@ internal fun SettingsSegments(labels: List<String>, selected: Int, description: 
     }
 }
 
+/** A choice of a few options ([SettingsSegments]) under its label, with the paddings and text sizes of [ToggleRow]. */
+@Composable
+internal fun SegmentedRow(label: String, choices: List<String>, selected: Int, note: String? = null, onSelect: (Int) -> Unit) {
+    Column(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 20.dp, end = 12.dp, top = 8.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+        SettingsSegments(choices, selected, label, onSelect = onSelect)
+        if (note != null) Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
 @Composable
 internal fun ActionRow(label: String, destructive: Boolean = false, onClick: () -> Unit) {
     TextButton(onClick, Modifier.fillMaxWidth().heightIn(min = 56.dp),

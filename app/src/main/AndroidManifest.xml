@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- No INTERNET permission. Optional online dictation is handled by the selected speech service. -->
+<!-- No INTERNET permission. Optional online dictation is handled by the selected speech service, and optional system
+     spell checking by the spell-checker app selected in Android settings (seen here only to show its name). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <queries><intent><action android:name="android.speech.RecognitionService" /></intent></queries>
+    <queries>
+        <intent><action android:name="android.speech.RecognitionService" /></intent>
+        <intent><action android:name="android.service.textservice.SpellCheckerService" /></intent>
+    </queries>
 
     <application
         android:allowBackup="true"

@@ -7,7 +7,8 @@ import org.json.JSONObject
 
 enum class Align { LEFT, CENTER, RIGHT }
 
-class IntPref(val key: String, val default: Int, val min: Int, val max: Int)
+/** [device]: kept on this device only (not in Android backups), like [BoolPref.device]. */
+class IntPref(val key: String, val default: Int, val min: Int, val max: Int, val device: Boolean = false)
 /** [device]: kept on this device only (not in Android backups), for switches that must never come back by themselves. */
 class BoolPref(val key: String, val default: Boolean, val device: Boolean = false)
 
@@ -87,6 +88,12 @@ object Prefs {
     // Retain the old key as the child of Automatic punctuation; existing choices migrate unchanged.
     val DOUBLE_SPACE_PERIOD = BoolPref("double_space_period", true)
     val AUTOCORRECT = IntPref("autocorrect", 1, 0, 2)
+    /**
+     * The system spell checker (SpellCheckMode by ordinal): Off, added to TailorKeys's own correction, or used instead
+     * of it. On, it sends typed words to the spell-checker app selected in Android settings, so it is kept on this
+     * device only: restoring a backup never turns that sharing on, and Reset settings turns it off.
+     */
+    val SYSTEM_SPELL_CHECK = IntPref("system_spell_check", 0, 0, 2, device = true)
     /** Never suggest or correct to offensive words; typed ones are still left alone. */
     val BLOCK_OFFENSIVE = BoolPref("block_offensive", true)
     val LEARNING = BoolPref("learning", true)
@@ -160,6 +167,9 @@ class KeyboardSettings internal constructor(
             if (!device.contains(p.key)) device.edit().putBoolean(p.key, prefs.getBoolean(p.key, p.default)).apply()
             prefs.edit().remove(p.key).apply()
         }
+        // A device-only choice found in the backed-up file can only have come from a restore: it is dropped, not moved,
+        // so it never turns sharing on by itself.
+        if (device !== prefs) for (p in listOf(Prefs.SYSTEM_SPELL_CHECK)) if (prefs.contains(p.key)) prefs.edit().remove(p.key).apply()
     }
     constructor(context: Context) : this(
         context.applicationContext.getSharedPreferences("settings", Context.MODE_PRIVATE),
@@ -187,9 +197,9 @@ class KeyboardSettings internal constructor(
         if (lang in languages()) prefs.edit().putString(Prefs.CURRENT_LANGUAGE, lang).apply()
     }
 
-    fun int(p: IntPref) = prefs.getInt(p.key, p.default).coerceIn(p.min, p.max)
+    fun int(p: IntPref) = (if (p.device) device else prefs).getInt(p.key, p.default).coerceIn(p.min, p.max)
     fun bool(p: BoolPref) = (if (p.device) device else prefs).getBoolean(p.key, p.default)
-    fun set(p: IntPref, value: Int) { prefs.edit().putInt(p.key, value.coerceIn(p.min, p.max)).apply(); syncAppearance(p.key) }
+    fun set(p: IntPref, value: Int) { (if (p.device) device else prefs).edit().putInt(p.key, value.coerceIn(p.min, p.max)).apply(); syncAppearance(p.key) }
     fun set(p: BoolPref, value: Boolean) { (if (p.device) device else prefs).edit().putBoolean(p.key, value).apply(); syncAppearance(p.key) }
 
     private val layoutInts get() = listOf(Prefs.CURVE, Prefs.DEPTH, Prefs.KEY_GAP, Prefs.CORNER_RADIUS, Prefs.TEXT_SCALE) +
@@ -455,6 +465,9 @@ class KeyboardSettings internal constructor(
         prefs.edit().putString(Prefs.LAYOUT, grid.toJson()).putBoolean(Prefs.NUMBER_ROW.key, grid.rows == 5).apply()
     }
 
-    /** Back to defaults, without showing the first-run guide again. */
-    fun resetAll() = prefs.edit().clear().putBoolean(Prefs.ONBOARDED.key, true).apply()
+    /** Back to defaults, without showing the first-run guide again. The system spell checker goes back to Off. */
+    fun resetAll() {
+        prefs.edit().clear().putBoolean(Prefs.ONBOARDED.key, true).apply()
+        if (device !== prefs) device.edit().remove(Prefs.SYSTEM_SPELL_CHECK.key).apply()
+    }
 }

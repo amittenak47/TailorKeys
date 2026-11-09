@@ -249,10 +249,53 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private val sentenceWords = ArrayList<FinishedWord>()
     /** Sentence re-decoding steps the model for tens of milliseconds; keep it off the keyboard's thread. */
     private val sentenceWorker = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "TailorKeys-sentence").apply { isDaemon = true } }
+    /** Bumped when the system spell checker's settings change: a sentence re-decoding still running then never applies. */
+    private var sentenceJob = 0
+
+    /** The system spell checker (SpellCheckController); Prefs.SYSTEM_SPELL_CHECK, Off by default. */
+    private lateinit var spellCheck: SpellCheckController
+    private val spellClock = object : SpellCheckClock {
+        override fun now() = SystemClock.uptimeMillis()
+        override fun post(delay: Long, task: () -> Unit): () -> Unit {
+            val run = Runnable { if (!destroyed) task() }
+            main.postDelayed(run, delay)
+            return { main.removeCallbacks(run) }
+        }
+    }
+    private val spellHost = object : SpellCheckController.Host {
+        override fun phase(block: () -> Unit) = editorPhase { editorRead = null; block() }
+        override fun editor(): SpellCheckEditor? {
+            val ic = currentInputConnection ?: return null
+            val read = this@TailorKeysService.editor()
+            return SpellCheckEditor(inputSession, ic, read.start, read.end, read.selected, read.before.takeLast(64), read.after.take(64))
+        }
+        // Without the word lists loaded nothing can be checked, so nothing is offered.
+        override fun offensive(word: String) = !modelReady || predictor.isOffensive(word)
+        override fun rejected(original: String, fix: String) = !modelReady || predictor.rejected(original, fix)
+        override fun replace(word: String, replacement: String, tail: String) {
+            if (!commitCorrection(word, replacement, tail, typed = tail)) return
+            // Look-back and hand drift go on from the word as it now stands.
+            lastWord?.let { last ->
+                val now = FinishedWord(last.typed, last.taps, this@TailorKeysService.editor().before.takeLast(48), last.candidates)
+                if (sentenceWords.lastOrNull() === last) sentenceWords[sentenceWords.lastIndex] = now
+                lastWord = now
+            }
+            updateSuggestions(); keyboardView?.refreshInputState()
+        }
+        // Not while a wheel word is chosen: new suggestions would take the choice away.
+        override fun wheelChanged() { if (keyboardView?.armedWord == null) updateSuggestions() }
+    }
+
+    /** Applies the system spell checker's settings; a change closes its session and stops a sentence re-decoding still running. */
+    private fun configureSpellCheck() {
+        val mode = SpellCheckMode.entries[settings.int(Prefs.SYSTEM_SPELL_CHECK)]
+        if (spellCheck.configure(mode, settings.int(Prefs.AUTOCORRECT) != 0, settings.bool(Prefs.BLOCK_OFFENSIVE), state.language)) sentenceJob++
+    }
 
     override fun onWheelChosen() = editorPhase { onWheelChosenPhase() }
 
     private fun onWheelChosenPhase() {
+        spellCheck.userAction()
         if (currentInputConnection == null) return
         val read = editor()
         chosenBefore = read.before.takeLast(64)
@@ -327,37 +370,74 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         return true
     }
 
-    private fun correctWord(separator: String): Boolean {
-        if (!modelReady || !correctAllowed || state.layer != Layer.ABC || editor().selected) return false
+    /**
+     * The word a separator is about to finish, with what the protection rules need to know about it (WordEndFacts),
+     * or null when no word ends here. Taken before anything is committed, while the word's taps still describe it.
+     */
+    private fun wordEndFacts(): WordEndFacts? {
         val read = editor()
         val before = read.before
-        val word = before.takeLastWhile(TextInputRules::wordChar)
-        val typed = taps.hasInput(word)
-        if (typed) predictor.noteTyped(word)
-        if (before.takeLast(64) == protectedBefore && read.after.take(64) == protectedAfter ||
-            before.takeLast(64) == suppressedBefore && read.after.take(64) == suppressedAfter ||
-            read.after.firstOrNull()?.let(TextInputRules::wordChar) == true || currentGlide()) return false
+        val word = before.takeLastWhile(TextInputRules::wordChar).takeIf { it.isNotEmpty() } ?: return null
+        val tail = before.takeLast(64); val after = read.after.take(64)
+        return WordEndFacts(word, before, after, read.selected, state.layer == Layer.ABC, typed = taps.hasInput(word),
+            picked = tail == protectedBefore && after == protectedAfter, undone = tail == suppressedBefore && after == suppressedAfter,
+            glide = currentGlide(), learned = modelReady && (predictor.isLearned(word) || predictor.typedTwice(word)),
+            known = modelReady && predictor.hasWord(word))
+    }
+
+    /** TailorKeys's own correction of the word [ending] finishes, with [separator] after it; false when it leaves the word. */
+    private fun correctWord(separator: String, ending: WordEndFacts?): Boolean {
+        if (ending == null || !modelReady || !correctAllowed || !ending.letters || ending.selected) return false
+        val word = ending.word
+        if (ending.typed) predictor.noteTyped(word)
+        if (!WordEndRules.mayChange(ending, correctAllowed)) return false
+        val before = ending.before
+        val after = ending.after
         val previousPrefix = before.dropLast(word.length).trimEnd(' ').takeLast(64)
-        val pickedPrevious = protectedBefore?.trimEnd(' ') == previousPrefix && read.after.take(64) == protectedAfter
+        val pickedPrevious = protectedBefore?.trimEnd(' ') == previousPrefix && after == protectedAfter
         val change = predictor.correction(before, AutocorrectMode.entries[settings.int(Prefs.AUTOCORRECT)], taps,
-            userTyped = typed, allowJoin = !pickedPrevious) ?: return false
-        val context = CorrectionRules.context(before, change.original.length)
-        val prev = context.lastOrNull(); val prev2 = context.getOrNull(context.size - 2)
+            userTyped = ending.typed, allowJoin = !pickedPrevious) ?: return false
+        // Instead of TailorKeys: only the system spell checker fixes typos, but capitalization stays TailorKeys's ("i" to
+        // "I"), as automatic capitalization keeps its own settings. The bookkeeping above still runs either way.
+        if (spellCheck.replacesLocal && !change.replacement.equals(change.original, ignoreCase = true)) return false
+        return commitCorrection(change.original, change.replacement, separator)
+    }
+
+    /**
+     * Puts [replacement] in place of [original], the text just before the cursor, followed by [separator]. [typed] is
+     * the part of the separator already in the text after [original] (the system spell checker answers once it has
+     * been typed): it is taken out and given back. Backspace right after undoes the change (ReversibleCommit), and the
+     * replacement is learned only once it is kept. Shared by TailorKeys's own corrections and the system spell checker's.
+     */
+    private fun commitCorrection(original: String, replacement: String, separator: String, typed: String = ""): Boolean {
         val ic = currentInputConnection ?: return false
+        val context = CorrectionRules.context(editor().before.dropLast(typed.length), original.length)
+        val prev = context.lastOrNull(); val prev2 = context.getOrNull(context.size - 2)
         val model = predictor
         val allowed = canLearnNow()
+        val (delete, insert) = WordEndRules.edit(original, replacement, separator, typed)
         clearTaps(); clearChoice(); clearGlide(); clearAutomaticSpace(); pendingLearning = null
         ic.beginBatchEdit()
-        ic.deleteSurroundingText(change.original.length, 0)
-        ic.commitText(change.replacement + separator, 1)
+        ic.deleteSurroundingText(delete, 0)
+        ic.commitText(insert, 1)
         editorRead = null
         ic.endBatchEdit()
-        armedUndo = ReversibleCommit(change.original, change.replacement + separator, separator, editor().before.takeLast(64), editor().after.take(64), correction = true,
-            onKept = { model.recordKept(change.original, change.replacement) }) {
-            if (allowed && canLearnNow()) model.observeFinal(change.replacement, prev, prev2)
+        armedUndo = ReversibleCommit(original, insert, separator, editor().before.takeLast(64), editor().after.take(64), correction = true,
+            onKept = { model.recordKept(original, replacement) }) {
+            if (allowed && canLearnNow()) model.observeFinal(replacement, prev, prev2)
         }
         updateAutoCap()
         return true
+    }
+
+    /**
+     * After a separator finished a word nothing else changed, the system spell checker may still fix it, a moment
+     * later (SpellCheckController.wordEnded). The same protection rules as for TailorKeys's own correction come first.
+     */
+    private fun askSpellChecker(ending: WordEndFacts?) {
+        if (ending == null || spellCheck.mode == SpellCheckMode.OFF || !modelReady || !WordEndRules.mayChange(ending, correctAllowed) ||
+            !SpellCheckRules.mayAsk(ending)) return
+        spellCheck.wordEnded(ending.word, spellHost.editor() ?: return)
     }
 
     private fun commitArmed(separator: String): Boolean {
@@ -410,6 +490,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val layoutChanged = pendingLayout
         pendingLanguage = false; pendingLayout = false
         if (languageChanged) activateLanguage()
+        configureSpellCheck()
         if (layoutChanged) {
             val g = settings.loadGrid()
             if (g.toJson() != grid.toJson()) {
@@ -443,16 +524,22 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         clipboardCapture = app.tailorkeys.insert.ClipboardCapture(this, app.tailorkeys.insert.InsertRepository(this)) { insertPanel?.clipboardChanged() }
         state.language = settings.currentLanguage()
         grid = settings.loadGrid()
+        spellCheck = SpellCheckController(SystemSpellChecker(this), spellClock, spellHost)
         activateLanguage()
+        configureSpellCheck()
         settings.prefs.registerOnSharedPreferenceChangeListener(prefsListener)
+        // Device-only settings (the system spell checker) live in their own file.
+        if (settings.device !== settings.prefs) settings.device.registerOnSharedPreferenceChangeListener(prefsListener)
     }
 
     override fun onDestroy() {
         sentenceWorker.shutdownNow()
+        spellCheck.destroy()
         clipboardCapture?.close()
         insertPanel?.hide()
         onChoiceInterrupted()
         settings.prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
+        if (settings.device !== settings.prefs) settings.device.unregisterOnSharedPreferenceChangeListener(prefsListener)
         models.values.forEach { it.predictor.save() }
         destroyed = true
         main.removeCallbacks(applyPreferences)
@@ -555,6 +642,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val keyboard = keyboardView ?: return
         val panel = quickOptions ?: return
         if (panel.visibility == View.VISIBLE) return
+        spellCheck.userAction()
         onChoiceInterrupted()
         keyboard.cancelTouches()
         keyboard.setOptionsCovered(true)
@@ -585,6 +673,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     private fun openInsert() {
+        spellCheck.userAction()
         closeQuickOptions(); onChoiceInterrupted()
         keyboardView?.let { it.cancelTouches(); it.setOptionsCovered(true); it.alpha = 0f; it.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS }
         insertPanel?.show()
@@ -607,6 +696,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     override fun onStartInput(info: EditorInfo, restarting: Boolean) {
         super.onStartInput(info, restarting)
         inputSession++
+        spellCheck.finishField()
         closeInsert()
         val variation = info.inputType and InputType.TYPE_MASK_VARIATION
         val number = info.inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_CLASS_NUMBER
@@ -656,6 +746,15 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         learn = EditorRules.canLearn(cls == InputType.TYPE_CLASS_TEXT, password,
             info.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS != 0,
             info.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0)
+        // The system spell checker never sees a word from passwords, incognito fields, fields without suggestions or
+        // addresses; elsewhere its session opens only once a word needs it. This app's own Try-it box asks not to be
+        // learned from (so practice never teaches the keyboard), not for privacy, so the setting can be tried there.
+        configureSpellCheck()
+        spellCheck.startField(SpellCheckRules.eligibleField(cls == InputType.TYPE_CLASS_TEXT, password,
+            info.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS != 0,
+            info.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0 && info.packageName != packageName,
+            variation == InputType.TYPE_TEXT_VARIATION_URI || variation == InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS ||
+                variation == InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS || variation == InputType.TYPE_TEXT_VARIATION_POSTAL_ADDRESS))
         // Real typing kept for tools/lm (TypingLog): a file per field. Never in fields that ask not to be learned from
         // (incognito), nor in passwords and the like, except this app's own Try-it box.
         typingLog = settings.bool(Prefs.LOG_DECISIONS) && !password && (learn || info.packageName == packageName)
@@ -673,6 +772,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     override fun onFinishInputView(finishingInput: Boolean) {
         // The field's text as it was left, to line its kept keys up against (TypingLog).
         if (typingLog) try { TypingLog.text(editor().before) } catch (_: Exception) {}
+        spellCheck.finishField()
         closeInsert()
         onGlideCancel()
         clearTaps()
@@ -682,6 +782,11 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         editingLayoutKey = null
         models.values.forEach { it.predictor.save() }
         super.onFinishInputView(finishingInput)
+    }
+
+    override fun onFinishInput() {
+        spellCheck.finishField()
+        super.onFinishInput()
     }
 
     override fun onUpdateSelection(
@@ -712,6 +817,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     override fun onChord(word: String) = editorPhase { if (insertPanel?.typeText(word) != true) onChordPhase(word) }
 
     private fun onChordPhase(word: String) {
+        spellCheck.userAction()
         keepPendingLearning(); finishArmedLearning()
         clearTaps()
         onChoiceInterrupted()
@@ -751,6 +857,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     override fun onForwardDelete() = editorPhase {
         sound(Keys.BACKSPACE)
+        spellCheck.userAction()
         armedUndo = null; pendingLearning = null
         clearTaps(); clearChoice(); clearGlide(); clearAutomaticSpace()
         val read = editor()
@@ -795,6 +902,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     private fun handleKeyPhase(code: String, distances: FloatArray?, x: Float = Float.NaN, y: Float = Float.NaN) {
         sound(code)
+        spellCheck.userAction()
         liveGlide = null
         validateTaps()
         if (code == Keys.BACKSPACE && undoArmedCommit()) {
@@ -806,6 +914,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val separator = if (code == Keys.SPACE) " " else (KeyText.output(code, state) ?: code).takeIf { it.length == 1 && it[0] in ".,?!;:" }
         // Taken before the word is corrected or picked, while its taps still describe it.
         val finishing = if (separator != null) finishingWord() else null
+        val ending = if (separator != null) wordEndFacts() else null
         val endsSentence = separator != null && separator in SENTENCE_ENDS
         if (separator != null && separator != " ") {
             lastWord = null
@@ -816,7 +925,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             lastWord = null; sentenceWords.clear()
             updateSuggestions(); keyboardView?.refreshInputState(); return
         }
-        if (separator != null && correctWord(separator)) {
+        if (separator != null && correctWord(separator, ending)) {
             if (endsSentence) endSentence(finishing) else lookBack(finishing)
             updateSuggestions(); keyboardView?.refreshInputState(); return
         }
@@ -872,6 +981,8 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             // A double space may just have typed ". ", ending the sentence.
             if (editor().before.trimEnd(' ').lastOrNull()?.let { it in SENTENCE_ENDS } == true) endSentence(null)
         } else if (endsSentence) endSentence(finishing)
+        // TailorKeys left the word as typed (or, instead of TailorKeys, made no fix): the system spell checker may.
+        if (separator != null) askSpellChecker(ending)
         updateSuggestions(letterCommitted)
         keyboardView?.refreshInputState()
     }
@@ -900,7 +1011,8 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         // The sentence's word list only continues while the text still ends as it was left.
         if (previous == null || !head.endsWith(previous.tail)) sentenceWords.clear()
         var settled = old
-        if (previous != null && modelReady && correctAllowed && old.isNotEmpty() && head.endsWith(previous.tail) &&
+        // Instead of TailorKeys, look-back fixes nothing; the drift learning below still runs.
+        if (previous != null && modelReady && correctAllowed && !spellCheck.replacesLocal && old.isNotEmpty() && head.endsWith(previous.tail) &&
             read.after.firstOrNull()?.let(TextInputRules::wordChar) != true) {
             val fix = predictor.lookBack(head, previous.typed, previous.taps, word, AutocorrectMode.entries[settings.int(Prefs.AUTOCORRECT)], previous.candidates)
             val ic = currentInputConnection
@@ -932,7 +1044,8 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val words = ArrayList(sentenceWords).apply { if (finished != null) add(finished) }
         sentenceWords.clear(); lastWord = null
         val read = editor()
-        if (words.size < 2 || !modelReady || !correctAllowed || read.selected || read.after.firstOrNull()?.let(TextInputRules::wordChar) == true) return
+        if (words.size < 2 || !modelReady || !correctAllowed || spellCheck.replacesLocal || read.selected ||
+            read.after.firstOrNull()?.let(TextInputRules::wordChar) == true) return
         val before = read.before
         val body = before.trimEnd(' ')
         if (body.lastOrNull()?.let { it in SENTENCE_ENDS } != true) return
@@ -944,12 +1057,15 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val trailing = before.substring(text.length)
         val decode = predictor.prepareRedecode(head, words.map { it.typed }, words.map { it.taps }, span,
             AutocorrectMode.entries[settings.int(Prefs.AUTOCORRECT)]) ?: return
+        val job = sentenceJob
         sentenceWorker.execute {
             val fixed = decode() ?: return@execute
             main.post {
+                // A change to the system spell checker's settings since (to Instead of TailorKeys) stops it.
+                if (destroyed || job != sentenceJob || spellCheck.replacesLocal) return@post
                 val ic = currentInputConnection ?: return@post
                 val now = editor()
-                if (destroyed || now.before != before || now.selected || now.after.take(64) != read.after.take(64)) return@post
+                if (now.before != before || now.selected || now.after.take(64) != read.after.take(64)) return@post
                 val replacement = fixed.joinToString(" ") + trailing
                 ic.beginBatchEdit()
                 ic.deleteSurroundingText(spanText.length + trailing.length, 0)
@@ -963,6 +1079,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onSelectMode(on: Boolean) {
+        spellCheck.userAction()
         clearTaps()
         onChoiceInterrupted()
         val live = if (on) readCursor() else null
@@ -972,6 +1089,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     override fun onCursor(steps: Int, select: Boolean, words: Boolean) {
         if (insertPanel?.cursor(steps, select) == true) return
         if (steps == 0) return
+        spellCheck.userAction()
         onGlideCancel()
         clearAutomaticSpace()
         clearTaps()
@@ -1004,6 +1122,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     }
 
     override fun onReplacePressText(original: String, following: String, replacement: String) {
+        spellCheck.userAction()
         clearTaps()
         onChoiceInterrupted()
         val ic = currentInputConnection ?: return
@@ -1023,6 +1142,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     override fun onLongPressText(text: String) = editorPhase { if (insertPanel?.typeText(text) != true) onLongPressTextPhase(text) }
 
     private fun onLongPressTextPhase(text: String) {
+        spellCheck.userAction()
         onChoiceInterrupted()
         commit(text, typing = true)
         updateSuggestions(text.any { it.isLetter() })
@@ -1099,6 +1219,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     override fun onSuggestion(text: String) = editorPhase { suggestionPhase(text) }
 
     private fun suggestionPhase(text: String) {
+        spellCheck.userAction()
         if (armedUndo?.correction == true && armedUndo?.original == text && undoArmedCommit()) {
             updateSuggestions(); return
         }
@@ -1134,6 +1255,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     override fun onGlideStart() = editorPhase {
         if (insertPanel?.acceptsText() == true) return@editorPhase
+        spellCheck.userAction()
         keepPendingLearning(); finishArmedLearning()
         onChoiceInterrupted()
         val read = editor()
@@ -1248,8 +1370,10 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
                     val prefix = if (session.letters) SwipeTrace.appendToPrefix(session.prefix, raw) else ranked.firstOrNull()?.prefix ?: SwipeTrace.appendToPrefix(session.prefix, raw)
                     keyboardView?.keyWeights = if (settings.bool(Prefs.KEY_TINT) || settings.bool(Prefs.SMART_TARGETS)) model.nextLetters(prefix, prev) else emptyMap()
                     val words = ranked.map { glideCase(session, it.word) }
-                    glideCandidates = (words + if (session.letters) model.closest(prefix, prev) else emptyList()).distinct()
-                    glideExplore = if (session.letters) model.explore(prefix, prev) else words.drop(8)
+                    // Instead of TailorKeys, swiped letters get completions only, as tapped ones do.
+                    val instead = session.letters && spellCheck.replacesLocal
+                    glideCandidates = (words + if (session.letters) model.closest(prefix, prev, completionsOnly = instead) else emptyList()).distinct()
+                    glideExplore = if (session.letters) model.explore(prefix, prev, completionsOnly = instead) else words.drop(8)
                     if (final) {
                         if (!session.letters) finishGuess(session, ranked, raw)
                         else { liveGlide = null; updateSuggestions() }
@@ -1524,6 +1648,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     private fun suggestionsPhase(letterCommitted: Boolean) {
         if (!suggest || !modelReady) {
+            spellCheck.wheel("")
             deadEnd = false
             keyboardView?.keyWeights = emptyMap()
             keyboardView?.setSuggestions(emptyList(), emptyList(), "")
@@ -1542,6 +1667,9 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             keyboardView?.typoBuzz()
         }
         deadEnd = isDeadEnd
+        // The system spell checker is asked only about a word being typed here, once typing pauses.
+        val asked = if (spellCheck.mode == SpellCheckMode.OFF) emptyList() else spellCheck.wheel(if (state.layer == Layer.ABC &&
+            prefix.isNotEmpty() && taps.hasInput(prefix) && !currentGlide() && !hasAutomaticSpace()) prefix else "")
         val view = keyboardView ?: return
         if (state.layer != Layer.ABC) {
             view.keyWeights = emptyMap()
@@ -1572,7 +1700,12 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val prev2 = previousWord2(before)
         predictor.updateContext(if (predictor.language == "en") editor().before else before, prefix)
         view.keyWeights = if (settings.bool(Prefs.KEY_TINT) || settings.bool(Prefs.SMART_TARGETS)) predictor.nextLetters(prefix, prev, prev2, taps) else emptyMap()
-        view.setSuggestions(predictor.explore(prefix, prev, prev2, taps = taps), predictor.closest(prefix, prev, prev2, taps = taps), prefix)
+        // Instead of TailorKeys, its typo alternatives give way to the system spell checker's suggestions; its
+        // completions stay. Added to TailorKeys, the checker's suggestions join its own (SpellCheckRules.mergeWheel).
+        val instead = prefix.isNotEmpty() && spellCheck.replacesLocal
+        val explore = predictor.explore(prefix, prev, prev2, taps = taps, completionsOnly = instead)
+        view.setSuggestions(explore.filter { word -> asked.none { it.equals(word, ignoreCase = true) } },
+            SpellCheckRules.mergeWheel(predictor.closest(prefix, prev, prev2, taps = taps, completionsOnly = instead), asked), prefix)
     }
 
     /** Turns on a one-shot capital at the start of a sentence, when the field asks for it. */

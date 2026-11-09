@@ -2,7 +2,7 @@
 
 An Android keyboard built around two things stock keyboards get wrong: **size you can actually control**, and **predictions that don't fight you**.
 
-TailorKeys has no internet permission. Nothing typed on it can leave the phone. That's a privacy promise worth keeping for the Play Store listing.
+TailorKeys has no internet permission. Its own prediction and correction run on the device. Optional system spell checking sends words to your selected spell-checker app, which may use the internet. Optional dictation uses the selected speech service.
 
 ## Demo
 

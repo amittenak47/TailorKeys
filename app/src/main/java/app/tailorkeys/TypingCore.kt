@@ -61,6 +61,35 @@ internal object CorrectionRules {
     }
 }
 
+/**
+ * The word a separator is finishing, as the service saw it before typing the separator. [before] ends with [word];
+ * [typed]: its letters were typed here (not pasted or reached by moving the cursor); [picked]: chosen from the
+ * wheels; [undone]: a correction of it was just undone; [glide]: swiped; [learned]: one of the user's own words, or
+ * typed on purpose before; [known]: in TailorKeys's dictionary.
+ */
+internal data class WordEndFacts(val word: String, val before: String, val after: String, val selected: Boolean,
+    val letters: Boolean, val typed: Boolean, val picked: Boolean, val undone: Boolean, val glide: Boolean,
+    val learned: Boolean, val known: Boolean)
+
+/** Checks made before any automatic change to a finished word, by TailorKeys's own correction or the system spell checker. */
+internal object WordEndRules {
+    /**
+     * Whether the finished word may be changed automatically at all: in a field that allows corrections, on the
+     * letters, nothing selected, not in the middle of a word, not a word picked from the wheels, not one whose
+     * correction was just undone, and not a swiped word.
+     */
+    fun mayChange(f: WordEndFacts, fieldAllowed: Boolean) = fieldAllowed && f.letters && !f.selected &&
+        !f.picked && !f.undone && !f.glide && f.after.firstOrNull()?.let(TextInputRules::wordChar) != true
+
+    /**
+     * The edit that puts [replacement] in place of [original], the word before the cursor, followed by [separator]:
+     * how many characters to delete before the cursor, and what to insert. [typed] is the separator text already
+     * after the word (the system spell checker answers once it is typed); it is deleted and given back.
+     */
+    fun edit(original: String, replacement: String, separator: String, typed: String = "") =
+        (original.length + typed.length) to replacement + separator
+}
+
 /** Shared by corrections, armed suggestions and Tidy; only a matching live editor can keep/undo it. */
 internal class ReversibleCommit(val original: String, val inserted: String, val separator: String,
     val before: String?, val after: String?, val correction: Boolean = false,

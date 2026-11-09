@@ -742,19 +742,24 @@ class Predictor internal constructor(
         return prefix.length >= 2 && !candidateIndex.hasPrefix(p) && wideIndex?.hasPrefix(p) != true && learnedWords.ceiling(p)?.startsWith(p) != true
     }
 
-    fun closest(prefix: String, prev: String? = null, prev2: String? = null, n: Int = 8, taps: ComposingTaps? = null): List<String> {
+    /** [completionsOnly]: no typo alternatives, only words starting with [prefix] (the system spell checker offers those instead). */
+    fun closest(prefix: String, prev: String? = null, prev2: String? = null, n: Int = 8, taps: ComposingTaps? = null,
+                completionsOnly: Boolean = false): List<String> {
         val c = candidates(prefix, prev, prev2, taps)
         // Corrections give way once the prefix plainly starts real words. Words past words.txt count only within reach
         // of the best suggestion: with the extended lists nearly every prefix starts some rare word (teh: tehreek).
         val best = c.firstOrNull()?.score ?: 0.0
-        val maxCorrections = if (c.count { !it.correction && ((rank[it.word] ?: 0) < firstWords || it.score >= best - COMPLETION_REACH) } < 5) n else 3
+        val maxCorrections = if (completionsOnly) 0
+            else if (c.count { !it.correction && ((rank[it.word] ?: 0) < firstWords || it.score >= best - COMPLETION_REACH) } < 5) n else 3
         var corrections = 0
         return c.asSequence().filter { !it.correction || corrections++ < maxCorrections }
             .take(n).map { matchCase(it.word, prefix) }.toList()
     }
 
-    fun explore(prefix: String, prev: String? = null, prev2: String? = null, n: Int = 8, taps: ComposingTaps? = null): List<String> {
-        val c = candidates(prefix, prev, prev2, taps)
+    /** [completionsOnly]: as for [closest]. */
+    fun explore(prefix: String, prev: String? = null, prev2: String? = null, n: Int = 8, taps: ComposingTaps? = null,
+                completionsOnly: Boolean = false): List<String> {
+        val c = candidates(prefix, prev, prev2, taps).let { all -> if (completionsOnly) all.filter { !it.correction } else all }
         val seed = prefix.lowercase() + "\t${prev.orEmpty()}\t${prev2.orEmpty()}"
         val rnd = Random(seed.hashCode())
         // Weighted sampling without replacement. Temperature 2.5 flattens the ranking.
@@ -816,6 +821,13 @@ class Predictor internal constructor(
     fun isLearned(word: String) = user.containsKey(word.lowercase())
     /** Whether you undid this change often enough that it isn't made again. */
     fun rejected(original: String, fix: String) = history.blocked(original, fix)
+
+    /** The bundled list of offensive words (English), read the first time it is needed. */
+    private val offensiveWords by lazy {
+        if (language == "en") DictionaryWords.readRanked(openAsset, "words_offensive.txt").mapTo(HashSet()) { it.first } else emptySet()
+    }
+    /** Whether [word] is on the offensive list, for what Block offensive words keeps off the system spell checker's offers. */
+    fun isOffensive(word: String) = word.lowercase() in offensiveWords
 
     fun refreshLearning() { if (generation != PersonalStore.generation(directory)) reloadLearning() }
 

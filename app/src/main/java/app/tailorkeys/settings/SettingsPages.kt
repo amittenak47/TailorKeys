@@ -19,7 +19,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import app.tailorkeys.CursorControl
+import app.tailorkeys.SpellCheckRules
+import app.tailorkeys.SystemSpellChecker
 import app.tailorkeys.TouchBarStyle
 import app.tailorkeys.Align
 import app.tailorkeys.OnboardingActivity
@@ -68,6 +73,27 @@ internal fun LazyListScope.sizeOptions(state: SettingsState, page: Boolean, onPa
             }
         }
     }
+}
+
+/**
+ * Off, added to TailorKeys's own correction, or instead of it (SpellCheckController). The note names the spell checker
+ * Android has selected, read again on return from Android settings, and says when there is none to use.
+ */
+@Composable
+private fun SystemSpellCheckRow(state: SettingsState) {
+    val context = LocalContext.current
+    val mode = state.int(Prefs.SYSTEM_SPELL_CHECK)
+    var resumed by remember { mutableIntStateOf(0) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) resumed++ }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    // Opening a session to look (nothing is sent) only while the setting is on.
+    val status = remember(mode != 0, resumed) { SystemSpellChecker.status(context, probe = mode != 0) }
+    SegmentedRow("System spell checker", listOf("Off", "Add to TailorKeys", "Instead of TailorKeys"), mode,
+        note = SpellCheckRules.note(status)) { state.set(Prefs.SYSTEM_SPELL_CHECK, it) }
 }
 
 private fun degrees(value: Int) = (if (value > 0) "+" else if (value < 0) "\u2212" else "") + "${kotlin.math.abs(value)}\u00B0"
@@ -174,12 +200,15 @@ internal fun LazyListScope.settingsSection(section: SettingsSection, state: Sett
                                            onPanel: (String) -> Unit) = when (section) {
     SettingsSection.TYPING -> item("typing") {
         OptionGroup {
-            // One switch: the trained model corrects, or nothing does (Android and iOS offer no system autocorrect
-            // to a keyboard). An older mode (Confident, Aggressive) counts as on.
+            // One switch for every automatic fix at the space bar: TailorKeys's own correction (Predictor: its dictionary,
+            // where each tap landed and the English next-word model) and the system spell checker when the row below
+            // adds it or uses it instead. Android lets no keyboard use another's autocorrect; the spell-checker service
+            // is the only shared piece. An older mode (Confident, Aggressive) counts as on.
             ToggleRow("Autocorrect", state.int(Prefs.AUTOCORRECT) != 0,
-                note = "Fixes typos when you press space, reading the whole sentence. Backspace right after undoes a fix.") {
+                note = "Fixes typos when you press space. Backspace right after undoes a fix.") {
                 state.set(Prefs.AUTOCORRECT, if (it) 1 else 0)
             }
+            SystemSpellCheckRow(state)
             ToggleRow("Block offensive words", state.bool(Prefs.BLOCK_OFFENSIVE),
                 note = "Never suggest or autocorrect to swear words. When you type one, it's left as typed.") {
                 state.set(Prefs.BLOCK_OFFENSIVE, it)
