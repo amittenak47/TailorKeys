@@ -59,6 +59,8 @@ class Predictor internal constructor(
     private val pairFile = File(filesDir, "user_bigrams${suffix}.txt")
     private val tripleFile = File(filesDir, "user_trigrams${suffix}.txt")
     private val history = CorrectionHistory()
+    /** Undos and keeps from private fields: in memory for the current field only, never saved ([recordRejection]). */
+    private val privateHistory = CorrectionHistory()
     private val correctionFile = File(filesDir, "user_corrections${suffix}.txt")
     private val metadataFile = File(filesDir, "user_learning${suffix}.txt")
     private val directory = filesDir
@@ -387,10 +389,29 @@ class Predictor internal constructor(
     private fun frequencyRank(w: String) = rank[w]?.let { frequencyRanks.getOrNull(it) ?: it }
     private fun pairCount(first: String, second: String) = count(rank[first]?.let { seedTables?.pairs?.get(it.toLong()) }, rank[second]) + (userPairs[first]?.get(second) ?: 0)
 
-    fun recordRejection(original: String, fix: String): java.util.concurrent.Future<*>? { history.reject(original, fix); dirty = true; return save() }
-    fun recordKept(original: String, fix: String) { history.kept(original, fix); dirty = true }
-    fun noteTyped(original: String) { if (history.typed(original)) { dirty = true; save() } }
-    internal fun rejectionPenalty(fix: String) = history.penalty(fix)
+    /**
+     * An undone fix. [persist] false is for a private field (incognito, no suggestions, passwords, the Try-it box): the
+     * undo counts in memory until the next field ([forgetPrivate]) and nothing about it is saved.
+     */
+    fun recordRejection(original: String, fix: String, persist: Boolean = true): java.util.concurrent.Future<*>? {
+        if (!persist) { privateHistory.reject(original, fix); return null }
+        history.reject(original, fix); dirty = true; return save()
+    }
+    /** A fix that was kept; [persist] as for [recordRejection]. */
+    fun recordKept(original: String, fix: String, persist: Boolean = true) {
+        if (!persist) { privateHistory.kept(original, fix); return }
+        history.kept(original, fix); dirty = true
+    }
+    /** [original] was typed by the user; [persist] as for [recordRejection]. */
+    fun noteTyped(original: String, persist: Boolean = true) {
+        if (!persist) { privateHistory.typed(original); return }
+        if (history.typed(original)) { dirty = true; save() }
+    }
+    /** A new field: what private fields taught about fixes is forgotten. */
+    fun forgetPrivate() = privateHistory.clear()
+    private fun blockedFix(original: String, fix: String) = history.blocked(original, fix) || privateHistory.blocked(original, fix)
+    private fun fixPenalty(fix: String) = history.penalty(fix) + privateHistory.penalty(fix)
+    internal fun rejectionPenalty(fix: String) = fixPenalty(fix)
     /** For the eval: told the numbers behind each change autocorrect and look-back make. */
     internal var trace: ((String) -> Unit)? = null
     /** How much each kind of slip costs when a finished word is weighed against its candidates; see [slipCost]. */
@@ -405,7 +426,7 @@ class Predictor internal constructor(
         if (!allowed || mode == AutocorrectMode.OFF || !CorrectionRules.eligible(word)) return null
         val p = word.lowercase()
         if (language == "en" && word == "i" && sentenceStart)
-            return "I".takeUnless { history.blocked(word, it) }
+            return "I".takeUnless { blockedFix(word, it) }
         val known = rank.containsKey(p)
         // Rarer dictionary words aren't doubted as unknown, but taps and context can still correct them like one.
         val trusted = (rank[p] ?: Int.MAX_VALUE) < KEYSTROKE_WORDS
@@ -445,12 +466,12 @@ class Predictor internal constructor(
                         scores.probability(it.word, rank[it.word]) - scores.probability(p, rank[p]) >= 5.0
                 }
                 .map { it.word to (it.score + (if (scores != null) MODEL_TYPO_WEIGHT else 2.5) * it.distance / 10.0 -
-                    (if (scores != null) slipCost(p, it.word, spatial) else 2.5 * cost(p, it.word, 22, rows, spatial, complete = true) / 10.0) - history.penalty(it.word)) }
+                    (if (scores != null) slipCost(p, it.word, spatial) else 2.5 * cost(p, it.word, 22, rows, spatial, complete = true) / 10.0) - fixPenalty(it.word)) }
                 .sortedByDescending { it.second }.toList()
             // Rejecting the fix that best explains the word says it was meant: the next in line doesn't take its place
             // (teh stays, not eth).
-            if (considered.firstOrNull()?.let { history.blocked(word, it.first) } == true) return null
-            val ranked = considered.filter { !history.blocked(word, it.first) }
+            if (considered.firstOrNull()?.let { blockedFix(word, it.first) } == true) return null
+            val ranked = considered.filter { !blockedFix(word, it.first) }
             val keep = wordScore(p, prev, prev2, scores) - if (known) 0.0 else if (scores != null) UNKNOWN_WORD_DOUBT else 4.6
             val margin = if (mode == AutocorrectMode.CONFIDENT) 1.2 else .8
             var result = ranked.firstOrNull()?.takeIf { best -> best.second - keep >= margin &&
@@ -466,11 +487,11 @@ class Predictor internal constructor(
                     if (!rank.containsKey(first) || !rank.containsKey(second)) continue
                     val confidentSkips = mode == AutocorrectMode.CONFIDENT && (i < 2 || second.length < 2 || !top(first) || !top(second))
                     val split = "$first $second"
-                    if (history.blocked(word, split) || pairCount(first, second) < 3) continue
+                    if (blockedFix(word, split) || pairCount(first, second) < 3) continue
                     val following = if (scores != null) scores.following(first, second, rank[second]) + personalScore(second, first, prev)
                         else wordScore(second, first, prev, null)
                     if (scores != null && following < -12.0) continue
-                    val score = wordScore(first, prev, prev2, scores) + following - .9 - history.penalty(split)
+                    val score = wordScore(first, prev, prev2, scores) + following - .9 - fixPenalty(split)
                     if (confidentSkips) withheld = maxOf(withheld, score) else splits.add(split to score)
                 }
                 // The space itself can land on a letter beside the bar (withnflowers -> with flowers): split there
@@ -482,11 +503,11 @@ class Predictor internal constructor(
                     val first = p.substring(0, i); val second = p.substring(i + 1)
                     if (!rank.containsKey(first) || !rank.containsKey(second) || first.length < 2 && first != "a" && first != "i") continue
                     val split = "$first $second"
-                    if (history.blocked(word, split)) continue
+                    if (blockedFix(word, split)) continue
                     val following = if (scores != null) scores.following(first, second, rank[second]) + personalScore(second, first, prev)
                         else wordScore(second, first, prev, null)
                     if (scores != null && following < -12.0) continue
-                    splits.add(split to (wordScore(first, prev, prev2, scores) + following - .9 - slipWeights.space * (drop + SPACE_DROP) - history.penalty(split)))
+                    splits.add(split to (wordScore(first, prev, prev2, scores) + following - .9 - slipWeights.space * (drop + SPACE_DROP) - fixPenalty(split)))
                 }
                 splits.sortByDescending { it.second }
                 splits.firstOrNull()?.let { best ->
@@ -612,11 +633,11 @@ class Predictor internal constructor(
             val spatial = taps?.takeIf { it.hasTaps(typed) }
             val slips = slips(p, AutocorrectMode.AGGRESSIVE, spatial)
             fun typo(w: String) = slipCost(p, w, spatial)
-            fun left(w: String) = scores.preceding(w, rank[w]) - typo(w) - history.penalty(w) -
+            fun left(w: String) = scores.preceding(w, rank[w]) - typo(w) - fixPenalty(w) -
                 if (rank.containsKey(w) || user.containsKey(w)) 0.0 else UNKNOWN_WORD_DOUBT
             // Each right-side score steps the model once, so only the best few by the left side get one.
             val pool = (known ?: candidates(p, null, null, spatial, wide = true).map { it.word }).asSequence()
-                .filter { it != current && !history.blocked(committed, it) && reachable(p, it, slips, spatial, rows) }
+                .filter { it != current && !blockedFix(committed, it) && reachable(p, it, slips, spatial, rows) }
                 .sortedByDescending(::left).take(LOOK_BACK_CANDIDATES).toList()
             if (pool.isEmpty()) return@withScores null
             val rightRank = rank[following]
@@ -661,7 +682,7 @@ class Predictor internal constructor(
             val spatial = taps[i]?.takeIf { it.hasTaps(typed[i]) }
             val rows = Array(3) { IntArray(p.length + 1) }
             fun option(w: String) = EnglishContext.Option(w, rank[w],
-                -slipCost(p, w, spatial) - history.penalty(w) -
+                -slipCost(p, w, spatial) - fixPenalty(w) -
                     if (rank.containsKey(w) || user.containsKey(w)) 0.0 else UNKNOWN_WORD_DOUBT)
             // Untapped, picked, deliberately repeated or capitalized (named) words stay as they are.
             val named = word.first().isUpperCase() && (i > 0 || !CorrectionRules.sentenceStart(before + word, word.length))
@@ -670,7 +691,7 @@ class Predictor internal constructor(
             val slips = slips(p, AutocorrectMode.AGGRESSIVE, spatial)
             atStart = i == 0 && CorrectionRules.sentenceStart(before + word, word.length)
             val supported = candidates(p, null, null, spatial, wide = true).asSequence().map { it.word }
-                .filter { it != current && !history.blocked(word, it) && reachable(p, it, slips, spatial, rows) }
+                .filter { it != current && !blockedFix(word, it) && reachable(p, it, slips, spatial, rows) }
             val alternatives = (if (experiment.redecodeByTaps) supported.sortedBy { slipCost(p, it, spatial) } else supported)
                 .take(SENTENCE_OPTIONS).toList()
             // What was typed is an option too when it's a word: an autocorrection may have been the mistake.
@@ -690,11 +711,12 @@ class Predictor internal constructor(
     }
 
     /** A bounded editor span, used by both IMEs so joins share ordinary correction undo. */
+    /** [persist] false in a private field: what was typed is remembered for that field only, never saved (noteTyped). */
     fun correction(before: String, mode: AutocorrectMode, taps: ComposingTaps? = null,
-                   allowed: Boolean = true, userTyped: Boolean = false, allowJoin: Boolean = true): WordCorrection? {
+                   allowed: Boolean = true, userTyped: Boolean = false, allowJoin: Boolean = true, persist: Boolean = true): WordCorrection? {
         if (!allowed) return null
         val word = before.takeLastWhile(TextInputRules::wordChar)
-        if (userTyped) noteTyped(word)
+        if (userTyped) noteTyped(word, persist)
         updateContext(before, word)
         val context = CorrectionRules.context(before, word.length)
         val fix = autocorrect(word, mode, context.lastOrNull(), context.getOrNull(context.size - 2), taps,
@@ -707,8 +729,8 @@ class Predictor internal constructor(
         val first = prefix.dropLast(1).takeLastWhile(TextInputRules::wordChar)
         if (!CorrectionRules.eligible(first) || word.any { it.isUpperCase() } || typedTwice(first) || typedTwice(word)) return null
         val original = "$first $word"; val joined = first.lowercase() + word.lowercase()
-        if (userTyped) noteTyped(original)
-        if (!top(joined) || history.blocked(original, joined)) return null
+        if (userTyped) noteTyped(original, persist)
+        if (!top(joined) || blockedFix(original, joined)) return null
         // "Rare" includes contextually rare pairs (key board); established phrases (in to) stay intact.
         if (pairCount(first.lowercase(), word.lowercase()) >= 3) return null
         val preceding = CorrectionRules.context(before, original.length)
@@ -716,7 +738,7 @@ class Predictor internal constructor(
         fun join(scores: EnglishContext.Scores?): WordCorrection? {
             val neural = scores?.takeIf { it.lastWord == first.lowercase() }
             val joinedScore = (neural?.preceding(joined, rank[joined])?.plus(personalScore(joined, prev, prev2))
-                ?: wordScore(joined, prev, prev2, null)) - .9 - history.penalty(joined)
+                ?: wordScore(joined, prev, prev2, null)) - .9 - fixPenalty(joined)
             val firstScore = neural?.preceding(first.lowercase(), rank[first.lowercase()]) ?: wordScore(first.lowercase(), prev, prev2, null)
             val secondScore = wordScore(word.lowercase(), first.lowercase(), prev, neural)
             val keep = firstScore + secondScore - (if (rank.containsKey(first.lowercase())) 0.0 else 4.6) - (if (rank.containsKey(word.lowercase())) 0.0 else 4.6) - 2.5
@@ -820,7 +842,7 @@ class Predictor internal constructor(
     fun typedTwice(word: String) = (observed[word.lowercase()] ?: 0) >= 2
     fun isLearned(word: String) = user.containsKey(word.lowercase())
     /** Whether you undid this change often enough that it isn't made again. */
-    fun rejected(original: String, fix: String) = history.blocked(original, fix)
+    fun rejected(original: String, fix: String) = blockedFix(original, fix)
 
     /** The bundled list of offensive words (English), read the first time it is needed. */
     private val offensiveWords by lazy {

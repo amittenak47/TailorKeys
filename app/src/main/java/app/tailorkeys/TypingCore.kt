@@ -143,6 +143,7 @@ internal class CorrectionHistory {
     }
     fun banned(language: String) = entries.values.filter { it.undos >= 2 }.map { RejectedCorrection(language, it.original, it.fix) }
     fun remove(original: String, fix: String) { entries.remove(key(original, fix)); rebuildTotals() }
+    fun clear() { entries.clear(); undoTotals.clear(); keepTotals.clear() }
     fun load(text: String) {
         entries.clear()
         for (line in text.lineSequence()) {

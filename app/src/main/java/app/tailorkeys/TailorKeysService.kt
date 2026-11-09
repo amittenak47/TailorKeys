@@ -358,7 +358,8 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         if (undo.correction) {
             // A change to two words is undone word by word: each pair is what the next decision about that word looks up.
             val changed = undo.changedWords ?: listOf(undo.original to undo.inserted.removeSuffix(undo.separator))
-            if (modelReady) changed.forEach { (typed, fix) -> predictor.recordRejection(typed, fix) }
+            // In a private field (incognito, no suggestions, the Try-it box) the undo counts there only and is never saved.
+            if (modelReady) changed.forEach { (typed, fix) -> predictor.recordRejection(typed, fix, persist = learn) }
             suppressedBefore = editor().before.removeSuffix(undo.separator).takeLast(64)
             suppressedAfter = editor().after.take(64)
             val context = editor().before.removeSuffix(undo.separator)
@@ -389,14 +390,14 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     private fun correctWord(separator: String, ending: WordEndFacts?): Boolean {
         if (ending == null || !modelReady || !correctAllowed || !ending.letters || ending.selected) return false
         val word = ending.word
-        if (ending.typed) predictor.noteTyped(word)
+        if (ending.typed) predictor.noteTyped(word, persist = learn)
         if (!WordEndRules.mayChange(ending, correctAllowed)) return false
         val before = ending.before
         val after = ending.after
         val previousPrefix = before.dropLast(word.length).trimEnd(' ').takeLast(64)
         val pickedPrevious = protectedBefore?.trimEnd(' ') == previousPrefix && after == protectedAfter
         val change = predictor.correction(before, AutocorrectMode.entries[settings.int(Prefs.AUTOCORRECT)], taps,
-            userTyped = ending.typed, allowJoin = !pickedPrevious) ?: return false
+            userTyped = ending.typed, allowJoin = !pickedPrevious, persist = learn) ?: return false
         // Instead of TailorKeys: only the system spell checker fixes typos, but capitalization stays TailorKeys's ("i" to
         // "I"), as automatic capitalization keeps its own settings. The bookkeeping above still runs either way.
         if (spellCheck.replacesLocal && !change.replacement.equals(change.original, ignoreCase = true)) return false
@@ -415,6 +416,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         val prev = context.lastOrNull(); val prev2 = context.getOrNull(context.size - 2)
         val model = predictor
         val allowed = canLearnNow()
+        val persist = learn
         val (delete, insert) = WordEndRules.edit(original, replacement, separator, typed)
         clearTaps(); clearChoice(); clearGlide(); clearAutomaticSpace(); pendingLearning = null
         ic.beginBatchEdit()
@@ -423,7 +425,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         editorRead = null
         ic.endBatchEdit()
         armedUndo = ReversibleCommit(original, insert, separator, editor().before.takeLast(64), editor().after.take(64), correction = true,
-            onKept = { model.recordKept(original, replacement) }) {
+            onKept = { model.recordKept(original, replacement, persist) }) {
             if (allowed && canLearnNow()) model.observeFinal(replacement, prev, prev2)
         }
         updateAutoCap()
@@ -746,6 +748,8 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         learn = EditorRules.canLearn(cls == InputType.TYPE_CLASS_TEXT, password,
             info.inputType and InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS != 0,
             info.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING != 0)
+        // Undos and keeps from the last private field are forgotten with it.
+        if (modelReady) predictor.forgetPrivate()
         // The system spell checker never sees a word from passwords, incognito fields, fields without suggestions or
         // addresses; elsewhere its session opens only once a word needs it. This app's own Try-it box asks not to be
         // learned from (so practice never teaches the keyboard), not for privacy, so the setting can be tried there.

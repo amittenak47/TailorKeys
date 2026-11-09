@@ -130,6 +130,30 @@ class SpaceCorrectionTest {
         assertNotNull(model(dir).correction("teh", AutocorrectMode.CONFIDENT))
         assertTrue(PersonalStore.listRejected(dir).isEmpty())
     }
+    @Test fun privateFieldUndosCountThereOnlyAndAreNeverSaved() {
+        val dir = Files.createTempDirectory("tk-private").toFile()
+        val p = model(dir)
+        p.recordRejection("teh", "the", persist = false)
+        p.recordRejection("teh", "the", persist = false)
+        p.recordKept("recieve", "receive", persist = false)
+        p.recordRejection("wierd", "weird", persist = false)
+        p.noteTyped("wierd", persist = false)
+        // Undone twice, or undone and typed again, in this private field: not redone here.
+        assertNull(p.correction("teh", AutocorrectMode.CONFIDENT))
+        assertNotEquals("weird", p.correction("wierd", AutocorrectMode.CONFIDENT)?.replacement)
+        PersonalStore.submit {}.get()
+        assertTrue(PersonalStore.listRejected(dir).isEmpty())
+        // A later save from an ordinary field writes its own undo and none of the private ones.
+        p.recordRejection("freind", "friend")?.get()
+        PersonalStore.submit {}.get()
+        val saved = dir.listFiles().orEmpty().filter { it.isFile }.joinToString("\n") { it.readText() }
+        assertTrue(saved.contains("freind"))
+        for (word in listOf("teh", "recieve", "wierd")) assertFalse(word, saved.contains(word))
+        // The next field forgets them, and a fresh start never knew them.
+        p.forgetPrivate()
+        assertEquals(WordCorrection("teh", "the"), p.correction("teh", AutocorrectMode.CONFIDENT))
+        assertEquals(WordCorrection("teh", "the"), model(dir).correction("teh", AutocorrectMode.CONFIDENT))
+    }
     @Test fun undoThenRetypeBlocksTheExactPairAndIndividualRemovalRestoresIt() {
         val dir = Files.createTempDirectory("tk-retype").toFile()
         val p = model(dir)
