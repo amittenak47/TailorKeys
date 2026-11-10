@@ -2,6 +2,8 @@ package app.tailorkeys
 
 import android.content.Context
 import android.content.SharedPreferences
+import app.tailorkeys.layout.HintStyle
+import app.tailorkeys.layout.HoldChoices
 import app.tailorkeys.layout.KeyGrid
 import org.json.JSONObject
 
@@ -82,6 +84,16 @@ object Prefs {
     val RETURN_FROM_SYM = BoolPref("return_from_sym", false)
     val NUMBER_ROW = BoolPref("number_row", true)
     val SHOW_HINTS = BoolPref("show_hints", true)
+    /** What the hints show while SHOW_HINTS is on: 0 digits only, 1 the first long-press choice (HintStyle). */
+    val HINT_STYLE = IntPref("hint_style", 1, 0, 1)
+    /** The larger copy of a held key (KeyPreview): 0 off, 1 the key grows in place, 2 it grows upward, 3 a balloon. */
+    val KEY_PREVIEW = IntPref("key_preview", KeyPreview.IN_PLACE, KeyPreview.OFF, KeyPreview.BALLOON)
+    /** What holding a letter offers (HoldChoices by ordinal): 123-layer symbols, accents, or both. */
+    val LONG_PRESS_SHOWS = IntPref("long_press_shows", 2, 0, 2)
+    /** Which keys have a long-press: 0 all, 1 all but the ones in [LONG_PRESS_OFF]. */
+    val LONG_PRESS_KEYS = IntPref("long_press_keys", 0, 0, 1)
+    /** Key codes whose long-press is turned off, one per line (codes include ","). */
+    const val LONG_PRESS_OFF = "long_press_off"
     val CURSOR_GLOW = BoolPref("cursor_glow", false)
     val SPACE_ACCEPTS = BoolPref("space_accepts", true)
     val AUTO_CAP = BoolPref("auto_cap", true)
@@ -201,6 +213,17 @@ class KeyboardSettings internal constructor(
     fun bool(p: BoolPref) = (if (p.device) device else prefs).getBoolean(p.key, p.default)
     fun set(p: IntPref, value: Int) { (if (p.device) device else prefs).edit().putInt(p.key, value.coerceIn(p.min, p.max)).apply(); syncAppearance(p.key) }
     fun set(p: BoolPref, value: Boolean) { (if (p.device) device else prefs).edit().putBoolean(p.key, value).apply(); syncAppearance(p.key) }
+
+    fun hintStyle(): HintStyle = if (!bool(Prefs.SHOW_HINTS)) HintStyle.OFF else if (int(Prefs.HINT_STYLE) == 0) HintStyle.DIGITS else HintStyle.HOLD_CHOICE
+    fun setHintStyle(style: HintStyle) {
+        if (style != HintStyle.OFF) set(Prefs.HINT_STYLE, if (style == HintStyle.DIGITS) 0 else 1)
+        set(Prefs.SHOW_HINTS, style != HintStyle.OFF)
+    }
+    fun holdChoices(): HoldChoices = HoldChoices.entries[int(Prefs.LONG_PRESS_SHOWS)]
+    /** Key codes whose long-press is off; empty while every key has one. */
+    fun holdOff(): Set<String> = if (int(Prefs.LONG_PRESS_KEYS) == 0) emptySet() else savedHoldOff()
+    fun savedHoldOff(): Set<String> = prefs.getString(Prefs.LONG_PRESS_OFF, null)?.split('\n')?.filter { it.isNotEmpty() }?.toSet().orEmpty()
+    fun setHoldOff(codes: Set<String>) { prefs.edit().putString(Prefs.LONG_PRESS_OFF, codes.sorted().joinToString("\n")).apply() }
 
     private val layoutInts get() = listOf(Prefs.CURVE, Prefs.DEPTH, Prefs.KEY_GAP, Prefs.CORNER_RADIUS, Prefs.TEXT_SCALE) +
         listOf(false, true).flatMap { listOf(Prefs.height(it), Prefs.width(it), Prefs.bottomPadding(it), Prefs.splitGap(it), Prefs.tilt(it),

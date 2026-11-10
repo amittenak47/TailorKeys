@@ -36,6 +36,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import app.tailorkeys.Chords
+import app.tailorkeys.layout.HintStyle
 
 internal fun LazyListScope.sizeOptions(state: SettingsState, page: Boolean, onPage: (Boolean) -> Unit) {
     item("orientations") {
@@ -173,7 +174,12 @@ internal fun LazyListScope.lookOptions(state: SettingsState) {
             ToggleRow("Number row", state.bool(Prefs.NUMBER_ROW)) {
                 if (!state.setNumberRow(it)) Toast.makeText(context, "Move your keys out of the number row first", Toast.LENGTH_SHORT).show()
             }
-            ToggleRow("Key hints", state.bool(Prefs.SHOW_HINTS)) { state.set(Prefs.SHOW_HINTS, it) }
+            SegmentedRow("Key hints", listOf("Off", "Digits only", "Hold choice"), state.hintStyle().ordinal,
+                note = "Hold choice shows, in each key's corner, the first character holding that key offers.") {
+                state.setHintStyle(HintStyle.entries[it])
+            }
+            SegmentedRow("Key preview", listOf("Off", "In place", "Upward", "Balloon"), state.int(Prefs.KEY_PREVIEW),
+                note = "Shows a larger copy of the key while you hold it.") { state.set(Prefs.KEY_PREVIEW, it) }
             ToggleRow("Cursor glow", state.bool(Prefs.CURSOR_GLOW),
                 note = "A soft glow across the keys when you move the cursor.") { state.set(Prefs.CURSOR_GLOW, it) }
         }
@@ -223,6 +229,11 @@ internal fun LazyListScope.settingsSection(section: SettingsSection, state: Sett
             ToggleRow("Back to letters after a 123 symbol", state.bool(Prefs.RETURN_FROM_NUM),
                 note = "Digits stay on 123, for numbers.") { state.set(Prefs.RETURN_FROM_NUM, it) }
             ToggleRow("Back to letters after a #+= symbol", state.bool(Prefs.RETURN_FROM_SYM)) { state.set(Prefs.RETURN_FROM_SYM, it) }
+            SegmentedRow("Long-press shows", listOf("Symbols", "Accents", "Both"), state.int(Prefs.LONG_PRESS_SHOWS),
+                note = "What holding a letter offers. Symbols are the characters the same key shows on the 123 layer, so you can type them without switching.") {
+                state.set(Prefs.LONG_PRESS_SHOWS, it)
+            }
+            LongPressKeysRow(state)
         }
     }
     SettingsSection.SWIPE -> item("swipe") {

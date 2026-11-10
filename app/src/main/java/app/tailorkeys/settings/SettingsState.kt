@@ -18,6 +18,7 @@ import app.tailorkeys.BoolPref
 import app.tailorkeys.IntPref
 import app.tailorkeys.KeyboardSettings
 import app.tailorkeys.KeyboardView
+import app.tailorkeys.layout.HintStyle
 import app.tailorkeys.Prefs
 import app.tailorkeys.SizeProfile
 import app.tailorkeys.layout.KeyGrid
@@ -92,6 +93,8 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
             }
         }
     }
+    init { preview.onHoldPickDone = { pick(false) } }
+
     private val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (previewingSelected && !importing) {
             preview.previewSplit = if (selectedKey == library.inUse) settings.profile(landscape).split
@@ -133,6 +136,19 @@ internal class SettingsState(context: Context, val settings: KeyboardSettings) {
     fun theme() = run { revisions.read(Prefs.THEME); settings.theme() }
     fun set(pref: IntPref, value: Int) = settings.set(pref, value)
     fun set(pref: BoolPref, value: Boolean) = settings.set(pref, value)
+
+    fun hintStyle(): HintStyle { revisions.read(Prefs.SHOW_HINTS.key, Prefs.HINT_STYLE.key); return settings.hintStyle() }
+    fun setHintStyle(style: HintStyle) = settings.setHintStyle(style)
+    /** Keys whose long-press is off while Keys with long-press is on Chosen keys. */
+    fun holdOff(): Set<String> { revisions.read(Prefs.LONG_PRESS_OFF); return settings.savedHoldOff() }
+    fun setHoldOff(codes: Set<String>) = settings.setHoldOff(codes)
+    /** True while the preview keyboard is choosing which keys have a long-press (KeyboardView.holdPickLayer). */
+    var picking by mutableStateOf(false)
+        private set
+    fun pick(on: Boolean) {
+        picking = on
+        preview.holdPickLayer = if (on) app.tailorkeys.layout.Layer.ABC else null
+    }
     fun setFor(page: Boolean, pref: (Boolean) -> IntPref, value: Int) = settings.setFor(page, pref, value)
 
     fun languages(): List<String> { revisions.read(Prefs.LANGUAGES); return settings.languages() }

@@ -17,6 +17,8 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.RadialGradient
+import android.graphics.RenderEffect
+import android.graphics.RenderNode
 import android.graphics.Shader
 import android.os.Build
 import android.os.Bundle
@@ -34,6 +36,8 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeProvider
 import app.tailorkeys.layout.CenterSide
 import app.tailorkeys.layout.GridKey
+import app.tailorkeys.layout.HintStyle
+import app.tailorkeys.layout.HoldChoices
 import app.tailorkeys.layout.InputState
 import app.tailorkeys.layout.KeyGrid
 import app.tailorkeys.layout.KeyText
@@ -120,7 +124,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             // A resize or row drag still under the finger is put back, as a cancelled touch does: it never saved.
             shapeDrag?.let { sd -> shaping?.let { it.edges = sd.edges.copyOf() } }
             groupDrag?.let { gd -> selectedRow?.let { ed.setRowScale(it, gd.rowScale) } }
-            field = value; if (value) grid.offerExtras(); clearArmedWord(); listener?.onChoiceInterrupted(); editingKey = null; shaping = null; shapeDrag = null; selectedHalf = null; selectedRow = null; groupDrag = null; halfPreview = null; editLayer = Layer.ABC; facePicker = null; sidePicker = null; cancelTouches(); relayout() } }
+            field = value; if (value) { holdPickLayer = null; grid.offerExtras() }; clearArmedWord(); listener?.onChoiceInterrupted(); editingKey = null; shaping = null; shapeDrag = null; selectedHalf = null; selectedRow = null; groupDrag = null; halfPreview = null; editLayer = Layer.ABC; facePicker = null; sidePicker = null; cancelTouches(); relayout() } }
     /** True inside the keyboard itself: shows the gear, and settings and Done while rearranging. */
     var inKeyboard = false
         set(value) { field = value; relayout() }
@@ -132,13 +136,44 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     /** The layer being rearranged. */
     private var editLayer = Layer.ABC
     /** The layer the keys show: the one being edited while rearranging, else the one being typed on. */
-    private val shownLayer get() = if (editMode) editLayer else state.layer
+    private val shownLayer get() = if (editMode) editLayer else holdPickLayer ?: state.layer
     /** 123 and #+= as built from [grid] (see [KeyGrid.layer]), made when first needed and dropped when [grid] changes. */
     private val layerGrids = arrayOfNulls<KeyGrid>(3)
     private fun gridFor(layer: Layer): KeyGrid =
         if (layer == Layer.ABC) grid else layerGrids[layer.ordinal] ?: grid.layer(layer).also { layerGrids[layer.ordinal] = it }
     /** The grid being rearranged: the letters, or the 123 or #+= keys being edited. */
     private val ed get() = gridFor(editLayer)
+
+    /**
+     * The layer whose keys are being chosen for Keys with long-press (Chosen keys), or null while not choosing. The
+     * preview then shows that layer: a tap turns a key's long-press on or off, the circle before a row the whole
+     * row's, and a bar on top switches between abc, 123 and #+= and has All on, All off and Done.
+     */
+    var holdPickLayer: Layer? = null
+        set(value) {
+            if (field == value) return
+            field = value
+            if (value != null) editMode = false
+            dismissPopup()
+            cancelTouches()
+            pickOff = settings.savedHoldOff()
+            relayout()
+            if (value != null) announceForAccessibility(when (value) { Layer.ABC -> "Choosing letters"; Layer.NUM -> "Choosing numbers"; Layer.SYM -> "Choosing symbols" })
+        }
+    /** Called by Done in the chooser's bar. */
+    var onHoldPickDone: (() -> Unit)? = null
+    /** The saved keys with their long-press off ([KeyText.holdId]), read whatever Keys with long-press is set to. */
+    private var pickOff = emptySet<String>()
+    /** Room on the left for the row circles while choosing: the keys are laid out that much narrower. */
+    private val pickReserve get() = if (holdPickLayer != null) (36 * density).toInt() else 0
+    private val layoutWidth get() = width - pickReserve
+    /** The chooser bar's chips: abc, 123, #+=, All on, All off, Done. */
+    private val pickChips = Array(6) { RectF() }
+    private class PickRow(val cx: Float, val cy: Float, val ids: List<String>)
+    /** The row circles as last drawn, with the keys each one switches. */
+    private val pickRows = ArrayList<PickRow>()
+    private var pickDownX = 0f
+    private var pickDownY = 0f
     var editTitle: String? = null
     /** Bounds already resolved by layoutFor, including narrow/one-hand profiles. */
     internal var quickOptionsBounds = RectF()
@@ -382,6 +417,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private var cornerRadius = settings.int(Prefs.CORNER_RADIUS) * density
     private var tintKeys = settings.bool(Prefs.KEY_TINT)
     private var showHints = settings.bool(Prefs.SHOW_HINTS)
+    /** Key preview, long-press and hint settings, read with the drawing cache. */
+    private var previewStyle = settings.int(Prefs.KEY_PREVIEW)
+    private var holdShows = settings.holdChoices()
+    private var hintStyle = settings.hintStyle()
+    private var holdOff = settings.holdOff()
     private var depth = settings.int(Prefs.DEPTH) / 100f
     private var keys3d = settings.bool(Prefs.KEYS_3D)
     /** A 3D key's top, inside its cell (see [drawKey]). */
@@ -428,11 +468,12 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     private data class DrawingSettings(
         val theme: String, val customThemes: String?, val preview: Palette?, val night: Int, val language: String, val multipleLanguages: Boolean,
         val textScale: Int, val labelScale: Float, val radius: Int, val tint: Boolean, val hints: Boolean, val depth: Int,
-        val keys3d: Boolean,
+        val keys3d: Boolean, val keyPreview: Int, val holdShows: Int, val hintStyle: Int, val holdOff: Set<String>,
     )
     private fun drawingSettings() = DrawingSettings(settings.themeId(), settings.prefs.getString(Prefs.THEMES_CUSTOM, null), previewPalette, resources.configuration.uiMode,
         state.language, settings.languages().size > 1, settings.int(Prefs.TEXT_SCALE), labelScale,
-        settings.int(Prefs.CORNER_RADIUS), settings.bool(Prefs.KEY_TINT), settings.bool(Prefs.SHOW_HINTS), settings.int(Prefs.DEPTH), settings.bool(Prefs.KEYS_3D))
+        settings.int(Prefs.CORNER_RADIUS), settings.bool(Prefs.KEY_TINT), settings.bool(Prefs.SHOW_HINTS), settings.int(Prefs.DEPTH), settings.bool(Prefs.KEYS_3D),
+        settings.int(Prefs.KEY_PREVIEW), settings.int(Prefs.LONG_PRESS_SHOWS), settings.int(Prefs.HINT_STYLE), settings.holdOff())
     private var builtDrawing: DrawingSettings? = null
 
     private fun refreshMotion() {
@@ -493,7 +534,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
-        setMeasuredDimension(w, if (builtWidth == w) layoutHeight else layoutFor(w))
+        val lw = w - pickReserve
+        setMeasuredDimension(w, if (builtWidth == lw) layoutHeight else layoutFor(lw))
     }
 
     /**
@@ -528,7 +570,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     private fun ensureLayout() {
-        if ((builtWidth != width || builtLayer != shownLayer) && width > 0) layoutFor(width)
+        if ((builtWidth != layoutWidth || builtLayer != shownLayer) && width > 0) layoutFor(layoutWidth)
         val shown = placedBy[shownLayer.ordinal]
         if (placed !== shown) { placed = shown; refreshAccessibilityState() }
     }
@@ -994,6 +1036,11 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         cornerRadius = settings.int(Prefs.CORNER_RADIUS) * density
         tintKeys = settings.bool(Prefs.KEY_TINT)
         showHints = settings.bool(Prefs.SHOW_HINTS)
+        previewStyle = settings.int(Prefs.KEY_PREVIEW)
+        holdShows = settings.holdChoices()
+        hintStyle = settings.hintStyle()
+        holdOff = settings.holdOff()
+        pickOff = settings.savedHoldOff()
         depth = settings.int(Prefs.DEPTH) / 100f
         keys3d = settings.bool(Prefs.KEYS_3D)
         highContrast = previewPalette == null && settings.theme() == ThemeName.HIGH_CONTRAST
@@ -1009,7 +1056,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             }
             faceLabels[code] = labels
             sample.layer = Layer.ABC; sample.shift = false
-            faceHints[code] = KeyText.hint(code, sample)
+            faceHints[code] = if (KeyText.holdId(Layer.ABC, code) in holdOff) null else KeyText.hint(code, sample, hintStyle, holdShows, grid.rows == 5)
         }
         rebuildWheelMetrics()
         builtDrawing = drawingSettings()
@@ -1121,7 +1168,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         else -> {
             val item = placed[id].item
             val face = accessibilityValue(id)!!
-            if (editMode) "$face, row ${item.r + 1}, column ${item.c + 1}. Click to select; editing actions available" else if (item.isStack) "$face, swipe key, ${item.keys.size} options" else if (item.isSpace && multipleLanguages) "$face, ${state.language.uppercase()}, swipe to change language" else face
+            if (holdPickLayer != null) "$face, " + pickState(placed[id]) else if (editMode) "$face, row ${item.r + 1}, column ${item.c + 1}. Click to select; editing actions available" else if (item.isStack) "$face, swipe key, ${item.keys.size} options" else if (item.isSpace && multipleLanguages) "$face, ${state.language.uppercase()}, swipe to change language" else face
         }
         }
     }
@@ -1175,7 +1222,12 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
     }
 
     override fun dispatchHoverEvent(event: MotionEvent): Boolean {
-        if (accessibilityManager.isEnabled && accessibilityManager.isTouchExplorationEnabled) return onHoverEvent(event)
+        if (accessibilityManager.isEnabled && accessibilityManager.isTouchExplorationEnabled) {
+            // While choosing long-press keys the keys sit [pickReserve] to the right of where they were laid out.
+            val shift = pickReserve.toFloat()
+            event.offsetLocation(-shift, 0f)
+            return onHoverEvent(event).also { event.offsetLocation(shift, 0f) }
+        }
         return super.dispatchHoverEvent(event)
     }
 
@@ -1204,6 +1256,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     private fun activateAccessibleView(id: Int): Boolean {
         if (isSliding()) return false
+        if (holdPickLayer != null) return placed.getOrNull(id)?.let(::togglePickKey) ?: false
         if (!EditorRules.typesFromAccessibility(editMode) && (id in placed.indices || id >= A_POPUP)) {
             val item = placed.getOrNull(id)?.item ?: return false
             if (selection != Selection.KEY) {
@@ -1303,6 +1356,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 it.isAccessibilityFocused = accessibilityFocus == id
                 val bounds = Rect()
                 accessibilityRect(id).roundOut(bounds)
+                bounds.offset(pickReserve, 0)
                 it.setBoundsInParent(bounds)
                 val location = IntArray(2)
                 getLocationOnScreen(location)
@@ -1327,7 +1381,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                         it.addAction(AccessibilityNodeInfo.AccessibilityAction(A_EDIT + action.ordinal, action.label))
                     }
                 }
-                if (!editMode && item != null && (item.isSpace || KeyText.alternatives(item.keys[shownIdx(item)], state, settings.bool(Prefs.SHOW_HINTS)).isNotEmpty())) {
+                if (!editMode && holdPickLayer == null && item != null && (item.isSpace || holdChoicesFor(item.keys[shownIdx(item)]).isNotEmpty())) {
                     it.isLongClickable = true
                     it.addAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
                 }
@@ -1388,17 +1442,25 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     // ---- Drawing ----
 
-    override fun onDraw(canvas: Canvas) {
+    override fun onDraw(screen: Canvas) {
         // The panel is opaque. Do not record the keyboard or continue wiggle/trail animation loops.
         if (optionsCovered && alpha == 0f) return
         ensureLayout()
+        // While the long-press row is open the rest of the keyboard sits blurred behind it (Android 12 and newer;
+        // before that it only dims), and the held key and its row are drawn sharp on top.
+        val behindRow = popup != null && !editMode
+        val blur = behindRow && Build.VERSION.SDK_INT >= 31 && screen.isHardwareAccelerated
+        if (blur) screen.drawColor(palette.background)
+        val canvas = if (blur && Build.VERSION.SDK_INT >= 31) beginBlur() else screen
         canvas.drawColor(palette.background)
         canvas.save()
-        val offset = currentSlideOffset()
+        val offset = currentSlideOffset() + pickReserve
         canvas.translate(offset, 0f)
         if (editMode) {
             drawToolbar(canvas)
             drawCells(canvas)
+        } else if (holdPickLayer != null) {
+            drawPickBar(canvas)
         } else {
             drawWheels(canvas)
             if (gearRect.width() >= 20 * density) drawGear(canvas, gearRect.centerX(), gearRect.centerY(), 20 * density, palette.gear)
@@ -1418,46 +1480,320 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             postInvalidateOnAnimation()
             return
         }
-        for (i in placed.indices) {
-            val pk = placed[i]
-            canvas.save()
-            if (gripSide >= 0 && (if (gripSide == 0) pk.item.c < KeyGrid.CENTER else pk.item.c > KeyGrid.CENTER)) canvas.translate(gripDx, 0f)
-            canvas.concat(pk.matrix)
-            if (editMode && !reducedMotion && pk.item !== shaping && pk.item.r != selectedRow &&
-                (selectedHalf == null || KeyGrid.region(pk.item.c) != selectedHalf!! * 2)) canvas.rotate(wiggle(pk.item, now), pk.rect.centerX(), pk.rect.centerY())
-            // Depth: a bowl shrinks the keys deep in it, a dome the ones at its rim. A key only shrinks within its own
-            // cell, so no key covers another, and it still answers touches in full. (Compact sizes the rects instead.)
-            if (!editMode && depth != 0f && pk.bowl >= 0f) {
-                val scale = keyScale(pk.bowl, depth)
-                canvas.scale(scale, scale, pk.rect.centerX(), pk.rect.centerY())
-            }
-            drawKey(canvas, pk.item, pk.rect, radius, pk.presses > 0 || (previewPressed && pk.item === placed.firstOrNull()?.item), if (drag?.item === pk.item) 0.3f else 1f)
-            drawDropMark(canvas, pk)
-            canvas.restore()
-        }
+        for (i in placed.indices) drawPlaced(canvas, placed[i], radius, now)
+        if (holdPickLayer != null) drawPickMarks(canvas)
         drawHandle(canvas)
         drag?.let { drawGhost(canvas, it, radius) }
         if (editMode) drawShaping(canvas)
         facePicker?.let { drawFacePicker(canvas, it) }
         sidePicker?.let { drawSidePicker(canvas, it) }
         drawGlide(canvas, now)
-        drawPopup(canvas)
-        canvas.restore()
-        if (offset != 0f && !optionsCovered) postInvalidateOnAnimation()
+        drawKeyPreviews(canvas)
+        if (behindRow) {
+            canvas.restore()
+            if (blur && Build.VERSION.SDK_INT >= 31) endBlur(screen)
+            screen.save()
+            screen.translate(offset, 0f)
+            fill.color = palette.background
+            fill.alpha = if (blur) 51 else 90
+            screen.drawRect(-offset, 0f, width - offset, height.toFloat(), fill)
+            fill.alpha = 255
+            popup?.pk?.let { drawPlaced(screen, it, radius, now) }
+            drawPopup(screen)
+        } else drawPopup(canvas)
+        screen.restore()
+        if (offset != pickReserve.toFloat() && !optionsCovered) postInvalidateOnAnimation()
         else if (!editMode) {
             switchRect?.let {
                 val shown = lockedControlsAlpha(now)
                 if (shown > 0f) {
-                    if (shown < 1f) canvas.saveLayerAlpha(it, (255 * shown).toInt())
+                    if (shown < 1f) screen.saveLayerAlpha(it, (255 * shown).toInt())
                     fill.color = palette.key
-                    canvas.drawOval(it, fill)
-                    drawMoveArrow(canvas, it, pointsLeft = switchToLeft)
-                    if (shown < 1f) canvas.restore()
+                    screen.drawOval(it, fill)
+                    drawMoveArrow(screen, it, pointsLeft = switchToLeft)
+                    if (shown < 1f) screen.restore()
                 }
             }
         }
-        if (!editMode) drawCursorPointer(canvas, now)
+        if (!editMode) drawCursorPointer(screen, now)
         if (editMode && !reducedMotion) postInvalidateOnAnimation()
+    }
+
+    /** One placed key with its tilt, wiggle and depth. */
+    // ---- Choosing which keys have a long-press ----
+
+    /** What holding [code] offers on the layer being chosen, whether or not its long-press is turned off. */
+    private fun pickChoices(code: String): List<String> {
+        val layer = holdPickLayer ?: return emptyList()
+        val sample = InputState().also { it.language = state.language; it.layer = layer }
+        return KeyText.alternatives(code, sample, holdShows, grid.rows == 5)
+    }
+    private fun pickCode(pk: Placed) = pk.item.keys[shownIdx(pk.item)]
+    private fun pickId(code: String) = KeyText.holdId(holdPickLayer ?: Layer.ABC, code)
+    private fun pickState(pk: Placed): String {
+        val code = pickCode(pk)
+        return when {
+            pickChoices(code).isEmpty() -> "no long-press"
+            pickId(code) in pickOff -> "long-press off. Double-tap to turn on"
+            else -> "long-press on. Double-tap to turn off"
+        }
+    }
+
+    /** The bar over the keys while choosing: the layer chips on the left, All on, All off and Done on the right. */
+    private fun drawPickBar(canvas: Canvas) {
+        val d = density
+        val sp = resources.displayMetrics.scaledDensity
+        val labels = arrayOf("abc", "123", "#+=", "All on", "All off", "Done")
+        text.textSize = 13 * sp
+        val h = min(stripH - 8 * d, 34 * d)
+        val top = (stripH - h) / 2
+        var x = -pickReserve + 8 * d
+        for (i in 0..2) { val w = text.measureText(labels[i]) + 24 * d; pickChips[i].set(x, top, x + w, top + h); x += w + 4 * d }
+        var right = layoutWidth - 8 * d
+        for (i in 5 downTo 3) { val w = text.measureText(labels[i]) + 24 * d; pickChips[i].set(right - w, top, right, top + h); right -= w + 6 * d }
+        for (i in labels.indices) {
+            val r = pickChips[i]
+            val active = i < 3 && holdPickLayer == Layer.entries[i]
+            if (i < 5) {
+                fill.color = if (active) palette.accent else palette.functionKey; fill.alpha = 255
+                canvas.drawRoundRect(r, 7 * d, 7 * d, fill)
+            }
+            drawLabel(canvas, r, labels[i], (if (i == 5) 15 else 13) * sp,
+                if (active) palette.onAccent else if (i == 5) palette.smallAccent else palette.text, 255)
+        }
+    }
+
+    /**
+     * Over the keys while choosing: a key with nothing to offer is dimmed; a key turned off is dimmed and struck
+     * through; the rest show what holding them offers first. Then a circle before each row that has a long-press:
+     * filled when all its keys are on, half filled when some are, an empty ring when none are.
+     */
+    private fun drawPickMarks(canvas: Canvas) {
+        val d = density
+        val left = HashMap<Int, FloatArray>()
+        val ids = java.util.TreeMap<Int, MutableList<String>>()
+        for (pk in placed) {
+            val code = pickCode(pk)
+            val choices = pickChoices(code)
+            val off = choices.isNotEmpty() && pickId(code) in pickOff
+            val r = pk.rect
+            canvas.save()
+            canvas.concat(pk.matrix)
+            if (choices.isEmpty() || off) {
+                fill.color = palette.background; fill.alpha = if (off) 110 else 150
+                canvas.drawRoundRect(r, cornerRadius, cornerRadius, fill)
+                fill.alpha = 255
+            }
+            if (off) {
+                stroke.color = palette.text; stroke.alpha = 200; stroke.strokeWidth = 2 * d
+                canvas.drawLine(r.left + r.width() * .2f, r.centerY(), r.right - r.width() * .2f, r.centerY(), stroke)
+                stroke.alpha = 255
+            } else if (choices.isNotEmpty()) {
+                text.color = palette.hint
+                text.isFakeBoldText = highContrast
+                text.textSize = min(r.height() * 0.2f * labelScale, min(r.width() * 0.35f, r.height() * 0.32f))
+                canvas.drawText(choices[0], r.right - text.textSize * 0.7f, r.top + text.textSize * 1.1f, text)
+            }
+            canvas.restore()
+            val start = floatArrayOf(r.left, r.centerY())
+            pk.matrix.mapPoints(start)
+            if (left[pk.item.r]?.let { start[0] < it[0] } != false) left[pk.item.r] = start
+            if (choices.isNotEmpty()) ids.getOrPut(pk.item.r) { mutableListOf() }.add(pickId(code))
+        }
+        pickRows.clear()
+        val radius = 9 * d
+        for ((row, codes) in ids) {
+            val cy = left.getValue(row)[1]
+            val cx = -pickReserve / 2f
+            pickRows += PickRow(cx, cy, codes)
+            val on = codes.count { it !in pickOff }
+            stroke.color = if (on == 0) palette.hint else palette.accent; stroke.strokeWidth = 2 * d
+            canvas.drawCircle(cx, cy, radius, stroke)
+            if (on > 0) {
+                fill.color = palette.accent; fill.alpha = 255
+                canvas.save()
+                if (on < codes.size) canvas.clipRect(cx - radius, cy - radius, cx, cy + radius)
+                canvas.drawCircle(cx, cy, radius, fill)
+                canvas.restore()
+            }
+        }
+    }
+
+    private fun pickTouch(e: MotionEvent): Boolean {
+        val x = e.getX(e.actionIndex) - pickReserve
+        val y = e.getY(e.actionIndex)
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> { pickDownX = x; pickDownY = y }
+            MotionEvent.ACTION_UP -> if (hypot(x - pickDownX, y - pickDownY) < ViewConfiguration.get(context).scaledTouchSlop) pickTap(x, y)
+        }
+        return true
+    }
+
+    private fun pickTap(x: Float, y: Float) {
+        val chip = pickChips.indexOfFirst { it.contains(x, y) }
+        when {
+            chip in 0..2 -> holdPickLayer = Layer.entries[chip]
+            chip == 3 || chip == 4 -> {
+                val all = pickRows.flatMap { it.ids }.toSet()
+                setPickOff(if (chip == 3) pickOff - all else pickOff + all, if (chip == 3) "All on" else "All off")
+            }
+            chip == 5 -> onHoldPickDone?.invoke()
+            else -> {
+                val row = pickRows.firstOrNull { hypot(x - it.cx, y - it.cy) < 20 * density }
+                if (row != null) {
+                    val allOn = row.ids.none { it in pickOff }
+                    setPickOff(if (allOn) pickOff + row.ids else pickOff - row.ids.toSet(), if (allOn) "Row off" else "Row on")
+                } else findKey(x, y, strict = true)?.let(::togglePickKey)
+            }
+        }
+    }
+
+    private fun togglePickKey(pk: Placed): Boolean {
+        val code = pickCode(pk)
+        if (pickChoices(code).isEmpty()) return false
+        val id = pickId(code)
+        val wasOff = id in pickOff
+        setPickOff(if (wasOff) pickOff - id else pickOff + id,
+            KeyText.spoken(code, state, null) + if (wasOff) ", long-press on" else ", long-press off")
+        return true
+    }
+
+    private fun setPickOff(off: Set<String>, said: String) {
+        pickOff = off
+        settings.setHoldOff(off)
+        announceForAccessibility(said)
+        invalidate()
+    }
+
+    private fun drawPlaced(canvas: Canvas, pk: Placed, radius: Float, now: Long) {
+        canvas.save()
+        if (gripSide >= 0 && (if (gripSide == 0) pk.item.c < KeyGrid.CENTER else pk.item.c > KeyGrid.CENTER)) canvas.translate(gripDx, 0f)
+        canvas.concat(pk.matrix)
+        if (editMode && !reducedMotion && pk.item !== shaping && pk.item.r != selectedRow &&
+            (selectedHalf == null || KeyGrid.region(pk.item.c) != selectedHalf!! * 2)) canvas.rotate(wiggle(pk.item, now), pk.rect.centerX(), pk.rect.centerY())
+        // Depth: a bowl shrinks the keys deep in it, a dome the ones at its rim. A key only shrinks within its own
+        // cell, so no key covers another, and it still answers touches in full. (Compact sizes the rects instead.)
+        if (!editMode && depth != 0f && pk.bowl >= 0f) {
+            val scale = keyScale(pk.bowl, depth)
+            canvas.scale(scale, scale, pk.rect.centerX(), pk.rect.centerY())
+        }
+        drawKey(canvas, pk.item, pk.rect, radius, pk.presses > 0 || (previewPressed && pk.item === placed.firstOrNull()?.item), if (drag?.item === pk.item) 0.3f else 1f)
+        drawDropMark(canvas, pk)
+        canvas.restore()
+    }
+
+    /** Holds the keyboard drawn behind the long-press row (a RenderNode, Android 12 and newer). */
+    private var blurNode: Any? = null
+
+    @androidx.annotation.RequiresApi(31)
+    private fun beginBlur(): Canvas {
+        val node = blurNode as? RenderNode ?: RenderNode("behindLongPressRow").also { blurNode = it }
+        node.setPosition(0, 0, width, height)
+        val radius = 4 * density
+        node.setRenderEffect(RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.CLAMP))
+        return node.beginRecording(width, height)
+    }
+
+    @androidx.annotation.RequiresApi(31)
+    private fun endBlur(screen: Canvas) {
+        val node = blurNode as RenderNode
+        node.endRecording()
+        screen.drawRenderNode(node)
+    }
+
+    // ---- Key preview ----
+
+    private val bubblePath = Path()
+    private val frameValues = FloatArray(9)
+    private val rowPoint = FloatArray(2)
+
+    /** Maps a key's own frame (origin at its centre, before its tilt or curve) to the view, for KeyPreview.place. */
+    private fun keyFrame(pk: Placed): FloatArray {
+        pk.matrix.getValues(frameValues)
+        val a = frameValues[Matrix.MSCALE_X]; val b = frameValues[Matrix.MSKEW_X]; val c = frameValues[Matrix.MTRANS_X]
+        val d = frameValues[Matrix.MSKEW_Y]; val e = frameValues[Matrix.MSCALE_Y]; val f = frameValues[Matrix.MTRANS_Y]
+        val cx = pk.rect.centerX(); val cy = pk.rect.centerY()
+        return floatArrayOf(a, b, a * cx + b * cy + c, d, e, d * cx + e * cy + f)
+    }
+
+    /** What holding [code] offers now: Long-press shows, the number row and the keys chosen to have a long-press. */
+    private fun holdChoicesFor(code: String): List<String> =
+        if (KeyText.holdId(state.layer, code) in holdOff) emptyList() else KeyText.alternatives(code, state, holdShows, grid.rows == 5)
+
+    /** The larger copy of each held key whose letter is not typed yet (KeyPreview.shows), oldest first. */
+    private fun drawKeyPreviews(canvas: Canvas) {
+        if (previewStyle == KeyPreview.OFF || editMode || glideId != null) return
+        for (t in trackers.values) {
+            if (t.kind != K_KEY) continue
+            val pk = t.pk ?: continue
+            val code = pk.item.keys[shownIdx(pk.item)]
+            if (KeyPreview.shows(previewStyle, t.preview, t.consumed, t.pressedText != null, glideId != null, popup?.owner === t, editMode, code))
+                // With Type on press the letter is already typed: show it as typed, before Shift let go.
+                drawKeyPreview(canvas, pk, t.pressedText ?: faceLabel(code))
+        }
+    }
+
+    private fun drawKeyPreview(canvas: Canvas, pk: Placed, label: String) {
+        val w = pk.rect.width(); val h = pk.rect.height()
+        val shape = KeyPreview.shape(previewStyle, w, h, 12 * density)
+        val slid = KeyPreview.place(keyFrame(pk), shape.left, shape.top, shape.right, shape.bottom, width.toFloat(), height.toFloat(),
+            4 * density, -shape.slide, shape.slide)
+        val left = shape.left + slid[0]; val top = shape.top + slid[1]; val right = shape.right + slid[0]; val bottom = shape.bottom + slid[1]
+        canvas.save()
+        canvas.concat(pk.matrix)
+        canvas.translate(pk.rect.centerX(), pk.rect.centerY())
+        bubblePath.reset()
+        val radius = bubbleRadius()
+        if (previewStyle == KeyPreview.BALLOON) balloonPath(bubblePath, left, top, right, bottom, w, h, radius)
+        else bubblePath.addRoundRect(left, top, right, bottom, radius, radius, Path.Direction.CW)
+        paintBubble(canvas, bubblePath)
+        faceRect.set(left, shape.labelTop + slid[1], right, shape.labelBottom + slid[1])
+        drawLabel(canvas, faceRect, label, min(h * 0.42f, 22 * density) * labelScale * shape.letterScale, palette.text, 255)
+        canvas.restore()
+    }
+
+    private fun bubbleRadius() = max(cornerRadius * 1.25f, 6 * density)
+
+    /** A balloon: its top (left..right, top..bottom) joined by a curved neck to a stem as wide as the key, down to its bottom. */
+    private fun balloonPath(p: Path, left: Float, top: Float, right: Float, bottom: Float, w: Float, h: Float, radius: Float) {
+        val r = min(radius, min(right - left, bottom - top) / 2)
+        val stemR = min(cornerRadius, w / 2)
+        val sx0 = -w / 2; val sx1 = w / 2; val sb = h / 2
+        val neck = max(0f, -h / 2 - bottom)
+        p.moveTo(left + r, top)
+        p.lineTo(right - r, top)
+        p.arcTo(right - 2 * r, top, right, top + 2 * r, -90f, 90f, false)
+        p.lineTo(right, bottom)
+        p.cubicTo(right, bottom + neck / 2, sx1, bottom + neck / 2, sx1, bottom + neck)
+        p.lineTo(sx1, sb - stemR)
+        if (stemR > 0f) p.arcTo(sx1 - 2 * stemR, sb - 2 * stemR, sx1, sb, 0f, 90f, false)
+        p.lineTo(sx0 + stemR, sb)
+        if (stemR > 0f) p.arcTo(sx0, sb - 2 * stemR, sx0 + 2 * stemR, sb, 90f, 90f, false)
+        p.lineTo(sx0, bottom + neck)
+        p.cubicTo(sx0, bottom + neck / 2, left, bottom + neck / 2, left, bottom)
+        p.lineTo(left, top + r)
+        p.arcTo(left, top, left + 2 * r, top + 2 * r, 180f, 90f, false)
+        p.close()
+    }
+
+    /** The key colour with a soft shadow and a thin outline in the text colour, so it stands out on light themes too. */
+    private fun paintBubble(canvas: Canvas, p: Path) {
+        if (!highContrast) {
+            canvas.save()
+            canvas.translate(0f, 2 * density)
+            fill.color = Color.BLACK
+            fill.alpha = if (Color.luminance(palette.background) < .5f) 102 else 41
+            canvas.drawPath(p, fill)
+            canvas.restore()
+        }
+        fill.color = palette.key
+        fill.alpha = 255
+        canvas.drawPath(p, fill)
+        stroke.color = palette.text
+        stroke.alpha = if (highContrast) 255 else 89
+        stroke.strokeWidth = (if (highContrast) 2f else 1.5f) * density
+        canvas.drawPath(p, stroke)
+        stroke.alpha = 255
     }
 
     private fun drawGlide(canvas: Canvas, now: Long) {
@@ -1591,7 +1927,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             }
             fill.alpha = 255
         }
-        if (!item.isStack && grid.rows == 4 && showHints && shownLayer == Layer.ABC) faceHints[code]?.let {
+        if (!item.isStack && hintStyle != HintStyle.OFF && shownLayer == Layer.ABC && holdPickLayer == null) faceHints[code]?.let {
             text.color = palette.hint
             text.isFakeBoldText = highContrast
             text.textSize = min(rect.height() * 0.2f * labelScale, min(rect.width() * 0.35f, rect.height() * 0.32f))
@@ -1632,15 +1968,19 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
                 drawLabel(canvas, r, languageLabel, min(12 * density, r.height() * 0.25f) * scale, palette.hint, a)
             }
             else -> {
-                // With Shift placed, the layer key on its own layer shows where a tap goes (see tapLayerKey).
-                val label = if (grid.hasShift() && KeyText.isLayerKey(code) && KeyText.layerOf(code) == shownLayer) (if (shownLayer == Layer.ABC) "123" else "ABC")
-                    else if (code == Keys.ABC) KeyText.label(code, state) else if (KeyText.isLiteral(code)) code.substring(1) else
-                    faceLabels[code]?.get(if (shownLayer == Layer.NUM) 2 else if (shownLayer == Layer.SYM) 3 else if (state.upper) 1 else 0) ?: code
+                val label = faceLabel(code)
                 val size = min(r.height() * 0.42f, 22 * density) * scale
                 drawLabel(canvas, r, label, if (label.length > 1) size * 0.72f else size, color, a)
             }
         }
     }
+
+    /** The text a key's face shows now. */
+    private fun faceLabel(code: String): String =
+        // With Shift placed, the layer key on its own layer shows where a tap goes (see tapLayerKey).
+        if (grid.hasShift() && KeyText.isLayerKey(code) && KeyText.layerOf(code) == shownLayer) (if (shownLayer == Layer.ABC) "123" else "ABC")
+        else if (code == Keys.ABC) KeyText.label(code, state) else if (KeyText.isLiteral(code)) code.substring(1) else
+            faceLabels[code]?.get(if (shownLayer == Layer.NUM) 2 else if (shownLayer == Layer.SYM) 3 else if (state.upper) 1 else 0) ?: code
 
     private fun drawLabel(canvas: Canvas, r: RectF, label: String, size: Float, color: Int, alpha: Int) {
         text.color = color
@@ -2069,22 +2409,33 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     // ---- Touch ----
 
-    private class AccentPopup(val choices: List<String>, val rects: List<RectF>, val owner: Tracker?) {
-        var selected = -1
+    /**
+     * The long-press row over [pk]: its cells ([row], slid by [dx], [dy] in the key's frame) and their [rects] in the
+     * view for accessibility. Like iOS the first choice is picked at once; the finger moves the pick along the row.
+     */
+    private class AccentPopup(val choices: List<String>, val rects: List<RectF>, val owner: Tracker?, val pk: Placed,
+                              val row: KeyPreview.Row, val dx: Float, val dy: Float, val balloon: Boolean) {
+        var selected = 0
+        val centres = FloatArray(row.centres.size) { row.centres[it] + dx }
     }
     private var popup: AccentPopup? = null
 
     private fun openPopup(pk: Placed, owner: Tracker?): Boolean {
-        val choices = owner?.pressChoices ?: KeyText.alternatives(pk.item.keys[shownIdx(pk.item)], state, settings.bool(Prefs.SHOW_HINTS))
+        val choices = owner?.pressChoices ?: holdChoicesFor(pk.item.keys[shownIdx(pk.item)])
         if (choices.isEmpty()) return false
         dismissPopup()
-        val anchor = RectF(pk.rect).also { pk.matrix.mapRect(it) }
-        val cell = min(max(36 * density, pk.rect.width()), (width - 8 * density) / choices.size)
-        val h = min(min(unit, 48 * density), max(24 * density, anchor.top - 4 * density))
-        val left = (anchor.centerX() - cell * choices.size / 2).coerceIn(4 * density, max(4 * density, width - 4 * density - cell * choices.size))
-        val top = max(0f, anchor.top - h - 4 * density)
+        val frame = keyFrame(pk)
+        val balloon = previewStyle == KeyPreview.BALLOON
+        // The first choice sits over the key and the row runs away from the nearer edge, as on iOS.
+        val row = KeyPreview.row(choices.size, pk.rect.width(), pk.rect.height(), width.toFloat(), density, balloon, rightward = frame[2] < width / 2f)
+        val slid = KeyPreview.place(frame, row.left, row.top, row.right, row.bottom, width.toFloat(), height.toFloat(), 4 * density,
+            row.slideMin, row.slideMax)
+        val cx = pk.rect.centerX() + slid[0]; val cy = pk.rect.centerY() + row.cellY + slid[1]
+        val rects = row.centres.map { c ->
+            RectF(cx + c - row.cellWidth / 2, cy - row.cellHeight / 2, cx + c + row.cellWidth / 2, cy + row.cellHeight / 2).also { pk.matrix.mapRect(it) }
+        }
         clearAccessibilityFocus()
-        popup = AccentPopup(choices, choices.indices.map { RectF(left + it * cell, top, left + (it + 1) * cell, top + h) }, owner)
+        popup = AccentPopup(choices, rects, owner, pk, row, slid[0], slid[1], balloon)
         if (accessibilityManager.isEnabled) {
             accessibilityFocus = A_POPUP
             accessibilityEvent(A_POPUP, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED)
@@ -2107,15 +2458,40 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
 
     private fun drawPopup(canvas: Canvas) {
         val p = popup ?: return
-        for (i in p.rects.indices) {
-            val r = p.rects[i]
-            fill.color = if (i == p.selected) palette.accent else palette.functionKey
-            canvas.drawRoundRect(r, 6 * density, 6 * density, fill)
-            stroke.color = palette.text
-            stroke.strokeWidth = (if (highContrast) 2 else 1) * density
-            canvas.drawRoundRect(r, 6 * density, 6 * density, stroke)
-            drawLabel(canvas, r, p.choices[i], min(22 * density * labelScale, r.height() * 0.5f), if (i == p.selected) palette.onAccent else palette.text, 255)
+        val pk = p.pk
+        val row = p.row
+        canvas.save()
+        canvas.concat(pk.matrix)
+        canvas.translate(pk.rect.centerX(), pk.rect.centerY())
+        bubblePath.reset()
+        val left = row.left + p.dx; val top = row.top + p.dy; val right = row.right + p.dx; val bottom = row.bottom + p.dy
+        val radius = bubbleRadius()
+        if (p.balloon) balloonPath(bubblePath, left, top, right, bottom, pk.rect.width(), pk.rect.height(), radius)
+        else bubblePath.addRoundRect(left, top, right, bottom, radius, radius, Path.Direction.CW)
+        paintBubble(canvas, bubblePath)
+        val cy = row.cellY + p.dy
+        val cellRadius = min(cornerRadius, row.cellHeight / 2)
+        for (i in p.choices.indices) {
+            val cx = p.centres[i]
+            faceRect.set(cx - row.cellWidth / 2, cy - row.cellHeight / 2, cx + row.cellWidth / 2, cy + row.cellHeight / 2)
+            val picked = i == p.selected
+            if (picked) {
+                fill.color = palette.accent
+                fill.alpha = 255
+                outlineRect.set(faceRect)
+                outlineRect.inset(density, 0f)
+                canvas.drawRoundRect(outlineRect, cellRadius, cellRadius, fill)
+            }
+            drawLabel(canvas, faceRect, p.choices[i], min(22 * density * labelScale, row.cellHeight * 0.5f), if (picked) palette.onAccent else palette.text, 255)
         }
+        canvas.restore()
+    }
+
+    /** The row's cell nearest the finger at [x], [y] (KeyPreview.nearestCell), or -1 well below the key. */
+    private fun popupCellAt(p: AccentPopup, x: Float, y: Float): Int {
+        rowPoint[0] = x; rowPoint[1] = y
+        p.pk.inverse.mapPoints(rowPoint)
+        return KeyPreview.nearestCell(p.centres, rowPoint[0] - p.pk.rect.centerX(), rowPoint[1] - p.pk.rect.centerY(), p.pk.rect.height())
     }
 
     private inner class Tracker(val kind: Int, initial: Placed?) {
@@ -2127,6 +2503,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         var pressChoices: List<String>? = null
         var languageDirection = 0
         var consumed = false
+        /** Shows the key preview until the next finger lands (KeyPreview.shows). */
+        var preview = false
         var moved = false
         var x0 = 0f
         var y0 = 0f
@@ -2252,6 +2630,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         ensureLayout()
         if (isSliding()) return true
         if (editMode) return editTouch(e)
+        if (holdPickLayer != null) return pickTouch(e)
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN ->
                 pointerDown(e.getPointerId(e.actionIndex), e.getX(e.actionIndex), e.getY(e.actionIndex), e.eventTime)
@@ -2301,6 +2680,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val prepared = chordTouches.prepareDown(time, chordKey != null)
         for (otherId in prepared.rollover) trackers[otherId]?.let { stopTimers(it); it.consumed = true }
         finishChords(prepared.completions)
+        // A new finger types the held letters (rollover below), so, as on iOS, their previews end.
+        for (other in trackers.values) if (other.preview) { other.preview = false; invalidate() }
         // Chord members defer rollover; every other touch keeps the existing path.
         for ((otherId, t) in trackers.toMap()) {
             val code = t.pk?.item?.let { it.keys[shownIdx(it)] }
@@ -2412,6 +2793,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             t.points.add(GestureDecoder.Point(x, y, time))
         }
         trackers[id] = t
+        t.preview = true
         if (chordKey != null) {
             t.deferredHaptic = true
             chordTouches.down(id, pk.item.keys[0][0].lowercaseChar(), time, x, y)
@@ -2495,8 +2877,8 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
             return
         }
         popup?.takeIf { it.owner === t }?.let {
-            it.selected = it.rects.indexOfFirst { r -> r.contains(x, y) }
-            invalidate()
+            val cell = popupCellAt(it, x, y)
+            if (cell != it.selected) { it.selected = cell; invalidate() }
             return
         }
         if (t.pk?.item?.isSpace == true && !t.consumed && multipleLanguages) {
@@ -2762,7 +3144,7 @@ class KeyboardView(context: Context, private val settings: KeyboardSettings) : V
         val code = item.keys[shownIdx(item)]
         if (!settings.bool(Prefs.TYPE_ON_PRESS) || state.layer != Layer.ABC || code.singleOrNull()?.isLetter() != true) return
         val output = KeyText.output(code, state) ?: return
-        t.pressChoices = KeyText.alternatives(code, state, settings.bool(Prefs.SHOW_HINTS))
+        t.pressChoices = holdChoicesFor(code)
         emitKey(code, t.tapX, t.tapY)
         t.pressedText = output
         t.consumed = true

@@ -135,6 +135,7 @@ private fun SettingsContent(state: SettingsState, setupStatus: SetupStatus, onSe
                 tab.intValue = index
                 editing = false
                 state.preview.editMode = false
+                state.pick(false)
                 if (index == 0) state.showSelected() else state.showApplied()
             }
         }
@@ -142,7 +143,7 @@ private fun SettingsContent(state: SettingsState, setupStatus: SetupStatus, onSe
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     var page by remember(landscape) { mutableStateOf(landscape) }
     var dialog by rememberSaveable { mutableStateOf<String?>(null) }
-    SettingsBackHandler(tab, editing, { editing = false }, selectTab)
+    SettingsBackHandler(tab, editing || state.picking, { editing = false; state.pick(false) }, selectTab)
     Scaffold(modifier = Modifier.imePadding(), containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
         bottomBar = {
@@ -153,7 +154,7 @@ private fun SettingsContent(state: SettingsState, setupStatus: SetupStatus, onSe
             var previewHeight by remember { mutableStateOf(0.dp) }
             // Hidden by swiping its handle up, kept across visits; always shown while rearranging keys.
             var previewHidden by remember { mutableStateOf(state.settings.prefs.getBoolean(PREVIEW_HIDDEN, false)) }
-            val previewShown = !previewHidden || editing
+            val previewShown = !previewHidden || editing || state.picking
             val setHidden = { hidden: Boolean ->
                 previewHidden = hidden
                 state.settings.prefs.edit().putBoolean(PREVIEW_HIDDEN, hidden).apply()
