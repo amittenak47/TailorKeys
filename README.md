@@ -26,7 +26,7 @@ Next, I plan to experiment with chords like the CharaChorder (pressing several k
 
 ## Demos
 
-The first three clips were recorded on 9 November 2026 on an Android tablet in the keyboard's "Try it" screen. The taps were sent by a script, so the speed counter is not a real typing speed, and the clips are cropped to the text box and the keyboard.
+The first six clips were recorded on an Android tablet in the keyboard's "Try it" screen: the suggestion, emoji and Quick options clips on 9 November 2026, and the key preview, long-press and correction clips on 10 November 2026. The taps were sent by a script, so the speed counter is not a real typing speed, and the clips are cropped to the text box and the keyboard.
 
 ### Suggestion wheels
 
@@ -45,6 +45,24 @@ The smiley key opens the insert panel: emoji with search and recents, a kaomoji 
 ![Turning the split layout off and on, then stepping through the themes from Quick options](docs/demo/quick-options.gif)
 
 The gear between the wheels opens Quick options. Here the split keyboard is joined and split again, then the theme steps through Dark, Midnight, Warm, High contrast and Match system, back to Light.
+
+### Key preview
+
+![Typing "Priya flew to Lisbon" with a larger copy of each key showing while it is held](docs/demo/key-preview.gif)
+
+With Key preview set to In place, the default, a larger copy of each key shows while it is held, in the keyboard's theme. The other choices are Upward, Balloon and Off. The preview never shows during swipe typing and never delays the letter.
+
+### Long-press row
+
+![Typing "Café in Montréal" by holding e and sliding to é in the row of choices above the keys](docs/demo/long-press-row.gif)
+
+Holding e opens a row of choices above the keys, and the keyboard behind it blurs. Sliding to é and lifting types it. "Long-press shows" picks what the letters offer: Symbols, Accents or Both (the default). The 123 and #+= layers offer iPhone-style variants such as ¿ and €, and long-press can be limited to keys you pick on the keyboard itself.
+
+### Taking back a correction
+
+![Typing "I saw teh", which the space bar changes to "the", then tapping the word and picking "teh" from the list under it](docs/demo/correction-dropdown.gif)
+
+The space bar changed "teh" to "the". Tapping into the word opens a list under it: the word shown, the letters as typed and other likely words. Picking "teh" puts the letters back, and later checks leave that choice alone.
 
 ### Layouts and typing settings
 
@@ -70,6 +88,7 @@ Earlier model. Typed on a tablet at about 80 words a minute without looking at t
 **Typing and suggestions**
 - Two suggestion wheels, one per thumb. The right wheel shows the closest matches and the left wheel less obvious words. Tap a word to insert it; after a space the wheels offer next words.
 - Autocorrect at the space bar, on by default. Backspace right after a fix undoes it.
+- Every word the keyboard changes can be taken back: tap into it for a list with the word shown, the letters as typed and other likely words.
 - Optional system spell checker: Off, Add to TailorKeys or Instead of TailorKeys. It starts off and is kept on this device only, so restoring a backup never turns it on.
 - Swipe typing, on by default, in two styles: guess the word, or type the letters you pass.
 - Tidy reviews the last sentence or two around the cursor and lists fixes for misspellings, extra spaces and missing capitals at the start of sentences. You choose which to apply.
@@ -96,6 +115,8 @@ Earlier model. Typed on a tablet at about 80 words a minute without looking at t
 - Move the cursor by holding and pushing on the space bar, a touch bar or empty space, with adjustable sensitivity.
 - Key sound with volume, and vibration.
 - Type on press, long-press time, ignoring repeated taps and extra tap area.
+- Key preview while a key is held: In place (the default), Upward, Balloon or Off. It never shows during swipe typing.
+- Holding a key opens an iPhone-style row of choices over the blurred keyboard (blur on Android 12 and newer). Letters offer symbols, accents or both; with the number row on, the digits offer #+= symbols; 123 and #+= offer variants such as ¿, € and …. Long-press can be limited to chosen keys, picked on the keyboard itself, and key hints can show each key's first choice.
 
 **Typing test**
 - The "Try it" screen has free typing and sentence and paragraph tests with speed and accuracy, and can compare another keyboard on the same test.
