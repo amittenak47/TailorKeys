@@ -4,13 +4,25 @@
 
 A new autocorrect model is in training. It trains on and off on my own computer: overnight on some nights, and otherwise only while I'm not using the machine, so it is taking a while.
 
+I spent about a week on an earlier model. It showed that the underlying method works, but its accuracy wasn't where I wanted it: in some cases it missed obvious typos, and in others it didn't recognize punctuation. Getting there also took several rounds where Claude, the AI assistant I build this with, went with its own judgement during training instead of mine. For example, it started with an LSTM and then a small transformer trained from scratch, rather than a pretrained BERT model.
+
+The new model starts from a pretrained BERT model (ModernBERT-large) and learns from properly labelled examples of typing mistakes and their fixes. It shows promise, but it isn't ready yet. In its first full run it fixed about half of the mistakes in practice text, but it also changed 52 to 85 of every 1,000 correctly typed words, against a limit of 10. The next run is aimed at leaving correct words alone. After that comes getting it to run on the phone itself.
+
 The keyboard works without it in the meantime. Its corrections and suggestions come from its built-in dictionary, a small next-word network for English and the words you type. The demo marked "earlier model" below shows the first autocorrect prototype, which is retired and not included in this repository.
 
 ## About
 
-An Android keyboard built around two things stock keyboards get wrong: **size you can actually control**, and **predictions that don't fight you**.
+TailorKeys is an ergonomic Android keyboard: comfortable to type on, without having to keep changing how you hold your phone or tablet. The default keyboard was horrible to type on, and it and the other options come with bloat and features that don't work well. TailorKeys is loosely based on my Glove80 split keyboard and is meant to be ergonomic and customizable: you can change its size, position, split, tilt and where every key sits.
 
-TailorKeys has no internet permission. Its own prediction and correction run on the device. Optional system spell checking sends words to your selected spell-checker app, which may use the internet. Optional dictation uses the selected speech service.
+I've prototyped features like using the split space bars to move the cursor. Set Cursor control to Space bar with the "Left and right" style, and holding the left half's space bar moves the cursor left while the right half's moves it right. So if you make a typo, you can get back to it without moving your hands.
+
+It's also meant to run completely on the device. On iOS, keyboards get a small memory limit (around 50 MB in most reports; Apple doesn't publish the exact figure), which either rules out a larger model or needs a workaround. At the same time, today's frontier AI models are good at fixing text, and it doesn't make sense to stop people from using them on what they've written. So the plan is optional toggles for where corrections come from: Android's system spell checker (in the app now), this model running on the device (once it's trained), or your own AI API or MCP server (planned, not built yet).
+
+Today TailorKeys has no internet permission. Its own prediction and correction run on the device. Optional system spell checking sends words to your selected spell-checker app, which may use the internet. Optional dictation uses the selected speech service.
+
+In my experiments, the larger the model, the longer each correction takes. The autocorrect built into Android and iOS fixes words as you type them, but it drifts when you fat-finger several mistakes in a row, which is a massive annoyance when writing on a phone. It mostly fixes one error at a time, with little sense of what the text is saying. The new model is meant to take the other side of that trade: a correction may land a moment later, after it has read the words around it.
+
+Next, I plan to experiment with chords like the CharaChorder (pressing several keys at once to type a whole word; an early version is in the app, off by default), and to see whether dragging in a direction toward what you want to say could help with accessibility.
 
 ## Demos
 
