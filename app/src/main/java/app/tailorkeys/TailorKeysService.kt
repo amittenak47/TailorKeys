@@ -12,7 +12,9 @@ import java.util.concurrent.Executors
 import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
+import android.view.inputmethod.CursorAnchorInfo
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
 import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputMethodManager
 import app.tailorkeys.layout.InputState
@@ -428,6 +430,8 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
             onKept = { model.recordKept(original, replacement, persist) }) {
             if (allowed && canLearnNow()) model.observeFinal(replacement, prev, prev2)
         }
+        // Every change can be seen and taken back: a tap into the word opens its dropdown (CorrectionMarks).
+        markChange(original, replacement, model.candidatesFor(original).orEmpty(), editor().before, replacement + separator)
         updateAutoCap()
         return true
     }
@@ -716,6 +720,9 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         onChoiceInterrupted()
         clearGlide()
         clearTaps()
+        // A new field (not the same one restarting) starts with no changed words to show.
+        if (!restarting) marks.clear()
+        closeDropdown(); seenText = null
     }
 
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
@@ -781,6 +788,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         onGlideCancel()
         clearTaps()
         onChoiceInterrupted()
+        closeDropdown()
         closeQuickOptions()
         keyboardView?.let { it.cancelTouches(); it.editMode = false; it.editTitle = null }
         editingLayoutKey = null
@@ -811,6 +819,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         selStart = newSelStart
         selEnd = newSelEnd
         if (newSelStart != newSelEnd) clearGlide()
+        selectionMoved(newSelStart, newSelEnd)
         updateAutoCap()
         // The commit phase has already rendered this exact live snapshot in the common case.
         if (editor() != renderedEditor || state.layer != renderedLayer) updateSuggestions()
@@ -906,6 +915,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
 
     private fun handleKeyPhase(code: String, distances: FloatArray?, x: Float = Float.NaN, y: Float = Float.NaN) {
         sound(code)
+        keySeq++; closeDropdown()
         spellCheck.userAction()
         liveGlide = null
         validateTaps()
@@ -1029,6 +1039,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
                 editorRead = null
                 ic.endBatchEdit()
                 armedUndo = ReversibleCommit("$old $word", fix + rest, " ", editor().before.takeLast(64), editor().after.take(64), correction = true) {}
+                markChange(old, fix, previous.candidates.orEmpty(), editor().before, fix + rest)
             }
         }
         // The word before is settled now, as it stands: where its taps landed shows where each hand has drifted.
@@ -1077,6 +1088,14 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
                 editorRead = null
                 ic.endBatchEdit()
                 armedUndo = ReversibleCommit(spanText, replacement, trailing, editor().before.takeLast(64), editor().after.take(64), correction = true) {}
+                // Each word the sentence pass changed gets its own dropdown, found by the text before it.
+                if (fixed.size == span.size && words.size == span.size) {
+                    var left = head
+                    for (i in span.indices) {
+                        if (fixed[i] != span[i]) marks.mark(span[i], fixed[i], words[i].candidates.orEmpty(), left)
+                        left += fixed[i] + " "
+                    }
+                }
                 updateSuggestions()
             }
         }
@@ -1093,6 +1112,8 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     override fun onCursor(steps: Int, select: Boolean, words: Boolean) {
         if (insertPanel?.cursor(steps, select) == true) return
         if (steps == 0) return
+        // A cursor moved by the keyboard isn't a tap into a word: it never opens a changed word's dropdown.
+        keySeq++; closeDropdown()
         spellCheck.userAction()
         onGlideCancel()
         clearAutomaticSpace()
@@ -1223,6 +1244,7 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
     override fun onSuggestion(text: String) = editorPhase { suggestionPhase(text) }
 
     private fun suggestionPhase(text: String) {
+        keySeq++; closeDropdown()
         spellCheck.userAction()
         if (armedUndo?.correction == true && armedUndo?.original == text && undoArmedCommit()) {
             updateSuggestions(); return
@@ -1721,7 +1743,121 @@ class TailorKeysService : InputMethodService(), KeyboardView.Listener {
         if (state.shift != shift) { state.shift = shift; keyboardView?.refreshInputState() }
     }
 
+    // ---- The dropdown on a changed word (CorrectionMarks; Amit's sketch B, restored 2026-11-10) ----
+
+    /** The words the keyboard changed in this field: tapping into one opens its dropdown. */
+    private val marks = CorrectionMarks()
+    private var dropdown: FixDropdown? = null
+    /** The changed word a tap put the cursor in, and its letters before the cursor, until the editor says where it is. */
+    private var dropdownFor: Pair<MarkedFix, Int>? = null
+    /** Bumped by the keyboard's own keys and cursor moves: a selection move with none since, and the text the same, is a tap. */
+    private var keySeq = 0L
+    private var seenText: SeenText? = null
+    private var seenKeys = -1L
+
+    /** [typed] was changed to [shown], and the text before the cursor ([now]) ends with [tail] (the word and what follows it). */
+    private fun markChange(typed: String, shown: String, others: List<String>, now: String, tail: String) {
+        if (now.endsWith(tail)) marks.mark(typed, shown, others, now.dropLast(tail.length))
+    }
+
+    /** The changed word the cursor is in (or right after): its mark and how many of its letters come before the cursor. */
+    private fun markAtCursor(read: EditorWindow): Pair<MarkedFix, Int>? {
+        if (read.selected) return null
+        val head = read.before.takeLastWhile(TextInputRules::wordChar)
+        val word = head + read.after.takeWhile(TextInputRules::wordChar)
+        if (word.isEmpty()) return null
+        return marks.find(word, read.before.dropLast(head.length))?.let { it to head.length }
+    }
+
+    /**
+     * The selection changed to [start]..[end]: the cursor moved with no key typed and the text the same is a tap, and a
+     * tap into a word the keyboard changed opens its dropdown once the cursor rests; anything else closes it.
+     */
+    private fun selectionMoved(start: Int, end: Int) {
+        val read = editor()
+        val now = if (read.selected || start < 0) null
+            else SeenText(read.before + read.after, start - read.before.length, start, end, read.after.length < AFTER_READ)
+        val prev = seenText
+        val same = prev != null && now != null && seenKeys == keySeq && prev.sameText(now)
+        seenText = now; seenKeys = keySeq
+        if (same && prev!!.start == start && prev.end == end) return
+        closeDropdown()
+        if (same && start == end) main.postDelayed(openDropdown, DROPDOWN_REST_MS)
+    }
+
+    private val openDropdown = Runnable {
+        editorPhase {
+            dropdownFor = markAtCursor(editor()) ?: return@editorPhase
+            // The editor says where it draws the cursor (onUpdateCursorAnchorInfo); without that, it opens over the keys.
+            if (currentInputConnection?.requestCursorUpdates(InputConnection.CURSOR_UPDATE_IMMEDIATE) != true) showDropdown(null)
+        }
+    }
+
+    override fun onUpdateCursorAnchorInfo(info: CursorAnchorInfo) {
+        super.onUpdateCursorAnchorInfo(info)
+        if (dropdownFor != null) showDropdown(info)
+    }
+
+    /** The dropdown under the changed word's start, from where the editor draws the cursor ([info]); over the keys without. */
+    private fun showDropdown(info: CursorAnchorInfo?) {
+        val (mark, head) = dropdownFor ?: return
+        dropdownFor = null
+        val view = keyboardView ?: return
+        val dp = resources.displayMetrics.density
+        val keysTop = IntArray(2).also { view.getLocationOnScreen(it) }[1]
+        var x = (16 * dp).toInt()
+        var below = keysTop
+        var above = keysTop
+        val cursor = info?.insertionMarkerHorizontal ?: Float.NaN
+        if (info != null && !cursor.isNaN()) {
+            // The word starts its letters before the cursor back, at about 0.45 of the line's height a letter. Under it,
+            // the list leaves room for the handle the app draws under a tapped cursor.
+            val line = info.insertionMarkerBottom - info.insertionMarkerTop
+            val points = floatArrayOf(cursor - head * line * 0.45f, info.insertionMarkerBottom, cursor, info.insertionMarkerTop)
+            info.matrix.mapPoints(points)
+            x = points[0].toInt(); below = (points[1] + HANDLE_DP * dp).toInt(); above = (points[3] - 4 * dp).toInt()
+        }
+        val d = dropdown ?: FixDropdown(this) { c -> editorPhase { pickFix(c) } }.also { dropdown = it }
+        d.show(view, Palette.of(this, settings), mark.choices, mark.shown, x, below, above, keysTop)
+    }
+
+    private fun closeDropdown() {
+        main.removeCallbacks(openDropdown)
+        dropdownFor = null
+        dropdown?.dismiss()
+    }
+
+    /**
+     * A row of a dropdown tapped: its word written in place of the changed word and kept as you chose it (the next
+     * space's look-back and the sentence pass leave it alone). The letters as typed count against the change, as undoing it does.
+     */
+    private fun pickFix(choice: FixChoice) {
+        val ic = currentInputConnection ?: return
+        val read = editor()
+        val (mark, head) = markAtCursor(read) ?: return
+        if (choice.word == mark.shown) return
+        val rest = mark.shown.length - head
+        if (rest < 0 || !read.after.startsWith(mark.shown.substring(head))) return
+        armedUndo = null; pendingLearning = null
+        clearTaps(); clearChoice(); clearGlide()
+        lastWord = null; sentenceWords.clear()
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(head, rest)
+        ic.commitText(choice.word, 1)
+        editorRead = null
+        ic.endBatchEdit()
+        if (choice.typed && modelReady) predictor.recordRejection(mark.typed, mark.shown, persist = learn)
+        mark.shown = choice.word; mark.picked = true
+        keySeq++
+        updateAutoCap()
+        updateSuggestions()
+    }
+
     private companion object {
+        /** How long the cursor rests in a changed word before its dropdown opens. */
+        const val DROPDOWN_REST_MS = 150L
+        /** Room under a tapped word for the handle the app draws under the cursor. */
+        const val HANDLE_DP = 28
         const val DOUBLE_SPACE_MS = 600L
         const val DOUBLE_TAP_MS = 350L
         /** Characters the editor is read for after the cursor ([editor]). */
